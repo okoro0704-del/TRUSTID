@@ -27,6 +27,7 @@ model User {
   oauthAuthorizationCodes OAuthAuthorizationCode[]
   oauthAccessTokens       OAuthAccessToken[]
   oauthRefreshTokens      OAuthRefreshToken[]
+  identityVerifications   IdentityVerification[]
 
   @@map("users")
 }
@@ -78,7 +79,10 @@ model Device {
   id           String    @id @default(cuid())
   userId       String    @map("user_id")
   name         String
-  status       String    @default("trusted")
+  /// active | revoked (legacy "trusted" treated as active)
+  status       String    @default("active")
+  /// Logical device/browser label class — not a hardware identity guarantee
+  deviceType   String?   @map("device_type")
   userAgent    String?   @map("user_agent")
   platform     String?
   lastIp       String?   @map("last_ip")
@@ -98,15 +102,23 @@ model Device {
 }
 
 model Credential {
-  id             String   @id @default(cuid())
-  userId         String   @map("user_id")
-  deviceId       String   @map("device_id")
-  credentialId   String   @unique @map("credential_id")
-  publicKey      Bytes    @map("public_key")
-  counter        BigInt   @default(0)
-  transports     String   @default("[]")
-  aaguid         String?
-  createdAt      DateTime @default(now()) @map("created_at")
+  id                      String    @id @default(cuid())
+  userId                  String    @map("user_id")
+  deviceId                String    @map("device_id")
+  /// WebAuthn credential ID — globally unique across TrustID
+  credentialId            String    @unique @map("credential_id")
+  /// COSE public key only — private key never stored
+  publicKey               Bytes     @map("public_key")
+  counter                 BigInt    @default(0)
+  transports              String    @default("[]")
+  aaguid                  String?
+  authenticatorAttachment String?   @map("authenticator_attachment")
+  credentialDeviceType    String?   @map("credential_device_type")
+  backedUp                Boolean   @default(false) @map("backed_up")
+  status                  String    @default("active")
+  lastUsedAt              DateTime? @map("last_used_at")
+  revokedAt               DateTime? @map("revoked_at")
+  createdAt               DateTime  @default(now()) @map("created_at")
 
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
@@ -286,15 +298,43 @@ model AuditEvent {
 }
 
 model WebAuthnChallenge {
-  id        String   @id @default(cuid())
-  userId    String?  @map("user_id")
+  id        String    @id @default(cuid())
+  userId    String?   @map("user_id")
+  /// Legacy alias of purpose (kept for compatibility)
   type      String
+  /// registration | authentication | reauthentication | device_addition
+  purpose   String    @default("registration")
   challenge String
-  expiresAt DateTime @map("expires_at")
-  createdAt DateTime @default(now()) @map("created_at")
+  expiresAt DateTime  @map("expires_at")
+  consumedAt DateTime? @map("consumed_at")
+  createdAt DateTime  @default(now()) @map("created_at")
 
   user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([challenge])
+  @@unique([challenge])
+  @@index([purpose, userId])
   @@map("webauthn_challenges")
+}
+
+/// Future high-assurance identity verification (e.g. NIBSS/BVN).
+/// No biometric templates. Not created until a provider is actually used.
+model IdentityVerification {
+  id                   String    @id @default(cuid())
+  userId               String    @map("user_id")
+  provider             String
+  method               String
+  status               String    @default("not_verified")
+  providerReference    String?   @map("provider_reference")
+  verificationCodeHash String?   @map("verification_code_hash")
+  verificationHash     String?   @map("verification_hash")
+  verifiedAt           DateTime? @map("verified_at")
+  metadata             String    @default("{}")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([provider, status])
+  @@map("identity_verifications")
 }

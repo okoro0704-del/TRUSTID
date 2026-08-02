@@ -81,6 +81,9 @@ export async function authRoutes(app: FastifyInstance) {
         deviceName: body.deviceName,
         ...clientMeta(req),
       });
+      if (!result.sessionToken) {
+        throw Object.assign(new Error("Session was not created"), { statusCode: 500 });
+      }
       setSessionCookie(reply, result.sessionToken);
       return {
         trustId: result.trustId,

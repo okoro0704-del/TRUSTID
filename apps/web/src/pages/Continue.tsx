@@ -59,10 +59,10 @@ export function ContinuePage() {
         </Link>
       </div>
       <form className="panel" onSubmit={onSubmit}>
-        <h1>Continue with TrustID</h1>
+        <h1>Use this device</h1>
         <p className="lead">
-          Authenticate with your passkey. Optionally hint your contact to narrow
-          credentials.
+          Authenticate with your trusted device credential. Your device verifies
+          you locally — TrustID never receives fingerprint or face data.
         </p>
         <div className="field">
           <label htmlFor="email">Email</label>

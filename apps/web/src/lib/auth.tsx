@@ -12,6 +12,12 @@ export type Identity = {
   status: string;
   profile: { firstName: string; lastName: string; name: string } | null;
   contacts: { type: string; value: string; verified: boolean }[];
+  identityVerification?: {
+    status: string;
+    provider: string | null;
+    method: string | null;
+    verifiedAt: string | null;
+  };
 };
 
 type AuthState = {

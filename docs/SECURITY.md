@@ -24,12 +24,21 @@
 - Idle consideration: revoke on logout / global revoke / device revoke
 - Bound to device when created via WebAuthn on that device
 
-## WebAuthn
+## WebAuthn / trusted device credentials
 
 - RP ID and allowed origins configured via env
-- User verification preferred
-- Signature counter validated when provided
-- Credential revoke cascades with device revoke
+- Platform authenticator preferred (`authenticatorAttachment: platform`)
+- User verification **required** for registration and authentication
+- Challenges: CSPRNG, 5-minute TTL, single-use, purpose-bound
+- Signature counter: increments accepted; zero/zero accepted; anomalies audited (`device.signature_counter.warning`) without automatic lockout — see `docs/DEVICE_CREDENTIALS.md`
+- Device revoke marks device + credentials revoked; assertions rejected
+- Never store private keys or biometric material
+
+## Identity verification (future)
+
+- Separate from device credentials via `IdentityVerificationProvider`
+- `identity_verifications` table prepared; no NIBSS/BVN calls in V1
+- Default status exposed to clients: `not_verified`
 
 ## OAuth
 

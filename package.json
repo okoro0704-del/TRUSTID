@@ -15,7 +15,8 @@
     "db:generate": "npm run db:generate -w @trustid/api",
     "db:push": "npm run db:push -w @trustid/api",
     "db:seed": "npm run db:seed -w @trustid/api",
-    "setup": "npm install && npm run build -w @trustid/shared && npm run db:generate && npm run db:push && npm run db:seed"
+    "setup": "npm install && npm run build -w @trustid/shared && npm run db:generate && npm run db:push && npm run db:seed",
+    "test": "npm run test -w @trustid/api"
   },
   "engines": {
     "node": ">=20"

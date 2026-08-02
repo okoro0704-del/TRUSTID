@@ -36,10 +36,7 @@ export function SecurePage() {
         },
       );
       const response = await startRegistration({ optionsJSON: options });
-      const result = await api<{
-        trustId: string;
-        profile: { firstName: string; lastName: string } | null;
-      }>("/auth/webauthn/register/verify", {
+      await api("/auth/webauthn/register/verify", {
         method: "POST",
         body: JSON.stringify({
           userId: onboarding!.userId,
@@ -49,13 +46,12 @@ export function SecurePage() {
       });
       sessionStorage.removeItem("trustid.onboarding");
       await refresh();
-      void result;
-      navigate("/dashboard");
+      navigate("/secured");
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : "Passkey registration failed. Use a supported browser/device.",
+          : "Device security setup failed. Use a WebAuthn-capable browser.",
       );
     } finally {
       setBusy(false);
@@ -70,12 +66,17 @@ export function SecurePage() {
         </Link>
       </div>
       <form className="panel" onSubmit={onSubmit}>
-        <h1>Secure the account</h1>
+        <h1>Secure this TrustID with your device</h1>
         <p className="lead">
-          Create a passkey on this device. Biometrics or your device PIN may be
-          used — TrustID never stores a password.
+          Your device will create a passkey. Your biometric or device security
+          method stays on your device. TrustID never receives your fingerprint
+          or face data.
         </p>
-        <p className="notice">Your TrustID will be {onboarding.trustId}</p>
+        <p className="notice">
+          TrustID stores a public cryptographic credential. Your private
+          credential remains protected by your device.
+        </p>
+        <p className="muted">Your TrustID will be {onboarding.trustId}</p>
         <div className="field">
           <label htmlFor="deviceName">Device name</label>
           <input
@@ -87,7 +88,7 @@ export function SecurePage() {
         </div>
         {error && <p className="error">{error}</p>}
         <button className="btn btn-primary" type="submit" disabled={busy}>
-          {busy ? "Creating passkey…" : "Create passkey"}
+          {busy ? "Waiting for your device…" : "Create passkey"}
         </button>
       </form>
     </div>

@@ -18,12 +18,47 @@ export const DEFAULT_APP_SCOPES: Scope[] = [
   SCOPES.IDENTITY_EMAIL,
 ];
 
+export const DEVICE_STATUS = {
+  ACTIVE: "active",
+  REVOKED: "revoked",
+  /** @deprecated Prefer ACTIVE — retained for read compatibility */
+  TRUSTED: "trusted",
+} as const;
+
+export function isDeviceCredentialActive(status: string): boolean {
+  return status === DEVICE_STATUS.ACTIVE || status === DEVICE_STATUS.TRUSTED;
+}
+
+export const WEBAUTHN_PURPOSES = {
+  REGISTRATION: "registration",
+  AUTHENTICATION: "authentication",
+  REAUTHENTICATION: "reauthentication",
+  DEVICE_ADDITION: "device_addition",
+} as const;
+
+export type WebAuthnPurpose =
+  (typeof WEBAUTHN_PURPOSES)[keyof typeof WEBAUTHN_PURPOSES];
+
+export const IDENTITY_VERIFICATION_STATUS = {
+  NOT_VERIFIED: "not_verified",
+  PENDING: "pending",
+  VERIFIED: "verified",
+  FAILED: "failed",
+} as const;
+
 export const AUDIT_EVENTS = {
   IDENTITY_CREATED: "identity.created",
   IDENTITY_VERIFIED: "identity.verified",
   DEVICE_REGISTERED: "device.registered",
   DEVICE_REVOKED: "device.revoked",
   DEVICE_RENAMED: "device.renamed",
+  DEVICE_REGISTRATION_STARTED: "device.registration.started",
+  DEVICE_REGISTRATION_COMPLETED: "device.registration.completed",
+  DEVICE_REGISTRATION_FAILED: "device.registration.failed",
+  DEVICE_AUTHENTICATION_STARTED: "device.authentication.started",
+  DEVICE_AUTHENTICATION_COMPLETED: "device.authentication.completed",
+  DEVICE_AUTHENTICATION_FAILED: "device.authentication.failed",
+  DEVICE_SIGNATURE_COUNTER_WARNING: "device.signature_counter.warning",
   SESSION_CREATED: "session.created",
   SESSION_REVOKED: "session.revoked",
   APPLICATION_AUTHORIZED: "application.authorized",

@@ -9,6 +9,7 @@ import {
   resolvePairingRequest,
   revokeDevice,
 } from "../modules/devices/service.js";
+import { WEBAUTHN_PURPOSES } from "@trustid/shared";
 import {
   registrationOptions,
   verifyAdditionalDevice,
@@ -51,7 +52,10 @@ export async function deviceRoutes(app: FastifyInstance) {
 
   app.post("/devices/register/options", { preHandler: requireSession }, async (req, reply) => {
     try {
-      return await registrationOptions(req.auth!.userId);
+      return await registrationOptions(
+        req.auth!.userId,
+        WEBAUTHN_PURPOSES.DEVICE_ADDITION,
+      );
     } catch (err) {
       return httpError(err, reply);
     }

@@ -85,3 +85,14 @@ Contact verification ≠ government ID verification.
 - OAuth 2.0 Authorization Code + PKCE (RFC 6749, 7636)
 - OIDC-style `userinfo` / `sub` claim (`sub` = public TrustID)
 - Bearer access tokens (opaque, server-validated) for V1 simplicity
+
+## H. Trusted device credentials (secure device sprint)
+
+- Platform authenticator + `userVerification: required`
+- Challenge purposes: `registration`, `device_addition`, `authentication`, `reauthentication`
+- Device/credential status: `active` | `revoked` (separate from account status and future identity verification)
+- See [DEVICE_CREDENTIALS.md](./DEVICE_CREDENTIALS.md) for counter policy and NIBSS attachment points
+
+Correct claim after passkey success:
+
+> The user successfully authenticated using a trusted device credential protected by the platform's user-verification mechanism.

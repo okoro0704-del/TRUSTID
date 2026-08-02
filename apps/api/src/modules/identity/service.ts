@@ -1,5 +1,6 @@
 import { maskEmail, maskPhone, SCOPES } from "@trustid/shared";
 import { prisma } from "../../db/client.js";
+import { getIdentityVerificationSummary } from "../identity-verification/service.js";
 
 export async function getIdentityForUser(
   userId: string,
@@ -67,6 +68,7 @@ export async function getDashboardIdentity(userId: string) {
     },
   });
   if (!user) return null;
+  const identityVerification = await getIdentityVerificationSummary(userId);
   return {
     trustId: user.trustId,
     status: user.status,
@@ -83,6 +85,8 @@ export async function getDashboardIdentity(userId: string) {
       verified: Boolean(c.verifiedAt),
       primary: c.isPrimary,
     })),
+    /** Separate from device credential trust — not BVN/NIBSS verified. */
+    identityVerification,
     createdAt: user.createdAt.toISOString(),
   };
 }

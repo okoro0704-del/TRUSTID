@@ -8,7 +8,10 @@ type Device = {
   id: string;
   name: string;
   status: string;
+  trusted?: boolean;
   lastActiveLabel: string;
+  createdAt?: string;
+  lastUsedAt?: string | null;
 };
 
 type AppRow = {
@@ -165,7 +168,15 @@ export function DashboardPage() {
             <div className="name">{identity.profile?.name ?? "—"}</div>
             <div className="tid">{identity.trustId}</div>
             <div className="muted">
-              Status: <span className="status-ok">{identity.status}</span>
+              Account status: <span className="status-ok">{identity.status}</span>
+            </div>
+            <div className="muted">
+              Identity verification:{" "}
+              <span className="status-off">
+                {identity.identityVerification?.status === "verified"
+                  ? "Verified"
+                  : "Not yet verified"}
+              </span>
             </div>
           </div>
         </section>
@@ -199,19 +210,33 @@ export function DashboardPage() {
         </section>
 
         <section className="section">
-          <h2>Trusted devices</h2>
-          <p className="sub">Passkey-bound devices you trust.</p>
+          <h2>Device Security</h2>
+          <p className="sub">
+            Trusted devices: {devices.filter((d) => d.status === "active" || d.status === "trusted").length}
+          </p>
+          <p className="muted">
+            TrustID stores public cryptographic credentials only. Private keys and
+            biometrics stay on your device.
+          </p>
           <ul className="list">
-            {devices.map((d) => (
+            {devices.map((d) => {
+              const active = d.status === "active" || d.status === "trusted";
+              return (
               <li key={d.id} className="row">
                 <div className="row-main">
                   <strong>{d.name}</strong>
-                  <span className={d.status === "trusted" ? "status-ok" : "status-off"}>
-                    {d.status === "trusted" ? "Trusted" : "Revoked"}
+                  <span className={active ? "status-ok" : "status-off"}>
+                    {active ? "✓ Trusted" : "Revoked"}
                   </span>
-                  <span className="muted">Last active: {d.lastActiveLabel}</span>
+                  <span className="muted">Status: {active ? "Active" : "Revoked"}</span>
+                  <span className="muted">Last used: {d.lastActiveLabel}</span>
+                  {d.createdAt && (
+                    <span className="muted">
+                      Created: {new Date(d.createdAt).toLocaleDateString()}
+                    </span>
+                  )}
                 </div>
-                {d.status === "trusted" && (
+                {active && (
                   <div className="inline-actions">
                     <button className="btn btn-ghost" onClick={() => renameDevice(d.id, d.name)}>
                       Rename
@@ -222,7 +247,8 @@ export function DashboardPage() {
                   </div>
                 )}
               </li>
-            ))}
+              );
+            })}
           </ul>
           <form className="inline-actions" onSubmit={addDevice}>
             <input

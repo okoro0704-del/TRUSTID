@@ -16,6 +16,7 @@ Independent Identity and Trust Infrastructure for the ecosystem.
 | [API](docs/API.md) | HTTP contracts |
 | [Security](docs/SECURITY.md) | Assumptions and secret handling |
 | [Threat model](docs/THREAT_MODEL.md) | Threats and mitigations |
+| [Device credentials](docs/DEVICE_CREDENTIALS.md) | WebAuthn platform credentials, counters, future NIBSS hooks |
 
 ## Structure
 
@@ -43,7 +44,14 @@ npm run dev:lifeos   # http://localhost:5174
 
 Open the TrustID PWA at http://localhost:5173 — create a TrustID, verify (dev OTP is shown in UI/API logs), register a passkey, then try **Connect with TrustID** from mock LifeOS at http://localhost:5174.
 
+## Tests
+
+```bash
+npm test
+```
+
 ## Requirements
 
 - Node.js 20+
 - Browser with WebAuthn / passkey support (`localhost` is a valid secure context)
+- Platform authenticator (Windows Hello, Touch ID, Face ID, device PIN/passcode, etc.)

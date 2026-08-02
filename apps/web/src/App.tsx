@@ -4,6 +4,7 @@ import { WelcomePage } from "./pages/Welcome";
 import { RegisterPage } from "./pages/Register";
 import { VerifyPage } from "./pages/Verify";
 import { SecurePage } from "./pages/Secure";
+import { SecuredPage } from "./pages/Secured";
 import { ContinuePage } from "./pages/Continue";
 import { DashboardPage } from "./pages/Dashboard";
 import { ConsentPage } from "./pages/Consent";
@@ -22,6 +23,14 @@ export function App() {
       <Route path="/register" element={<RegisterPage />} />
       <Route path="/verify" element={<VerifyPage />} />
       <Route path="/secure" element={<SecurePage />} />
+      <Route
+        path="/secured"
+        element={
+          <Guard>
+            <SecuredPage />
+          </Guard>
+        }
+      />
       <Route path="/continue" element={<ContinuePage />} />
       <Route
         path="/dashboard"

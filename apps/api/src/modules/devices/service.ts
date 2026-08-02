@@ -1,4 +1,4 @@
-import { AUDIT_EVENTS } from "@trustid/shared";
+import { AUDIT_EVENTS, DEVICE_STATUS, isDeviceCredentialActive } from "@trustid/shared";
 import { prisma } from "../../db/client.js";
 import { recordAudit } from "../audit/service.js";
 
@@ -11,26 +11,58 @@ function formatLastActive(date: Date | null) {
   return date.toLocaleDateString();
 }
 
+function publicStatus(status: string) {
+  if (isDeviceCredentialActive(status)) return DEVICE_STATUS.ACTIVE;
+  return status;
+}
+
 export async function listDevices(userId: string) {
   const devices = await prisma.device.findMany({
     where: { userId },
+    include: {
+      credentials: {
+        select: {
+          id: true,
+          status: true,
+          authenticatorAttachment: true,
+          credentialDeviceType: true,
+          backedUp: true,
+          lastUsedAt: true,
+          createdAt: true,
+        },
+      },
+    },
     orderBy: { trustedAt: "desc" },
   });
   return devices.map((d) => ({
     id: d.id,
     name: d.name,
-    status: d.status,
+    status: publicStatus(d.status),
+    trusted: isDeviceCredentialActive(d.status),
     lastActiveAt: d.lastActiveAt?.toISOString() ?? null,
     lastActiveLabel: formatLastActive(d.lastActiveAt),
+    lastUsedAt: d.lastActiveAt?.toISOString() ?? null,
+    createdAt: d.createdAt.toISOString(),
+    deviceType: d.deviceType,
     platform: d.platform,
     trustedAt: d.trustedAt.toISOString(),
     revokedAt: d.revokedAt?.toISOString() ?? null,
+    // Public credential metadata only — never private keys
+    credentials: d.credentials.map((c) => ({
+      id: c.id,
+      status: publicStatus(c.status),
+      authenticatorAttachment: c.authenticatorAttachment,
+      credentialDeviceType: c.credentialDeviceType,
+      backedUp: c.backedUp,
+      lastUsedAt: c.lastUsedAt?.toISOString() ?? null,
+      createdAt: c.createdAt.toISOString(),
+    })),
   }));
 }
 
 export async function renameDevice(userId: string, deviceId: string, name: string) {
   const device = await prisma.device.findFirst({ where: { id: deviceId, userId } });
-  if (!device || device.status === "revoked") {
+  if (!device || device.status === DEVICE_STATUS.REVOKED) {
     throw Object.assign(new Error("Device not found"), { statusCode: 404 });
   }
   const updated = await prisma.device.update({
@@ -56,12 +88,16 @@ export async function revokeDevice(
   if (!device) {
     throw Object.assign(new Error("Device not found"), { statusCode: 404 });
   }
-  if (device.status === "revoked") return device;
+  if (device.status === DEVICE_STATUS.REVOKED) return device;
 
   await prisma.$transaction([
     prisma.device.update({
       where: { id: deviceId },
-      data: { status: "revoked", revokedAt: new Date() },
+      data: { status: DEVICE_STATUS.REVOKED, revokedAt: new Date() },
+    }),
+    prisma.credential.updateMany({
+      where: { deviceId, status: { not: DEVICE_STATUS.REVOKED } },
+      data: { status: DEVICE_STATUS.REVOKED, revokedAt: new Date() },
     }),
     prisma.session.updateMany({
       where: { deviceId, revokedAt: null },

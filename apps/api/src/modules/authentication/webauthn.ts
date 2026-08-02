@@ -7,11 +7,22 @@ import {
   type RegistrationResponseJSON,
   type AuthenticationResponseJSON,
 } from "@simplewebauthn/server";
-import { AUDIT_EVENTS } from "@trustid/shared";
+import {
+  AUDIT_EVENTS,
+  DEVICE_STATUS,
+  WEBAUTHN_PURPOSES,
+  isDeviceCredentialActive,
+} from "@trustid/shared";
 import { prisma } from "../../db/client.js";
 import { config } from "../../lib/config.js";
 import { recordAudit } from "../audit/service.js";
 import { createSession } from "../sessions/service.js";
+import {
+  consumeWebAuthnChallenge,
+  extractClientChallenge,
+  storeWebAuthnChallenge,
+} from "./challenges.js";
+import { evaluateSignatureCounter } from "./counter.js";
 
 function parseTransports(raw: string): AuthenticatorTransportFuture[] | undefined {
   try {
@@ -22,32 +33,46 @@ function parseTransports(raw: string): AuthenticatorTransportFuture[] | undefine
   }
 }
 
-async function storeChallenge(type: string, challenge: string, userId?: string) {
-  await prisma.webAuthnChallenge.create({
-    data: {
-      type,
-      challenge,
-      userId: userId ?? null,
-      expiresAt: new Date(Date.now() + 5 * 60 * 1000),
-    },
+async function failRegistration(
+  userId: string | undefined,
+  reason: string,
+  meta?: { ip?: string; userAgent?: string },
+) {
+  await recordAudit({
+    type: AUDIT_EVENTS.DEVICE_REGISTRATION_FAILED,
+    userId: userId ?? null,
+    actorType: userId ? "user" : "system",
+    actorId: userId ?? null,
+    metadata: { reason },
+    ip: meta?.ip,
+    userAgent: meta?.userAgent,
   });
 }
 
-async function takeChallenge(type: string, userId?: string | null) {
-  const row = await prisma.webAuthnChallenge.findFirst({
-    where: {
-      type,
-      expiresAt: { gt: new Date() },
-      ...(userId ? { userId } : {}),
+async function failAuthentication(
+  userId: string | undefined,
+  reason: string,
+  meta?: { ip?: string; userAgent?: string; credentialId?: string },
+) {
+  await recordAudit({
+    type: AUDIT_EVENTS.DEVICE_AUTHENTICATION_FAILED,
+    userId: userId ?? null,
+    actorType: userId ? "user" : "system",
+    actorId: userId ?? null,
+    metadata: {
+      reason,
+      credentialId: meta?.credentialId ? "[redacted-id-present]" : undefined,
     },
-    orderBy: { createdAt: "desc" },
+    ip: meta?.ip,
+    userAgent: meta?.userAgent,
   });
-  if (!row) return null;
-  await prisma.webAuthnChallenge.delete({ where: { id: row.id } });
-  return row;
 }
 
-export async function registrationOptions(userId: string) {
+export async function registrationOptions(
+  userId: string,
+  purpose: typeof WEBAUTHN_PURPOSES.REGISTRATION | typeof WEBAUTHN_PURPOSES.DEVICE_ADDITION =
+    WEBAUTHN_PURPOSES.REGISTRATION,
+) {
   const user = await prisma.user.findUnique({
     where: { id: userId },
     include: { profile: true, credentials: true },
@@ -55,6 +80,14 @@ export async function registrationOptions(userId: string) {
   if (!user) {
     throw Object.assign(new Error("User not found"), { statusCode: 404 });
   }
+
+  await recordAudit({
+    type: AUDIT_EVENTS.DEVICE_REGISTRATION_STARTED,
+    userId,
+    actorType: "user",
+    actorId: userId,
+    metadata: { purpose },
+  });
 
   const options = await generateRegistrationOptions({
     rpName: config.webauthn.rpName,
@@ -65,18 +98,31 @@ export async function registrationOptions(userId: string) {
       : user.trustId,
     userID: new TextEncoder().encode(user.id),
     attestationType: "none",
-    excludeCredentials: user.credentials.map((c) => ({
-      id: c.credentialId,
-      transports: parseTransports(c.transports),
-    })),
+    excludeCredentials: user.credentials
+      .filter((c) => c.status !== DEVICE_STATUS.REVOKED)
+      .map((c) => ({
+        id: c.credentialId,
+        transports: parseTransports(c.transports),
+      })),
     authenticatorSelection: {
+      authenticatorAttachment: "platform",
       residentKey: "preferred",
-      userVerification: "preferred",
+      requireResidentKey: false,
+      userVerification: "required",
     },
   });
 
-  await storeChallenge("registration", options.challenge, userId);
-  return options;
+  const stored = await storeWebAuthnChallenge({
+    purpose,
+    challenge: options.challenge,
+    userId,
+  });
+
+  return {
+    ...options,
+    challengeId: stored.id,
+    purpose,
+  };
 }
 
 export async function verifyRegistration(input: {
@@ -85,31 +131,77 @@ export async function verifyRegistration(input: {
   deviceName?: string;
   ip?: string;
   userAgent?: string;
+  /** When true, skip creating a new TrustID session (already authenticated add-device). */
+  skipSession?: boolean;
+  purpose?: typeof WEBAUTHN_PURPOSES.REGISTRATION | typeof WEBAUTHN_PURPOSES.DEVICE_ADDITION;
 }) {
-  const row = await takeChallenge("registration", input.userId);
-  if (!row) {
-    throw Object.assign(new Error("Challenge not found or expired"), { statusCode: 400 });
+  const purpose = input.purpose ?? WEBAUTHN_PURPOSES.REGISTRATION;
+  const clientChallenge = extractClientChallenge(input.response.response.clientDataJSON);
+  if (!clientChallenge) {
+    await failRegistration(input.userId, "missing_client_challenge", input);
+    throw Object.assign(new Error("Invalid credential response"), { statusCode: 400 });
   }
 
-  const verification = await verifyRegistrationResponse({
-    response: input.response,
-    expectedChallenge: row.challenge,
-    expectedOrigin: config.webauthn.origin,
-    expectedRPID: config.webauthn.rpID,
+  const consumed = await consumeWebAuthnChallenge({
+    challenge: clientChallenge,
+    purpose: [WEBAUTHN_PURPOSES.REGISTRATION, WEBAUTHN_PURPOSES.DEVICE_ADDITION],
+    userId: input.userId,
   });
+  if (!consumed.ok) {
+    await failRegistration(input.userId, `challenge_${consumed.reason}`, input);
+    const message =
+      consumed.reason === "expired"
+        ? "Challenge expired"
+        : consumed.reason === "consumed"
+          ? "Challenge already used"
+          : "Challenge not found or invalid";
+    throw Object.assign(new Error(message), { statusCode: 400 });
+  }
+
+  let verification;
+  try {
+    verification = await verifyRegistrationResponse({
+      response: input.response,
+      expectedChallenge: consumed.challenge.challenge,
+      expectedOrigin: config.webauthn.origin,
+      expectedRPID: config.webauthn.rpID,
+      requireUserVerification: true,
+    });
+  } catch (err) {
+    await failRegistration(
+      input.userId,
+      err instanceof Error ? err.message : "attestation_verify_error",
+      input,
+    );
+    throw Object.assign(new Error("WebAuthn registration failed"), { statusCode: 400 });
+  }
 
   if (!verification.verified || !verification.registrationInfo) {
+    await failRegistration(input.userId, "not_verified", input);
     throw Object.assign(new Error("WebAuthn registration failed"), { statusCode: 400 });
   }
 
   const { credential, credentialDeviceType, credentialBackedUp } =
     verification.registrationInfo;
 
+  const existing = await prisma.credential.findUnique({
+    where: { credentialId: credential.id },
+  });
+  if (existing) {
+    await failRegistration(input.userId, "duplicate_credential", input);
+    throw Object.assign(
+      new Error("Credential already registered to a TrustID"),
+      { statusCode: 409 },
+    );
+  }
+
+  const deviceType = inferDeviceType(input.userAgent, credentialDeviceType);
   const device = await prisma.device.create({
     data: {
       userId: input.userId,
       name: input.deviceName?.trim() || guessDeviceName(input.userAgent),
-      status: "trusted",
+      status: DEVICE_STATUS.ACTIVE,
+      deviceType,
       userAgent: input.userAgent ?? null,
       platform: credentialDeviceType,
       lastIp: input.ip ?? null,
@@ -118,23 +210,52 @@ export async function verifyRegistration(input: {
     },
   });
 
-  await prisma.credential.create({
-    data: {
-      userId: input.userId,
-      deviceId: device.id,
-      credentialId: credential.id,
-      publicKey: Buffer.from(credential.publicKey),
-      counter: BigInt(credential.counter),
-      transports: JSON.stringify(input.response.response.transports ?? []),
-      aaguid: verification.registrationInfo.aaguid ?? null,
-    },
-  });
+  try {
+    await prisma.credential.create({
+      data: {
+        userId: input.userId,
+        deviceId: device.id,
+        credentialId: credential.id,
+        publicKey: Buffer.from(credential.publicKey),
+        counter: BigInt(credential.counter),
+        transports: JSON.stringify(input.response.response.transports ?? []),
+        aaguid: verification.registrationInfo.aaguid ?? null,
+        authenticatorAttachment: "platform",
+        credentialDeviceType,
+        backedUp: credentialBackedUp,
+        status: DEVICE_STATUS.ACTIVE,
+        lastUsedAt: new Date(),
+      },
+    });
+  } catch {
+    await prisma.device.delete({ where: { id: device.id } }).catch(() => undefined);
+    await failRegistration(input.userId, "duplicate_credential_race", input);
+    throw Object.assign(
+      new Error("Credential already registered to a TrustID"),
+      { statusCode: 409 },
+    );
+  }
 
   await prisma.user.update({
     where: { id: input.userId },
     data: { status: "active" },
   });
 
+  await recordAudit({
+    type: AUDIT_EVENTS.DEVICE_REGISTRATION_COMPLETED,
+    userId: input.userId,
+    actorType: "user",
+    actorId: input.userId,
+    metadata: {
+      deviceId: device.id,
+      purpose,
+      backedUp: credentialBackedUp,
+      credentialDeviceType,
+      authenticatorAttachment: "platform",
+    },
+    ip: input.ip,
+    userAgent: input.userAgent,
+  });
   await recordAudit({
     type: AUDIT_EVENTS.DEVICE_REGISTERED,
     userId: input.userId,
@@ -149,12 +270,18 @@ export async function verifyRegistration(input: {
     userAgent: input.userAgent,
   });
 
-  const { session, token } = await createSession({
-    userId: input.userId,
-    deviceId: device.id,
-    ip: input.ip,
-    userAgent: input.userAgent,
-  });
+  let sessionToken: string | undefined;
+  let sessionId: string | undefined;
+  if (!input.skipSession) {
+    const created = await createSession({
+      userId: input.userId,
+      deviceId: device.id,
+      ip: input.ip,
+      userAgent: input.userAgent,
+    });
+    sessionToken = created.token;
+    sessionId = created.session.id;
+  }
 
   const user = await prisma.user.findUniqueOrThrow({
     where: { id: input.userId },
@@ -162,12 +289,14 @@ export async function verifyRegistration(input: {
   });
 
   return {
-    sessionToken: token,
-    sessionId: session.id,
+    sessionToken,
+    sessionId,
     device: {
       id: device.id,
       name: device.name,
       status: device.status,
+      createdAt: device.createdAt.toISOString(),
+      lastUsedAt: device.lastActiveAt?.toISOString() ?? null,
     },
     trustId: user.trustId,
     profile: user.profile,
@@ -178,6 +307,7 @@ export async function loginOptions(email?: string, phone?: string) {
   let allowCredentials:
     | { id: string; transports?: AuthenticatorTransportFuture[] }[]
     | undefined;
+  let userId: string | undefined;
 
   if (email || phone) {
     const { findUserByContact } = await import("./service.js");
@@ -187,8 +317,13 @@ export async function loginOptions(email?: string, phone?: string) {
         statusCode: 404,
       });
     }
+    userId = user.id;
     const creds = await prisma.credential.findMany({
-      where: { userId: user.id, device: { status: "trusted" } },
+      where: {
+        userId: user.id,
+        status: { not: DEVICE_STATUS.REVOKED },
+        device: { status: { in: [DEVICE_STATUS.ACTIVE, DEVICE_STATUS.TRUSTED] } },
+      },
     });
     if (!creds.length) {
       throw Object.assign(new Error("No passkeys registered"), { statusCode: 400 });
@@ -199,14 +334,31 @@ export async function loginOptions(email?: string, phone?: string) {
     }));
   }
 
+  await recordAudit({
+    type: AUDIT_EVENTS.DEVICE_AUTHENTICATION_STARTED,
+    userId: userId ?? null,
+    actorType: userId ? "user" : "system",
+    actorId: userId ?? null,
+    metadata: { purpose: WEBAUTHN_PURPOSES.AUTHENTICATION },
+  });
+
   const options = await generateAuthenticationOptions({
     rpID: config.webauthn.rpID,
-    userVerification: "preferred",
+    userVerification: "required",
     allowCredentials,
   });
 
-  await storeChallenge("authentication", options.challenge);
-  return options;
+  const stored = await storeWebAuthnChallenge({
+    purpose: WEBAUTHN_PURPOSES.AUTHENTICATION,
+    challenge: options.challenge,
+    userId,
+  });
+
+  return {
+    ...options,
+    challengeId: stored.id,
+    purpose: WEBAUTHN_PURPOSES.AUTHENTICATION,
+  };
 }
 
 export async function verifyLogin(input: {
@@ -218,35 +370,108 @@ export async function verifyLogin(input: {
     where: { credentialId: input.response.id },
     include: { user: { include: { profile: true } }, device: true },
   });
-  if (!cred || cred.device.status !== "trusted") {
+
+  if (!cred) {
+    await failAuthentication(undefined, "unknown_credential", {
+      ...input,
+      credentialId: input.response.id,
+    });
     throw Object.assign(new Error("Unknown credential"), { statusCode: 400 });
   }
 
-  const challengeRow = await takeChallenge("authentication");
-  if (!challengeRow) {
-    throw Object.assign(new Error("Challenge not found or expired"), { statusCode: 400 });
+  if (
+    cred.status === DEVICE_STATUS.REVOKED ||
+    !isDeviceCredentialActive(cred.device.status)
+  ) {
+    await failAuthentication(cred.userId, "revoked_credential", {
+      ...input,
+      credentialId: input.response.id,
+    });
+    throw Object.assign(new Error("Credential revoked"), { statusCode: 403 });
   }
 
-  const verification = await verifyAuthenticationResponse({
-    response: input.response,
-    expectedChallenge: challengeRow.challenge,
-    expectedOrigin: config.webauthn.origin,
-    expectedRPID: config.webauthn.rpID,
-    credential: {
-      id: cred.credentialId,
-      publicKey: new Uint8Array(cred.publicKey),
-      counter: Number(cred.counter),
-      transports: parseTransports(cred.transports),
-    },
+  const clientChallenge = extractClientChallenge(input.response.response.clientDataJSON);
+  if (!clientChallenge) {
+    await failAuthentication(cred.userId, "missing_client_challenge", input);
+    throw Object.assign(new Error("Invalid assertion response"), { statusCode: 400 });
+  }
+
+  const consumed = await consumeWebAuthnChallenge({
+    challenge: clientChallenge,
+    purpose: [
+      WEBAUTHN_PURPOSES.AUTHENTICATION,
+      WEBAUTHN_PURPOSES.REAUTHENTICATION,
+    ],
   });
+  if (!consumed.ok) {
+    await failAuthentication(cred.userId, `challenge_${consumed.reason}`, input);
+    const message =
+      consumed.reason === "expired"
+        ? "Challenge expired"
+        : consumed.reason === "consumed"
+          ? "Challenge already used"
+          : "Challenge not found or invalid";
+    throw Object.assign(new Error(message), { statusCode: 400 });
+  }
+  if (consumed.challenge.userId && consumed.challenge.userId !== cred.userId) {
+    await failAuthentication(cred.userId, "challenge_user_mismatch", input);
+    throw Object.assign(new Error("Challenge not found or invalid"), { statusCode: 400 });
+  }
+
+  let verification;
+  try {
+    verification = await verifyAuthenticationResponse({
+      response: input.response,
+      expectedChallenge: consumed.challenge.challenge,
+      expectedOrigin: config.webauthn.origin,
+      expectedRPID: config.webauthn.rpID,
+      requireUserVerification: true,
+      credential: {
+        id: cred.credentialId,
+        publicKey: new Uint8Array(cred.publicKey),
+        counter: Number(cred.counter),
+        transports: parseTransports(cred.transports),
+      },
+    });
+  } catch (err) {
+    await failAuthentication(
+      cred.userId,
+      err instanceof Error ? err.message : "assertion_verify_error",
+      input,
+    );
+    throw Object.assign(new Error("WebAuthn authentication failed"), { statusCode: 400 });
+  }
 
   if (!verification.verified) {
+    await failAuthentication(cred.userId, "not_verified", input);
     throw Object.assign(new Error("WebAuthn authentication failed"), { statusCode: 400 });
+  }
+
+  const newCounter = verification.authenticationInfo.newCounter;
+  const counterDecision = evaluateSignatureCounter(cred.counter, newCounter);
+  if (counterDecision.warning) {
+    await recordAudit({
+      type: AUDIT_EVENTS.DEVICE_SIGNATURE_COUNTER_WARNING,
+      userId: cred.userId,
+      actorType: "system",
+      actorId: cred.userId,
+      metadata: {
+        deviceId: cred.deviceId,
+        reason: counterDecision.reason,
+        storedCounter: cred.counter.toString(),
+        newCounter,
+      },
+      ip: input.ip,
+      userAgent: input.userAgent,
+    });
   }
 
   await prisma.credential.update({
     where: { id: cred.id },
-    data: { counter: BigInt(verification.authenticationInfo.newCounter) },
+    data: {
+      counter: BigInt(newCounter),
+      lastUsedAt: new Date(),
+    },
   });
   await prisma.device.update({
     where: { id: cred.deviceId },
@@ -255,6 +480,19 @@ export async function verifyLogin(input: {
       lastIp: input.ip ?? cred.device.lastIp,
       userAgent: input.userAgent ?? cred.device.userAgent,
     },
+  });
+
+  await recordAudit({
+    type: AUDIT_EVENTS.DEVICE_AUTHENTICATION_COMPLETED,
+    userId: cred.userId,
+    actorType: "user",
+    actorId: cred.userId,
+    metadata: {
+      deviceId: cred.deviceId,
+      userVerified: verification.authenticationInfo.userVerified,
+    },
+    ip: input.ip,
+    userAgent: input.userAgent,
   });
 
   const { session, token } = await createSession({
@@ -277,7 +515,7 @@ export async function verifyLogin(input: {
   };
 }
 
-/** Add an additional passkey/device for an already authenticated user. */
+/** Add an additional trusted credential/device for an authenticated user. */
 export async function verifyAdditionalDevice(input: {
   userId: string;
   response: RegistrationResponseJSON;
@@ -285,7 +523,11 @@ export async function verifyAdditionalDevice(input: {
   ip?: string;
   userAgent?: string;
 }) {
-  return verifyRegistration(input);
+  return verifyRegistration({
+    ...input,
+    skipSession: true,
+    purpose: WEBAUTHN_PURPOSES.DEVICE_ADDITION,
+  });
 }
 
 function guessDeviceName(ua?: string | null) {
@@ -297,4 +539,10 @@ function guessDeviceName(ua?: string | null) {
   if (/Windows/i.test(ua)) return "Windows PC";
   if (/Linux/i.test(ua)) return "Linux device";
   return "Trusted device";
+}
+
+function inferDeviceType(ua?: string | null, credentialDeviceType?: string) {
+  if (/iPhone|iPad|Android|Mobile/i.test(ua ?? "")) return "mobile";
+  if (/Mac|Windows|Linux|CrOS/i.test(ua ?? "")) return "desktop";
+  return credentialDeviceType ?? "unknown";
 }
