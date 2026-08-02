@@ -1,0 +1,300 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  trustId   String   @unique @map("trust_id")
+  status    String   @default("pending_verification")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  profile                 Profile?
+  contactMethods          ContactMethod[]
+  devices                 Device[]
+  credentials             Credential[]
+  sessions                Session[]
+  authorizations          Authorization[]
+  auditEvents             AuditEvent[]
+  recoveryMethods         RecoveryMethod[]
+  devicePairingRequests   DevicePairingRequest[]
+  webauthnChallenges      WebAuthnChallenge[]
+  oauthAuthorizationCodes OAuthAuthorizationCode[]
+  oauthAccessTokens       OAuthAccessToken[]
+  oauthRefreshTokens      OAuthRefreshToken[]
+
+  @@map("users")
+}
+
+model Profile {
+  userId    String @id @map("user_id")
+  firstName String @map("first_name")
+  lastName  String @map("last_name")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("profiles")
+}
+
+model ContactMethod {
+  id         String    @id @default(cuid())
+  userId     String    @map("user_id")
+  type       String
+  value      String
+  verifiedAt DateTime? @map("verified_at")
+  isPrimary  Boolean   @default(false) @map("is_primary")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  user         User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  challenges   VerificationChallenge[]
+  recoveryRefs RecoveryMethod[]
+
+  @@unique([type, value])
+  @@index([userId])
+  @@map("contact_methods")
+}
+
+model VerificationChallenge {
+  id              String    @id @default(cuid())
+  contactMethodId String    @map("contact_method_id")
+  codeHash        String    @map("code_hash")
+  expiresAt       DateTime  @map("expires_at")
+  attempts        Int       @default(0)
+  consumedAt      DateTime? @map("consumed_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  contactMethod ContactMethod @relation(fields: [contactMethodId], references: [id], onDelete: Cascade)
+
+  @@index([contactMethodId])
+  @@map("verification_challenges")
+}
+
+model Device {
+  id           String    @id @default(cuid())
+  userId       String    @map("user_id")
+  name         String
+  status       String    @default("trusted")
+  userAgent    String?   @map("user_agent")
+  platform     String?
+  lastIp       String?   @map("last_ip")
+  lastLocation String?   @map("last_location")
+  lastActiveAt DateTime? @map("last_active_at")
+  trustedAt    DateTime  @default(now()) @map("trusted_at")
+  revokedAt    DateTime? @map("revoked_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  user                    User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  credentials             Credential[]
+  sessions                Session[]
+  approvedPairingRequests DevicePairingRequest[] @relation("ApprovedByDevice")
+
+  @@index([userId])
+  @@map("devices")
+}
+
+model Credential {
+  id             String   @id @default(cuid())
+  userId         String   @map("user_id")
+  deviceId       String   @map("device_id")
+  credentialId   String   @unique @map("credential_id")
+  publicKey      Bytes    @map("public_key")
+  counter        BigInt   @default(0)
+  transports     String   @default("[]")
+  aaguid         String?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("credentials")
+}
+
+model Session {
+  id            String    @id @default(cuid())
+  userId        String    @map("user_id")
+  deviceId      String?   @map("device_id")
+  applicationId String?   @map("application_id")
+  tokenHash     String    @unique @map("token_hash")
+  expiresAt     DateTime  @map("expires_at")
+  revokedAt     DateTime? @map("revoked_at")
+  ip            String?
+  userAgent     String?   @map("user_agent")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  lastSeenAt    DateTime  @default(now()) @map("last_seen_at")
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device      Device?      @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  application Application? @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model Application {
+  id               String   @id @default(cuid())
+  clientId         String   @unique @map("client_id")
+  clientSecretHash String?  @map("client_secret_hash")
+  name             String
+  type             String   @default("public")
+  redirectUris     String   @map("redirect_uris")
+  allowedScopes    String   @map("allowed_scopes")
+  status           String   @default("active")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  authorizations          Authorization[]
+  sessions                Session[]
+  oauthAuthorizationCodes OAuthAuthorizationCode[]
+  oauthAccessTokens       OAuthAccessToken[]
+  oauthRefreshTokens      OAuthRefreshToken[]
+
+  @@map("applications")
+}
+
+model Authorization {
+  id            String    @id @default(cuid())
+  userId        String    @map("user_id")
+  applicationId String    @map("application_id")
+  status        String    @default("active")
+  grantedAt     DateTime  @default(now()) @map("granted_at")
+  revokedAt     DateTime? @map("revoked_at")
+
+  user        User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  application Application           @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  scopes      AuthorizationScope[]
+
+  @@index([userId])
+  @@index([applicationId])
+  @@map("authorizations")
+}
+
+model AuthorizationScope {
+  id              String @id @default(cuid())
+  authorizationId String @map("authorization_id")
+  scope           String
+
+  authorization Authorization @relation(fields: [authorizationId], references: [id], onDelete: Cascade)
+
+  @@unique([authorizationId, scope])
+  @@map("authorization_scopes")
+}
+
+model OAuthAuthorizationCode {
+  id                  String    @id @default(cuid())
+  codeHash            String    @unique @map("code_hash")
+  userId              String    @map("user_id")
+  applicationId       String    @map("application_id")
+  redirectUri         String    @map("redirect_uri")
+  scopes              String
+  codeChallenge       String    @map("code_challenge")
+  codeChallengeMethod String    @map("code_challenge_method")
+  expiresAt           DateTime  @map("expires_at")
+  consumedAt          DateTime? @map("consumed_at")
+  createdAt           DateTime  @default(now()) @map("created_at")
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@map("oauth_authorization_codes")
+}
+
+model OAuthAccessToken {
+  id            String    @id @default(cuid())
+  tokenHash     String    @unique @map("token_hash")
+  userId        String    @map("user_id")
+  applicationId String    @map("application_id")
+  scopes        String
+  expiresAt     DateTime  @map("expires_at")
+  revokedAt     DateTime? @map("revoked_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("oauth_access_tokens")
+}
+
+model OAuthRefreshToken {
+  id            String    @id @default(cuid())
+  tokenHash     String    @unique @map("token_hash")
+  userId        String    @map("user_id")
+  applicationId String    @map("application_id")
+  scopes        String
+  expiresAt     DateTime  @map("expires_at")
+  revokedAt     DateTime? @map("revoked_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@map("oauth_refresh_tokens")
+}
+
+model DevicePairingRequest {
+  id                   String    @id @default(cuid())
+  userId               String    @map("user_id")
+  requestingDeviceMeta String    @map("requesting_device_meta")
+  status               String    @default("pending")
+  approvedByDeviceId   String?   @map("approved_by_device_id")
+  expiresAt            DateTime  @map("expires_at")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  resolvedAt           DateTime? @map("resolved_at")
+
+  user             User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  approvedByDevice Device? @relation("ApprovedByDevice", fields: [approvedByDeviceId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@map("device_pairing_requests")
+}
+
+model RecoveryMethod {
+  id              String   @id @default(cuid())
+  userId          String   @map("user_id")
+  type            String
+  contactMethodId String?  @map("contact_method_id")
+  status          String   @default("active")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contactMethod ContactMethod? @relation(fields: [contactMethodId], references: [id], onDelete: SetNull)
+
+  @@map("recovery_methods")
+}
+
+model AuditEvent {
+  id        String   @id @default(cuid())
+  userId    String?  @map("user_id")
+  type      String
+  actorType String   @map("actor_type")
+  actorId   String?  @map("actor_id")
+  metadata  String   @default("{}")
+  ip        String?
+  userAgent String?  @map("user_agent")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([type])
+  @@map("audit_events")
+}
+
+model WebAuthnChallenge {
+  id        String   @id @default(cuid())
+  userId    String?  @map("user_id")
+  type      String
+  challenge String
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([challenge])
+  @@map("webauthn_challenges")
+}
