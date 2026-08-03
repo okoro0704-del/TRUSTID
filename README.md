@@ -44,6 +44,19 @@ npm run dev:lifeos   # http://localhost:5174
 
 Open the TrustID PWA at http://localhost:5173 — create a TrustID, verify (dev OTP is shown in UI/API logs), register a passkey, then try **Connect with TrustID** from mock LifeOS at http://localhost:5174.
 
+## Deploy (Netlify)
+
+This repo is a monorepo. **TrustID** is `apps/web`. Mock LifeOS (`apps/mock-lifeos`) is a local demo only and must not be the Netlify publish target.
+
+`netlify.toml` builds and publishes TrustID:
+
+```text
+command: npm run build:web
+publish: apps/web/dist
+```
+
+In the Netlify site settings, set **Base directory** to empty (repository root) and clear any Publish directory override that points at `apps/mock-lifeos`.
+
 ## Tests
 
 ```bash

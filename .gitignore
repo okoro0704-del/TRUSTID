@@ -13,3 +13,4 @@ apps/api/prisma/test.db-journal
 *.log
 .vite
 dev-dist
+*.tsbuildinfo

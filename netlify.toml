@@ -1,0 +1,18 @@
+# TrustID PWA is the primary Netlify site.
+# Do not publish apps/mock-lifeos (that is a local OAuth demo only).
+#
+# In Netlify UI: leave Base directory empty (repo root),
+# or clear any Base/Publish overrides so this file controls the build.
+
+[build]
+  command = "npm run build:web"
+  publish = "apps/web/dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# SPA fallback for React Router
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
