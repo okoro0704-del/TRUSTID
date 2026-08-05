@@ -1,10 +1,15 @@
-import { Link, Navigate } from "react-router-dom";
-import { useAuth } from "../lib/auth";
+import { Link, Navigate, useLocation } from "react-router-dom";
+import { useAuth, type Identity } from "../lib/auth";
+import { getSessionToken } from "../lib/api";
 
 export function SecuredPage() {
   const { loading, identity } = useAuth();
-  if (loading) return <div className="shell muted">Loading…</div>;
-  if (!identity) return <Navigate to="/" replace />;
+  const location = useLocation();
+  const fromState = (location.state as { identity?: Identity } | null)?.identity;
+  const shown = identity ?? fromState;
+
+  if (loading && !shown) return <div className="shell muted">Loading…</div>;
+  if (!shown && !getSessionToken()) return <Navigate to="/" replace />;
 
   return (
     <div className="shell">
@@ -19,7 +24,7 @@ export function SecuredPage() {
           Your device verified you and registered a trusted credential. TrustID
           received only cryptographic proof — not biometric data.
         </p>
-        <p className="notice">{identity.trustId}</p>
+        <p className="notice">{shown?.trustId ?? "TrustID created"}</p>
         <p className="muted">
           A passkey proves control of this credential. It does not by itself
           prove legal identity verification.

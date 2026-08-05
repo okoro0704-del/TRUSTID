@@ -23,23 +23,16 @@ export function App() {
       <Route path="/register" element={<RegisterPage />} />
       <Route path="/verify" element={<VerifyPage />} />
       <Route path="/secure" element={<SecurePage />} />
-      <Route
-        path="/secured"
-        element={
-          <Guard>
-            <SecuredPage />
-          </Guard>
-        }
-      />
-      <Route path="/continue" element={<ContinuePage />} />
-      <Route
-        path="/dashboard"
-        element={
-          <Guard>
-            <DashboardPage />
-          </Guard>
-        }
-      />
+          <Route path="/secured" element={<SecuredPage />} />
+          <Route path="/continue" element={<ContinuePage />} />
+          <Route
+            path="/dashboard"
+            element={
+              <Guard>
+                <DashboardPage />
+              </Guard>
+            }
+          />
       <Route path="/oauth/consent" element={<ConsentPage />} />
     </Routes>
   );

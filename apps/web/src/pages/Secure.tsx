@@ -50,10 +50,10 @@ export function SecurePage() {
       if (verifyResult.sessionToken) setSessionToken(verifyResult.sessionToken);
       if (verifyResult.identity) setIdentity(verifyResult.identity);
       sessionStorage.removeItem("trustid.onboarding");
-      await refresh().catch(() => {
-        /* identity already set from verifyResult */
+      navigate("/secured", {
+        replace: true,
+        state: { identity: verifyResult.identity },
       });
-      navigate("/secured");
     } catch (err) {
       setError(
         err instanceof Error
