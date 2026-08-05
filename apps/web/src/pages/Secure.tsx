@@ -12,7 +12,7 @@ type Onboarding = {
 
 export function SecurePage() {
   const navigate = useNavigate();
-  const { refresh, setIdentity } = useAuth();
+  const { setIdentity } = useAuth();
   const onboarding = useMemo(() => {
     const raw = sessionStorage.getItem("trustid.onboarding");
     return raw ? (JSON.parse(raw) as Onboarding) : null;
