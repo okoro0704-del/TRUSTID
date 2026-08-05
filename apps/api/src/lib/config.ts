@@ -47,6 +47,10 @@ export const config = {
   get otpTtlMinutes() {
     return Number(process.env.OTP_TTL_MINUTES ?? 10);
   },
+  /** Temporary: show/log OTP when email/SMS provider is not configured. */
+  get otpExposeDebug() {
+    return process.env.OTP_EXPOSE_DEBUG === "true" || this.isDev;
+  },
   get webauthn() {
     return {
       rpID: derivedRpId(),

@@ -103,7 +103,7 @@ export async function registerIdentity(input: {
     userId: user.id,
     trustId: user.trustId,
     challengeId: challenge.id,
-    debugCode: config.isDev ? challenge.debugCode : undefined,
+    debugCode: config.otpExposeDebug ? challenge.debugCode : undefined,
     contactType: primary.type,
   };
 }
@@ -117,9 +117,8 @@ async function createVerificationChallenge(contactMethodId: string) {
       expiresAt: new Date(Date.now() + config.otpTtlMinutes * 60 * 1000),
     },
   });
-  if (config.isDev) {
-    console.log(`[TrustID OTP] contact=${contactMethodId} code=${code}`);
-  }
+  // Always log when debug exposure is on (needed on Railway before email/SMS exists)
+  console.log(`[TrustID OTP] contact=${contactMethodId} code=${code}`);
   return { id: challenge.id, debugCode: code };
 }
 
