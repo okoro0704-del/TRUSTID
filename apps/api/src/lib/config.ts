@@ -47,6 +47,14 @@ export const config = {
   get otpTtlMinutes() {
     return Number(process.env.OTP_TTL_MINUTES ?? 10);
   },
+  /** Pending cross-device approval request lifetime */
+  get deviceApprovalTtlMinutes() {
+    return Number(process.env.DEVICE_APPROVAL_TTL_MINUTES ?? 10);
+  },
+  /** Temporary (non-trusted) session lifetime */
+  get temporarySessionHours() {
+    return Number(process.env.TEMPORARY_SESSION_HOURS ?? 8);
+  },
   /** Temporary: show/log OTP when email/SMS provider is not configured. */
   get otpExposeDebug() {
     return process.env.OTP_EXPOSE_DEBUG === "true" || this.isDev;

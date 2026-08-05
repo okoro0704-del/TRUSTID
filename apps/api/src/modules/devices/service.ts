@@ -16,7 +16,7 @@ function publicStatus(status: string) {
   return status;
 }
 
-export async function listDevices(userId: string) {
+export async function listDevices(userId: string, currentDeviceId?: string | null) {
   const devices = await prisma.device.findMany({
     where: { userId },
     include: {
@@ -24,6 +24,7 @@ export async function listDevices(userId: string) {
         select: {
           id: true,
           status: true,
+          displayName: true,
           authenticatorAttachment: true,
           credentialDeviceType: true,
           backedUp: true,
@@ -38,18 +39,22 @@ export async function listDevices(userId: string) {
     id: d.id,
     name: d.name,
     status: publicStatus(d.status),
-    trusted: isDeviceCredentialActive(d.status),
+    trustLevel: d.trustLevel,
+    trusted: isDeviceCredentialActive(d.status) && d.trustLevel !== "temporary",
+    current: currentDeviceId ? d.id === currentDeviceId : false,
     lastActiveAt: d.lastActiveAt?.toISOString() ?? null,
     lastActiveLabel: formatLastActive(d.lastActiveAt),
     lastUsedAt: d.lastActiveAt?.toISOString() ?? null,
     createdAt: d.createdAt.toISOString(),
     deviceType: d.deviceType,
     platform: d.platform,
+    userAgent: d.userAgent,
     trustedAt: d.trustedAt.toISOString(),
     revokedAt: d.revokedAt?.toISOString() ?? null,
-    // Public credential metadata only — never private keys
+    expiresAt: d.expiresAt?.toISOString() ?? null,
     credentials: d.credentials.map((c) => ({
       id: c.id,
+      displayName: c.displayName,
       status: publicStatus(c.status),
       authenticatorAttachment: c.authenticatorAttachment,
       credentialDeviceType: c.credentialDeviceType,
@@ -83,12 +88,49 @@ export async function revokeDevice(
   userId: string,
   deviceId: string,
   meta?: { ip?: string; userAgent?: string },
+  opts?: { actorDeviceId?: string | null; requirePrimary?: boolean },
 ) {
   const device = await prisma.device.findFirst({ where: { id: deviceId, userId } });
   if (!device) {
     throw Object.assign(new Error("Device not found"), { statusCode: 404 });
   }
   if (device.status === DEVICE_STATUS.REVOKED) return device;
+
+  if (opts?.requirePrimary) {
+    const { assertPrimaryDevice } = await import("./trust.js");
+    await assertPrimaryDevice(userId, opts.actorDeviceId);
+  }
+
+  if (device.trustLevel === "primary") {
+    const otherPrimary = await prisma.device.count({
+      where: {
+        userId,
+        id: { not: deviceId },
+        trustLevel: "primary",
+        status: { in: [DEVICE_STATUS.ACTIVE, DEVICE_STATUS.TRUSTED] },
+      },
+    });
+    if (otherPrimary < 1) {
+      const otherTrusted = await prisma.device.count({
+        where: {
+          userId,
+          id: { not: deviceId },
+          trustLevel: { in: ["primary", "standard"] },
+          status: { in: [DEVICE_STATUS.ACTIVE, DEVICE_STATUS.TRUSTED] },
+        },
+      });
+      if (otherTrusted > 0) {
+        throw Object.assign(
+          new Error("Promote another device to Primary before revoking this one"),
+          { statusCode: 400 },
+        );
+      }
+      throw Object.assign(
+        new Error("Cannot revoke the only primary trusted device"),
+        { statusCode: 400 },
+      );
+    }
+  }
 
   await prisma.$transaction([
     prisma.device.update({
@@ -154,6 +196,7 @@ export async function listPairingRequests(userId: string) {
   return rows.map((r) => ({
     id: r.id,
     status: r.status,
+    pairingCode: r.pairingCode,
     requestingDeviceMeta: JSON.parse(r.requestingDeviceMeta) as Record<string, unknown>,
     expiresAt: r.expiresAt.toISOString(),
     createdAt: r.createdAt.toISOString(),

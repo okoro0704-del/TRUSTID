@@ -36,7 +36,10 @@ export async function listApplications(userId?: string) {
     orderBy: { name: "asc" },
   });
 
-  let authMap = new Map<string, { id: string; scopes: string[] }>();
+  let authMap = new Map<
+    string,
+    { id: string; scopes: string[]; grantedAt: string }
+  >();
   if (userId) {
     const auths = await prisma.authorization.findMany({
       where: { userId, status: "active" },
@@ -45,7 +48,11 @@ export async function listApplications(userId?: string) {
     authMap = new Map(
       auths.map((a) => [
         a.applicationId,
-        { id: a.id, scopes: a.scopes.map((s) => s.scope) },
+        {
+          id: a.id,
+          scopes: a.scopes.map((s) => s.scope),
+          grantedAt: a.grantedAt.toISOString(),
+        },
       ]),
     );
   }
@@ -56,11 +63,14 @@ export async function listApplications(userId?: string) {
       id: app.id,
       clientId: app.clientId,
       name: app.name,
+      logoUrl: app.logoUrl,
       type: app.type,
       allowedScopes: parseJsonArray(app.allowedScopes),
       connected: Boolean(auth),
       authorizationId: auth?.id ?? null,
       grantedScopes: auth?.scopes ?? [],
+      connectedAt: auth?.grantedAt ?? null,
+      lastAccessAt: auth?.grantedAt ?? null,
     };
   });
 }
@@ -105,9 +115,12 @@ export async function listAuthorizations(userId: string) {
       id: r.application.id,
       name: r.application.name,
       clientId: r.application.clientId,
+      logoUrl: r.application.logoUrl,
     },
     scopes: r.scopes.map((s) => s.scope),
     grantedAt: r.grantedAt.toISOString(),
+    lastAccessAt: r.grantedAt.toISOString(),
+    status: r.status,
   }));
 }
 

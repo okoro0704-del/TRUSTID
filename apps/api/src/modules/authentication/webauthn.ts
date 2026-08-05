@@ -10,6 +10,7 @@ import {
 import {
   AUDIT_EVENTS,
   DEVICE_STATUS,
+  DEVICE_TRUST_LEVELS,
   WEBAUTHN_PURPOSES,
   isDeviceCredentialActive,
 } from "@trustid/shared";
@@ -17,6 +18,7 @@ import { prisma } from "../../db/client.js";
 import { config } from "../../lib/config.js";
 import { recordAudit } from "../audit/service.js";
 import { createSession } from "../sessions/service.js";
+import { chooseInitialTrustLevel } from "../devices/trust.js";
 import {
   consumeWebAuthnChallenge,
   extractClientChallenge,
@@ -196,11 +198,13 @@ export async function verifyRegistration(input: {
   }
 
   const deviceType = inferDeviceType(input.userAgent, credentialDeviceType);
+  const trustLevel = await chooseInitialTrustLevel(input.userId);
   const device = await prisma.device.create({
     data: {
       userId: input.userId,
       name: input.deviceName?.trim() || guessDeviceName(input.userAgent),
       status: DEVICE_STATUS.ACTIVE,
+      trustLevel,
       deviceType,
       userAgent: input.userAgent ?? null,
       platform: credentialDeviceType,
@@ -223,6 +227,7 @@ export async function verifyRegistration(input: {
         authenticatorAttachment: "platform",
         credentialDeviceType,
         backedUp: credentialBackedUp,
+        displayName: input.deviceName?.trim() || guessDeviceName(input.userAgent),
         status: DEVICE_STATUS.ACTIVE,
         lastUsedAt: new Date(),
       },
@@ -513,6 +518,125 @@ export async function verifyLogin(input: {
       status: cred.device.status,
     },
   };
+}
+
+/** Options for local UV before sensitive Trust Center actions. */
+export async function reauthenticationOptions(userId: string, deviceId?: string | null) {
+  const creds = await prisma.credential.findMany({
+    where: {
+      userId,
+      status: { not: DEVICE_STATUS.REVOKED },
+      device: {
+        status: { in: [DEVICE_STATUS.ACTIVE, DEVICE_STATUS.TRUSTED] },
+        trustLevel: { not: DEVICE_TRUST_LEVELS.TEMPORARY },
+        ...(deviceId ? { id: deviceId } : {}),
+      },
+    },
+  });
+  if (!creds.length) {
+    throw Object.assign(new Error("No trusted passkey on this device"), {
+      statusCode: 400,
+    });
+  }
+
+  const options = await generateAuthenticationOptions({
+    rpID: config.webauthn.rpID,
+    userVerification: "required",
+    allowCredentials: creds.map((c) => ({
+      id: c.credentialId,
+      transports: parseTransports(c.transports),
+    })),
+  });
+
+  await storeWebAuthnChallenge({
+    purpose: WEBAUTHN_PURPOSES.REAUTHENTICATION,
+    challenge: options.challenge,
+    userId,
+  });
+
+  return options;
+}
+
+/**
+ * Verify local user presence for approve / promote / revoke actions.
+ * Does not create a new session.
+ */
+export async function verifyReauthentication(input: {
+  userId: string;
+  deviceId?: string;
+  response: AuthenticationResponseJSON;
+  ip?: string;
+  userAgent?: string;
+}) {
+  const cred = await prisma.credential.findUnique({
+    where: { credentialId: input.response.id },
+    include: { device: true, user: true },
+  });
+  if (
+    !cred ||
+    cred.userId !== input.userId ||
+    cred.status === DEVICE_STATUS.REVOKED ||
+    !isDeviceCredentialActive(cred.device.status) ||
+    cred.device.trustLevel === DEVICE_TRUST_LEVELS.TEMPORARY
+  ) {
+    await failAuthentication(input.userId, "reauth_invalid_credential", input);
+    throw Object.assign(new Error("Re-authentication failed"), { statusCode: 401 });
+  }
+  if (input.deviceId && cred.deviceId !== input.deviceId) {
+    await failAuthentication(input.userId, "reauth_device_mismatch", input);
+    throw Object.assign(
+      new Error("Use the passkey on this trusted device"),
+      { statusCode: 403 },
+    );
+  }
+
+  const clientChallenge = extractClientChallenge(input.response.response.clientDataJSON);
+  if (!clientChallenge) {
+    throw Object.assign(new Error("Invalid credential response"), { statusCode: 400 });
+  }
+  const consumed = await consumeWebAuthnChallenge({
+    challenge: clientChallenge,
+    purpose: [WEBAUTHN_PURPOSES.REAUTHENTICATION],
+    userId: input.userId,
+  });
+  if (!consumed.ok) {
+    throw Object.assign(new Error("Challenge not found or invalid"), { statusCode: 400 });
+  }
+
+  let verification;
+  try {
+    verification = await verifyAuthenticationResponse({
+      response: input.response,
+      expectedChallenge: consumed.challenge.challenge,
+      expectedOrigin: config.webauthn.origin,
+      expectedRPID: config.webauthn.rpID,
+      requireUserVerification: true,
+      credential: {
+        id: cred.credentialId,
+        publicKey: new Uint8Array(cred.publicKey),
+        counter: Number(cred.counter),
+        transports: parseTransports(cred.transports),
+      },
+    });
+  } catch {
+    throw Object.assign(new Error("Re-authentication failed"), { statusCode: 401 });
+  }
+  if (!verification.verified) {
+    throw Object.assign(new Error("Re-authentication failed"), { statusCode: 401 });
+  }
+
+  const newCounter = verification.authenticationInfo.newCounter;
+  evaluateSignatureCounter(cred.counter, newCounter);
+  await prisma.credential.update({
+    where: { id: cred.id },
+    data: { counter: BigInt(newCounter), lastUsedAt: new Date() },
+  });
+  await prisma.device.update({
+    where: { id: cred.deviceId },
+    data: { lastActiveAt: new Date() },
+  });
+
+  return { deviceId: cred.deviceId, userVerified: verification.authenticationInfo.userVerified };
 }
 
 /** Add an additional trusted credential/device for an authenticated user. */

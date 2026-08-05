@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
@@ -28,6 +28,9 @@ model User {
   oauthAccessTokens       OAuthAccessToken[]
   oauthRefreshTokens      OAuthRefreshToken[]
   identityVerifications   IdentityVerification[]
+  accountPreferences      AccountPreferences?
+  deviceApprovalRequests  DeviceApprovalRequest[]
+  securityNotifications   SecurityNotification[]
 
   @@map("users")
 }
@@ -81,6 +84,8 @@ model Device {
   name         String
   /// active | revoked (legacy "trusted" treated as active)
   status       String    @default("active")
+  /// primary | standard | temporary
+  trustLevel   String    @default("standard") @map("trust_level")
   /// Logical device/browser label class — not a hardware identity guarantee
   deviceType   String?   @map("device_type")
   userAgent    String?   @map("user_agent")
@@ -90,14 +95,19 @@ model Device {
   lastActiveAt DateTime? @map("last_active_at")
   trustedAt    DateTime  @default(now()) @map("trusted_at")
   revokedAt    DateTime? @map("revoked_at")
+  /// When trustLevel=temporary, session/device trust ends at this time
+  expiresAt    DateTime? @map("expires_at")
   createdAt    DateTime  @default(now()) @map("created_at")
 
-  user                    User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user                    User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
   credentials             Credential[]
   sessions                Session[]
-  approvedPairingRequests DevicePairingRequest[] @relation("ApprovedByDevice")
+  approvedPairingRequests DevicePairingRequest[]   @relation("ApprovedByDevice")
+  approvedApprovals       DeviceApprovalRequest[]  @relation("ApprovedByDevice")
+  resultingApprovals      DeviceApprovalRequest[]  @relation("ResultingDevice")
 
   @@index([userId])
+  @@index([userId, trustLevel])
   @@map("devices")
 }
 
@@ -115,6 +125,8 @@ model Credential {
   authenticatorAttachment String?   @map("authenticator_attachment")
   credentialDeviceType    String?   @map("credential_device_type")
   backedUp                Boolean   @default(false) @map("backed_up")
+  /// User-facing passkey label
+  displayName             String?   @map("display_name")
   status                  String    @default("active")
   lastUsedAt              DateTime? @map("last_used_at")
   revokedAt               DateTime? @map("revoked_at")
@@ -132,6 +144,8 @@ model Session {
   userId        String    @map("user_id")
   deviceId      String?   @map("device_id")
   applicationId String?   @map("application_id")
+  /// standard | temporary
+  kind          String    @default("standard")
   tokenHash     String    @unique @map("token_hash")
   expiresAt     DateTime  @map("expires_at")
   revokedAt     DateTime? @map("revoked_at")
@@ -148,22 +162,77 @@ model Session {
   @@map("sessions")
 }
 
+/// Cross-device login: unknown device waits for a primary trusted device decision.
+model DeviceApprovalRequest {
+  id                   String    @id @default(cuid())
+  userId               String    @map("user_id")
+  applicationId        String?   @map("application_id")
+  clientId             String?   @map("client_id")
+  applicationName      String?   @map("application_name")
+  requestedDeviceName  String    @map("requested_device_name")
+  platform             String?
+  browser              String?
+  location             String?
+  ip                   String?
+  userAgent            String?   @map("user_agent")
+  /// pending | approved | temporary | declined | expired
+  status               String    @default("pending")
+  pollTokenHash        String    @unique @map("poll_token_hash")
+  enrollmentTokenHash  String?   @map("enrollment_token_hash")
+  enrollmentTokenExpires DateTime? @map("enrollment_token_expires")
+  /// One-time delivery of temporary session token (cleared after claim)
+  oneTimeSessionToken  String?   @map("one_time_session_token")
+  claimConsumedAt      DateTime? @map("claim_consumed_at")
+  approvedByDeviceId   String?   @map("approved_by_device_id")
+  resultingDeviceId    String?   @map("resulting_device_id")
+  expiresAt            DateTime  @map("expires_at")
+  resolvedAt           DateTime? @map("resolved_at")
+  createdAt            DateTime  @default(now()) @map("created_at")
+
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  application      Application?  @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+  approvedByDevice Device?       @relation("ApprovedByDevice", fields: [approvedByDeviceId], references: [id], onDelete: SetNull)
+  resultingDevice  Device?       @relation("ResultingDevice", fields: [resultingDeviceId], references: [id], onDelete: SetNull)
+
+  @@index([userId, status])
+  @@map("device_approval_requests")
+}
+
+/// In-app / simulated push notifications for primary trusted devices.
+model SecurityNotification {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  type      String
+  title     String
+  body      String
+  payload   String    @default("{}")
+  readAt    DateTime? @map("read_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@map("security_notifications")
+}
+
 model Application {
-  id               String   @id @default(cuid())
-  clientId         String   @unique @map("client_id")
-  clientSecretHash String?  @map("client_secret_hash")
+  id               String    @id @default(cuid())
+  clientId         String    @unique @map("client_id")
+  clientSecretHash String?   @map("client_secret_hash")
   name             String
-  type             String   @default("public")
-  redirectUris     String   @map("redirect_uris")
-  allowedScopes    String   @map("allowed_scopes")
-  status           String   @default("active")
-  createdAt        DateTime @default(now()) @map("created_at")
+  logoUrl          String?   @map("logo_url")
+  type             String    @default("public")
+  redirectUris     String    @map("redirect_uris")
+  allowedScopes    String    @map("allowed_scopes")
+  status           String    @default("active")
+  createdAt        DateTime  @default(now()) @map("created_at")
 
   authorizations          Authorization[]
   sessions                Session[]
   oauthAuthorizationCodes OAuthAuthorizationCode[]
   oauthAccessTokens       OAuthAccessToken[]
   oauthRefreshTokens      OAuthRefreshToken[]
+  deviceApprovalRequests  DeviceApprovalRequest[]
 
   @@map("applications")
 }
@@ -249,20 +318,37 @@ model OAuthRefreshToken {
 }
 
 model DevicePairingRequest {
-  id                   String    @id @default(cuid())
-  userId               String    @map("user_id")
-  requestingDeviceMeta String    @map("requesting_device_meta")
-  status               String    @default("pending")
-  approvedByDeviceId   String?   @map("approved_by_device_id")
-  expiresAt            DateTime  @map("expires_at")
-  createdAt            DateTime  @default(now()) @map("created_at")
-  resolvedAt           DateTime? @map("resolved_at")
+  id                     String    @id @default(cuid())
+  userId                 String    @map("user_id")
+  /// Short human-enterable enrollment code (e.g. AB12CD)
+  pairingCode            String?   @unique @map("pairing_code")
+  requestingDeviceMeta   String    @map("requesting_device_meta")
+  status                 String    @default("pending")
+  approvedByDeviceId     String?   @map("approved_by_device_id")
+  /// One-time token issued after approval for WebAuthn enroll on new device
+  enrollmentTokenHash    String?   @map("enrollment_token_hash")
+  enrollmentTokenExpires DateTime? @map("enrollment_token_expires")
+  expiresAt              DateTime  @map("expires_at")
+  createdAt              DateTime  @default(now()) @map("created_at")
+  resolvedAt             DateTime? @map("resolved_at")
 
   user             User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   approvedByDevice Device? @relation("ApprovedByDevice", fields: [approvedByDeviceId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@map("device_pairing_requests")
+}
+
+model AccountPreferences {
+  userId                 String  @id @map("user_id")
+  theme                  String  @default("system")
+  notificationsEnabled   Boolean @default(true) @map("notifications_enabled")
+  privacyShareAnalytics  Boolean @default(false) @map("privacy_share_analytics")
+  language               String  @default("en")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("account_preferences")
 }
 
 model RecoveryMethod {

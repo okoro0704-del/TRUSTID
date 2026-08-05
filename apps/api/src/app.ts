@@ -9,7 +9,14 @@ import { applicationRoutes } from "./routes/applications.js";
 import { authorizationRoutes } from "./routes/authorizations.js";
 import { oauthRoutes } from "./routes/oauth.js";
 import { securityRoutes } from "./routes/security.js";
+import { trustRoutes } from "./routes/trust.js";
+import { passkeyRoutes } from "./routes/passkeys.js";
+import { accountRoutes } from "./routes/account.js";
 import { wipeRoutes } from "./routes/wipe.js";
+import {
+  deviceApprovalRoutes,
+  reauthRoutes,
+} from "./routes/device-approvals.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -50,6 +57,11 @@ export async function buildApp() {
   await app.register(authorizationRoutes);
   await app.register(oauthRoutes);
   await app.register(securityRoutes);
+  await app.register(trustRoutes);
+  await app.register(passkeyRoutes);
+  await app.register(accountRoutes);
+  await app.register(deviceApprovalRoutes);
+  await app.register(reauthRoutes);
   await app.register(wipeRoutes);
 
   return app;

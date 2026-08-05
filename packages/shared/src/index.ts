@@ -29,6 +29,32 @@ export function isDeviceCredentialActive(status: string): boolean {
   return status === DEVICE_STATUS.ACTIVE || status === DEVICE_STATUS.TRUSTED;
 }
 
+/** Device trust classification within an account */
+export const DEVICE_TRUST_LEVELS = {
+  PRIMARY: "primary",
+  STANDARD: "standard",
+  TEMPORARY: "temporary",
+} as const;
+
+export type DeviceTrustLevel =
+  (typeof DEVICE_TRUST_LEVELS)[keyof typeof DEVICE_TRUST_LEVELS];
+
+export const DEVICE_APPROVAL_STATUS = {
+  PENDING: "pending",
+  APPROVED: "approved",
+  TEMPORARY: "temporary",
+  DECLINED: "declined",
+  EXPIRED: "expired",
+} as const;
+
+export type DeviceApprovalStatus =
+  (typeof DEVICE_APPROVAL_STATUS)[keyof typeof DEVICE_APPROVAL_STATUS];
+
+export const SESSION_KINDS = {
+  STANDARD: "standard",
+  TEMPORARY: "temporary",
+} as const;
+
 export const WEBAUTHN_PURPOSES = {
   REGISTRATION: "registration",
   AUTHENTICATION: "authentication",
@@ -46,6 +72,34 @@ export const IDENTITY_VERIFICATION_STATUS = {
   FAILED: "failed",
 } as const;
 
+export const TRUST_TIERS = {
+  TIER_0: 0,
+  TIER_1: 1,
+  TIER_2: 2,
+  TIER_3: 3,
+} as const;
+
+export type TrustTier = (typeof TRUST_TIERS)[keyof typeof TRUST_TIERS];
+
+export const TRUST_TIER_LABELS: Record<number, string> = {
+  0: "Account created",
+  1: "Trusted device",
+  2: "Verified identity",
+  3: "High assurance",
+};
+
+export const SCOPE_LABELS: Record<string, string> = {
+  openid: "Sign-in identity",
+  "identity.basic": "Public TrustID identifier",
+  "identity.profile": "Basic profile (name)",
+  "identity.email": "Email address",
+  "identity.phone": "Phone number",
+  offline_access: "Stay signed in (refresh)",
+  "wallet.reference": "Wallet reference (future)",
+  "identity.verification_status": "Identity verification status",
+  "identity.trust_level": "Trust level",
+};
+
 export const AUDIT_EVENTS = {
   IDENTITY_CREATED: "identity.created",
   IDENTITY_VERIFIED: "identity.verified",
@@ -59,17 +113,30 @@ export const AUDIT_EVENTS = {
   DEVICE_AUTHENTICATION_COMPLETED: "device.authentication.completed",
   DEVICE_AUTHENTICATION_FAILED: "device.authentication.failed",
   DEVICE_SIGNATURE_COUNTER_WARNING: "device.signature_counter.warning",
+  DEVICE_ENROLLMENT_CREATED: "device.enrollment.created",
+  DEVICE_ENROLLMENT_APPROVED: "device.enrollment.approved",
+  DEVICE_ENROLLMENT_COMPLETED: "device.enrollment.completed",
+  PASSKEY_RENAMED: "passkey.renamed",
+  PASSKEY_REMOVED: "passkey.removed",
   SESSION_CREATED: "session.created",
   SESSION_REVOKED: "session.revoked",
   APPLICATION_AUTHORIZED: "application.authorized",
   APPLICATION_REVOKED: "application.revoked",
   PERMISSION_GRANTED: "permission.granted",
   PERMISSION_REVOKED: "permission.revoked",
+  SECURITY_SETTINGS_CHANGED: "security.settings.changed",
   RECOVERY_STARTED: "recovery.started",
   RECOVERY_COMPLETED: "recovery.completed",
   PAIRING_REQUESTED: "device.pairing_requested",
   PAIRING_APPROVED: "device.pairing_approved",
   PAIRING_REJECTED: "device.pairing_rejected",
+  DEVICE_APPROVAL_REQUESTED: "device.approval.requested",
+  DEVICE_APPROVAL_APPROVED: "device.approval.approved",
+  DEVICE_APPROVAL_TEMPORARY: "device.approval.temporary",
+  DEVICE_APPROVAL_DECLINED: "device.approval.declined",
+  DEVICE_APPROVAL_EXPIRED: "device.approval.expired",
+  DEVICE_PROMOTED: "device.promoted",
+  DEVICE_PRIMARY_CHANGED: "device.primary_changed",
 } as const;
 
 export type AuditEventType = (typeof AUDIT_EVENTS)[keyof typeof AUDIT_EVENTS];

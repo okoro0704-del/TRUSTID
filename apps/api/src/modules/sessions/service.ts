@@ -8,16 +8,21 @@ export async function createSession(input: {
   userId: string;
   deviceId?: string | null;
   applicationId?: string | null;
+  kind?: string;
+  expiresAt?: Date;
   ip?: string | null;
   userAgent?: string | null;
 }) {
   const token = randomToken(32);
-  const expiresAt = new Date(Date.now() + config.sessionTtlHours * 60 * 60 * 1000);
+  const expiresAt =
+    input.expiresAt ??
+    new Date(Date.now() + config.sessionTtlHours * 60 * 60 * 1000);
   const session = await prisma.session.create({
     data: {
       userId: input.userId,
       deviceId: input.deviceId ?? null,
       applicationId: input.applicationId ?? null,
+      kind: input.kind ?? "standard",
       tokenHash: hashSecret(token),
       expiresAt,
       ip: input.ip ?? null,
@@ -29,7 +34,11 @@ export async function createSession(input: {
     userId: input.userId,
     actorType: "user",
     actorId: input.userId,
-    metadata: { sessionId: session.id, deviceId: input.deviceId },
+    metadata: {
+      sessionId: session.id,
+      deviceId: input.deviceId,
+      kind: input.kind ?? "standard",
+    },
     ip: input.ip,
     userAgent: input.userAgent,
   });
@@ -48,6 +57,14 @@ export async function resolveSession(token: string) {
   if (!session) return null;
   if (session.revokedAt) return null;
   if (session.expiresAt.getTime() < Date.now()) return null;
+  if (
+    session.device?.trustLevel === "temporary" &&
+    session.device.expiresAt &&
+    session.device.expiresAt.getTime() < Date.now()
+  ) {
+    return null;
+  }
+  if (session.device?.status === "revoked") return null;
   await prisma.session.update({
     where: { id: session.id },
     data: { lastSeenAt: new Date() },
@@ -132,6 +149,7 @@ export async function listSessions(userId: string) {
     deviceName: s.device?.name ?? null,
     applicationId: s.applicationId,
     applicationName: s.application?.name ?? "TrustID",
+    kind: s.kind,
     ip: s.ip,
     userAgent: s.userAgent,
     createdAt: s.createdAt.toISOString(),

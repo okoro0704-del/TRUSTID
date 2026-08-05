@@ -8,10 +8,26 @@ import {
 } from "../modules/authorization/service.js";
 import { DEFAULT_APP_SCOPES } from "@trustid/shared";
 
+function optionalSessionToken(req: {
+  cookies?: Record<string, string | undefined>;
+  headers: Record<string, unknown>;
+}) {
+  const header = req.headers.authorization;
+  const bearer =
+    typeof header === "string" && header.startsWith("Bearer ")
+      ? header.slice("Bearer ".length).trim()
+      : undefined;
+  const custom =
+    typeof req.headers["x-trustid-session"] === "string"
+      ? (req.headers["x-trustid-session"] as string).trim()
+      : undefined;
+  return custom || bearer || req.cookies?.[config.sessionCookieName];
+}
+
 export async function applicationRoutes(app: FastifyInstance) {
   app.get("/applications", async (req) => {
-    // Optional session for connection status
-    const token = req.cookies?.[config.sessionCookieName];
+    // Optional session for connection status (cookie or TrustID session headers)
+    const token = optionalSessionToken(req);
     let userId: string | undefined;
     if (token) {
       try {

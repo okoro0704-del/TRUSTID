@@ -33,14 +33,24 @@ export function setupTestDatabase() {
 
 export async function resetTables(prisma: PrismaClient) {
   await prisma.auditEvent.deleteMany();
+  await prisma.securityNotification.deleteMany();
   await prisma.webAuthnChallenge.deleteMany();
-  await prisma.credential.deleteMany();
-  await prisma.device.deleteMany();
+  await prisma.oAuthAccessToken.deleteMany();
+  await prisma.oAuthRefreshToken.deleteMany();
+  await prisma.oAuthAuthorizationCode.deleteMany();
+  await prisma.authorizationScope.deleteMany();
+  await prisma.authorization.deleteMany();
   await prisma.session.deleteMany();
+  await prisma.credential.deleteMany();
+  await prisma.deviceApprovalRequest.deleteMany();
+  await prisma.devicePairingRequest.deleteMany();
+  await prisma.device.deleteMany();
   await prisma.identityVerification.deleteMany();
+  await prisma.accountPreferences.deleteMany();
   await prisma.verificationChallenge.deleteMany();
   await prisma.recoveryMethod.deleteMany();
   await prisma.contactMethod.deleteMany();
   await prisma.profile.deleteMany();
+  await prisma.application.deleteMany();
   await prisma.user.deleteMany();
 }

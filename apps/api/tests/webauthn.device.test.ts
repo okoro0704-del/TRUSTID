@@ -486,6 +486,21 @@ describe("Trusted device credential flows", () => {
     await renameDevice(user.id, reg.device.id, "Pixel");
     devices = await listDevices(user.id);
     expect(devices.find((d) => d.id === reg.device.id)?.name).toBe("Pixel");
+
+    // Keep at least one primary: add another trusted device, then revoke the first
+    await prisma.device.create({
+      data: {
+        userId: user.id,
+        name: "Backup",
+        status: "active",
+        trustLevel: "primary",
+      },
+    });
+    await prisma.device.update({
+      where: { id: reg.device.id },
+      data: { trustLevel: "standard" },
+    });
+
     await revokeDevice(user.id, reg.device.id);
     devices = await listDevices(user.id);
     expect(devices.find((d) => d.id === reg.device.id)?.status).toBe("revoked");
