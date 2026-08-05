@@ -2,4 +2,13 @@
 buildCommand = "npm run build:api"
 
 [deploy]
+# Sync Prisma provider to Postgres when DATABASE_URL is postgresql://, then migrate + seed + start
 startCommand = "npm start"
+
+# Required Railway variables (set in dashboard):
+# DATABASE_URL = ${{Postgres.DATABASE_URL}}  (or your Postgres plugin URL)
+# COOKIE_SECRET = <long random>
+# WEBAUTHN_RP_ID = your TrustID hostname (e.g. trustid.example.com)
+# WEBAUTHN_ORIGIN = https://your-trustid-web-origin
+# WEBAUTHN_RP_NAME = TrustID
+# CORS_ORIGINS = https://your-web-origin,https://your-lifeos-origin

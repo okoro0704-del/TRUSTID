@@ -19,6 +19,16 @@ for (const p of [
   if (fs.existsSync(p)) fs.unlinkSync(p);
 }
 
+execSync("node scripts/sync-prisma-provider.mjs", {
+  cwd: root,
+  env: {
+    ...process.env,
+    DATABASE_URL: `file:${templatePath}`,
+    PRISMA_PROVIDER: "sqlite",
+  },
+  stdio: "inherit",
+});
+
 execSync("npx prisma db push --skip-generate", {
   cwd: apiDir,
   env: {

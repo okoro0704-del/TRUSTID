@@ -24,6 +24,17 @@ export function setupTestDatabase() {
     if (fs.existsSync(p)) fs.unlinkSync(p);
   }
 
+  const repoRoot = path.resolve(apiRoot, "../..");
+  execSync("node scripts/sync-prisma-provider.mjs", {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      DATABASE_URL: `file:${testDbPath}`,
+      PRISMA_PROVIDER: "sqlite",
+    },
+    stdio: "pipe",
+  });
+
   execSync("npx prisma db push --skip-generate", {
     cwd: apiRoot,
     env: { ...process.env, DATABASE_URL: `file:${testDbPath}` },
