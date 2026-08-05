@@ -26,6 +26,7 @@ export function ConsentPage() {
   if (!identity) {
     const next = `/oauth/consent?${params.toString()}`;
     sessionStorage.setItem("trustid.returnTo", next);
+    // Prefer continue (existing users); register also honors returnTo after secure
     return <Navigate to="/continue" replace />;
   }
 

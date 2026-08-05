@@ -10,7 +10,14 @@ export function ContinuePage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  if (identity) return <Navigate to="/dashboard" replace />;
+  if (identity) {
+    const returnTo = sessionStorage.getItem("trustid.returnTo");
+    if (returnTo) {
+      sessionStorage.removeItem("trustid.returnTo");
+      return <Navigate to={returnTo} replace />;
+    }
+    return <Navigate to="/dashboard" replace />;
+  }
 
   async function authenticate(email?: string, phone?: string) {
     setBusy(true);
