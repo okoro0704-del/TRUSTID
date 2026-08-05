@@ -1,7 +1,4 @@
-# TrustID PWA only — API runs on Railway
-#
-# Set in Netlify UI (Environment variables):
-#   VITE_API_URL=https://lucid-integrity-production.up.railway.app
+# TrustID PWA on Netlify — API proxied to Railway (same-origin cookies)
 
 [build]
   command = "npm run build -w @trustid/shared && npm run build -w @trustid/web"
@@ -9,12 +6,26 @@
 
 [build.environment]
   NODE_VERSION = "20"
+  # Same-origin /api so session cookies work (do not point VITE_API_URL at Railway)
+  VITE_API_URL = "/api"
 
-# Do not bundle Netlify Functions (API is on Railway)
 [functions]
   directory = "netlify/functions-disabled"
 
-# SPA fallback for React Router
+# Proxy API to Railway — browser sees trustedid.netlify.app (first-party cookies)
+[[redirects]]
+  from = "/api/*"
+  to = "https://lucid-integrity-production.up.railway.app/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api"
+  to = "https://lucid-integrity-production.up.railway.app/"
+  status = 200
+  force = true
+
+# SPA fallback
 [[redirects]]
   from = "/*"
   to = "/index.html"

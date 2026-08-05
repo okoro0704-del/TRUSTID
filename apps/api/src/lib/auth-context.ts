@@ -67,7 +67,8 @@ export function setSessionCookie(reply: FastifyReply, token: string) {
   reply.setCookie(config.sessionCookieName, token, {
     path: "/",
     httpOnly: true,
-    // Cross-site (Netlify UI → Railway API) requires None+Secure in production
+    // lax is enough when the web app same-origin proxies to this API.
+    // none is required only for direct cross-site calls (Netlify → Railway hostname).
     sameSite: config.isDev ? "lax" : "none",
     secure: !config.isDev,
     maxAge: config.sessionTtlHours * 60 * 60,
@@ -75,5 +76,9 @@ export function setSessionCookie(reply: FastifyReply, token: string) {
 }
 
 export function clearSessionCookie(reply: FastifyReply) {
-  reply.clearCookie(config.sessionCookieName, { path: "/" });
+  reply.clearCookie(config.sessionCookieName, {
+    path: "/",
+    sameSite: config.isDev ? "lax" : "none",
+    secure: !config.isDev,
+  });
 }
