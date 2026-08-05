@@ -2,11 +2,11 @@ import { FormEvent, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import { startAuthentication } from "@simplewebauthn/browser";
 import { api, setSessionToken } from "../lib/api";
-import { useAuth } from "../lib/auth";
+import { useAuth, type Identity } from "../lib/auth";
 
 export function ContinuePage() {
   const navigate = useNavigate();
-  const { identity, refresh } = useAuth();
+  const { identity, refresh, setIdentity } = useAuth();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -24,12 +24,18 @@ export function ContinuePage() {
         },
       );
       const response = await startAuthentication({ optionsJSON: options });
-      const result = await api<{ sessionToken?: string }>("/auth/webauthn/login/verify", {
-        method: "POST",
-        body: JSON.stringify({ response }),
-      });
+      const result = await api<{ sessionToken?: string; identity?: Identity }>(
+        "/auth/webauthn/login/verify",
+        {
+          method: "POST",
+          body: JSON.stringify({ response }),
+        },
+      );
       if (result.sessionToken) setSessionToken(result.sessionToken);
-      await refresh();
+      if (result.identity) setIdentity(result.identity);
+      await refresh().catch(() => {
+        /* identity may already be set */
+      });
       const returnTo = sessionStorage.getItem("trustid.returnTo");
       if (returnTo) {
         sessionStorage.removeItem("trustid.returnTo");
@@ -87,6 +93,9 @@ export function ContinuePage() {
             Discover passkey
           </button>
         </div>
+        <p className="muted" style={{ marginTop: "1rem" }}>
+          New here? <Link to="/register">Create TrustID</Link>
+        </p>
       </form>
     </div>
   );

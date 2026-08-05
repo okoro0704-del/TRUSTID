@@ -12,7 +12,7 @@ type Onboarding = {
 
 export function SecurePage() {
   const navigate = useNavigate();
-  const { refresh } = useAuth();
+  const { refresh, setIdentity } = useAuth();
   const onboarding = useMemo(() => {
     const raw = sessionStorage.getItem("trustid.onboarding");
     return raw ? (JSON.parse(raw) as Onboarding) : null;
@@ -36,20 +36,23 @@ export function SecurePage() {
         },
       );
       const response = await startRegistration({ optionsJSON: options });
-      const verifyResult = await api<{ sessionToken?: string }>(
-        "/auth/webauthn/register/verify",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            userId: onboarding!.userId,
-            deviceName: deviceName || undefined,
-            response,
-          }),
-        },
-      );
+      const verifyResult = await api<{
+        sessionToken?: string;
+        identity?: import("../lib/auth").Identity;
+      }>("/auth/webauthn/register/verify", {
+        method: "POST",
+        body: JSON.stringify({
+          userId: onboarding!.userId,
+          deviceName: deviceName || undefined,
+          response,
+        }),
+      });
       if (verifyResult.sessionToken) setSessionToken(verifyResult.sessionToken);
+      if (verifyResult.identity) setIdentity(verifyResult.identity);
       sessionStorage.removeItem("trustid.onboarding");
-      await refresh();
+      await refresh().catch(() => {
+        /* identity already set from verifyResult */
+      });
       navigate("/secured");
     } catch (err) {
       setError(

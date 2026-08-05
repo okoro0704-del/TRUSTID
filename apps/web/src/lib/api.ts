@@ -36,7 +36,9 @@ export async function api<T>(
     ...(options.headers as Record<string, string> | undefined),
   };
   const token = getSessionToken();
-  if (token && !headers.Authorization) {
+  if (token && !headers.Authorization && !headers["X-TrustID-Session"]) {
+    // Netlify proxies often strip Authorization — use a custom header too
+    headers["X-TrustID-Session"] = token;
     headers.Authorization = `Bearer ${token}`;
   }
 

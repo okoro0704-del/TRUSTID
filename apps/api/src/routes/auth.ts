@@ -14,7 +14,7 @@ import {
   verifyRegistration,
 } from "../modules/authentication/webauthn.js";
 import { getDashboardIdentity } from "../modules/identity/service.js";
-import { revokeSession } from "../modules/sessions/service.js";
+import { resolveSession, revokeSession } from "../modules/sessions/service.js";
 
 function httpError(err: unknown, reply: import("fastify").FastifyReply) {
   const e = err as { statusCode?: number; message?: string };
@@ -85,13 +85,14 @@ export async function authRoutes(app: FastifyInstance) {
         throw Object.assign(new Error("Session was not created"), { statusCode: 500 });
       }
       setSessionCookie(reply, result.sessionToken);
+      const identity = await getDashboardIdentity(body.userId);
       return {
         trustId: result.trustId,
         profile: result.profile,
         device: result.device,
         sessionId: result.sessionId,
-        // Also returned for SPA clients when cross-site cookies are blocked
         sessionToken: result.sessionToken,
+        identity,
       };
     } catch (err) {
       return httpError(err, reply);
@@ -120,12 +121,18 @@ export async function authRoutes(app: FastifyInstance) {
         ...clientMeta(req),
       });
       setSessionCookie(reply, result.sessionToken);
+      const session = await resolveSession(result.sessionToken);
+      if (!session) {
+        throw Object.assign(new Error("Session was not created"), { statusCode: 500 });
+      }
+      const identity = await getDashboardIdentity(session.userId);
       return {
         trustId: result.trustId,
         profile: result.profile,
         device: result.device,
         sessionId: result.sessionId,
         sessionToken: result.sessionToken,
+        identity,
       };
     } catch (err) {
       return httpError(err, reply);
