@@ -4,26 +4,76 @@ function required(name: string, fallback?: string): string {
   return value;
 }
 
+function siteUrl(): string | undefined {
+  return process.env.URL || process.env.DEPLOY_PRIME_URL || process.env.DEPLOY_URL;
+}
+
+function derivedOrigin(): string {
+  return process.env.WEBAUTHN_ORIGIN || siteUrl() || "http://localhost:5173";
+}
+
+function derivedRpId(): string {
+  if (process.env.WEBAUTHN_RP_ID) return process.env.WEBAUTHN_RP_ID;
+  try {
+    return new URL(derivedOrigin()).hostname;
+  } catch {
+    return "localhost";
+  }
+}
+
+/** Lazy config so Netlify can set URL / WEBAUTHN_* before first use. */
 export const config = {
-  port: Number(process.env.PORT ?? 8787),
-  host: process.env.HOST ?? "0.0.0.0",
-  nodeEnv: process.env.NODE_ENV ?? "development",
-  isDev: (process.env.NODE_ENV ?? "development") !== "production",
-  cookieSecret: required("COOKIE_SECRET", "dev-cookie-secret-change-in-production"),
-  sessionTtlHours: Number(process.env.SESSION_TTL_HOURS ?? 168),
-  otpTtlMinutes: Number(process.env.OTP_TTL_MINUTES ?? 10),
-  webauthn: {
-    rpID: required("WEBAUTHN_RP_ID", "localhost"),
-    rpName: required("WEBAUTHN_RP_NAME", "TrustID"),
-    origin: required("WEBAUTHN_ORIGIN", "http://localhost:5173"),
+  get port() {
+    return Number(process.env.PORT ?? 8787);
   },
-  corsOrigins: (process.env.CORS_ORIGINS ?? "http://localhost:5173,http://localhost:5174")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean),
-  lifeosRedirectUri: required(
-    "LIFEOS_REDIRECT_URI",
-    "http://localhost:5174/callback",
-  ),
+  get host() {
+    return process.env.HOST ?? "0.0.0.0";
+  },
+  get nodeEnv() {
+    return process.env.NODE_ENV ?? "development";
+  },
+  get isDev() {
+    return (process.env.NODE_ENV ?? "development") !== "production";
+  },
+  get cookieSecret() {
+    return required(
+      "COOKIE_SECRET",
+      process.env.SESSION_SECRET || "dev-cookie-secret-change-in-production",
+    );
+  },
+  get sessionTtlHours() {
+    return Number(process.env.SESSION_TTL_HOURS ?? 168);
+  },
+  get otpTtlMinutes() {
+    return Number(process.env.OTP_TTL_MINUTES ?? 10);
+  },
+  get webauthn() {
+    return {
+      rpID: derivedRpId(),
+      rpName: required("WEBAUTHN_RP_NAME", "TrustID"),
+      origin: derivedOrigin(),
+    };
+  },
+  get corsOrigins() {
+    const origin = derivedOrigin();
+    const defaults = [
+      "http://localhost:5173",
+      "http://localhost:5174",
+      origin,
+      siteUrl(),
+    ]
+      .filter(Boolean)
+      .join(",");
+    return (process.env.CORS_ORIGINS ?? defaults)
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  },
+  get lifeosRedirectUri() {
+    return required(
+      "LIFEOS_REDIRECT_URI",
+      "http://localhost:5174/callback",
+    );
+  },
   sessionCookieName: "trustid_session",
 };

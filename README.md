@@ -46,16 +46,35 @@ Open the TrustID PWA at http://localhost:5173 — create a TrustID, verify (dev 
 
 ## Deploy (Netlify)
 
-This repo is a monorepo. **TrustID** is `apps/web`. Mock LifeOS (`apps/mock-lifeos`) is a local demo only and must not be the Netlify publish target.
+This repo is a monorepo. **TrustID** is `apps/web` plus API routes under `/api` (Netlify Functions).
 
-`netlify.toml` builds and publishes TrustID:
+`netlify.toml` builds TrustID and prepares a SQLite template for functions:
 
 ```text
 command: npm run build:web
 publish: apps/web/dist
+/api/* → Netlify Function
 ```
 
-In the Netlify site settings, set **Base directory** to empty (repository root) and clear any Publish directory override that points at `apps/mock-lifeos`.
+In Netlify site settings, set **Base directory** to empty (repository root) and clear any Publish directory override that points at `apps/mock-lifeos`.
+
+Optional Netlify env vars:
+
+- `COOKIE_SECRET` — session cookie signing secret
+- `WEBAUTHN_RP_ID` — your Netlify hostname (auto from `URL` if unset)
+- `WEBAUTHN_ORIGIN` — `https://your-site.netlify.app` (auto from `URL` if unset)
+
+Note: function SQLite lives in `/tmp` and can reset on cold starts — fine for demos; use a hosted database for production persistence.
+
+## Local development
+
+```bash
+npm run setup
+npm run dev:api      # http://localhost:8787
+npm run dev:web      # http://localhost:5173
+```
+
+Create TrustID requires the API running. The PWA proxies `/api` → `localhost:8787`.
 
 ## Tests
 

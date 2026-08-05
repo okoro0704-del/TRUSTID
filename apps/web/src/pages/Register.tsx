@@ -14,6 +14,11 @@ export function RegisterPage() {
     const fd = new FormData(e.currentTarget);
     const email = String(fd.get("email") || "").trim();
     const phone = String(fd.get("phone") || "").trim();
+    if (!email && !phone) {
+      setError("Enter an email or phone number to continue.");
+      setBusy(false);
+      return;
+    }
     try {
       const result = await api<{
         userId: string;

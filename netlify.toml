@@ -1,8 +1,7 @@
-# TrustID PWA is the primary Netlify site.
-# Do not publish apps/mock-lifeos (that is a local OAuth demo only).
+# TrustID PWA + API (Netlify Functions)
 #
-# In Netlify UI: leave Base directory empty (repo root),
-# or clear any Base/Publish overrides so this file controls the build.
+# In Netlify UI: Base directory empty (repo root).
+# Clear any Publish directory override pointing at mock-lifeos.
 
 [build]
   command = "npm run build:web"
@@ -10,6 +9,32 @@
 
 [build.environment]
   NODE_VERSION = "20"
+  # Runtime DB for functions — template is copied to /tmp on cold start
+  DATABASE_URL = "file:/tmp/trustid.db"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+  included_files = [
+    "apps/api/prisma/template.db",
+    "apps/api/dist/**",
+    "node_modules/.prisma/client/**",
+    "node_modules/@prisma/client/**",
+    "packages/shared/dist/**"
+  ]
+
+# API must be matched before the SPA fallback
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api"
+  to = "/.netlify/functions/api"
+  status = 200
+  force = true
 
 # SPA fallback for React Router
 [[redirects]]

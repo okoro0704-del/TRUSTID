@@ -9,6 +9,10 @@ apps/api/prisma/dev.db
 apps/api/prisma/dev.db-journal
 apps/api/prisma/test.db
 apps/api/prisma/test.db-journal
+apps/api/prisma/template.db
+apps/api/prisma/template.db-journal
+apps/api/prisma/template.db-wal
+apps/api/prisma/template.db-shm
 .DS_Store
 *.log
 .vite
