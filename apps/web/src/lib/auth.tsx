@@ -5,7 +5,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { api, setSessionToken } from "./api";
+import { api, getSessionToken, setSessionToken } from "./api";
 
 export type Identity = {
   trustId: string;
@@ -41,7 +41,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
       setIdentity(data.identity);
     } catch {
-      setIdentity(null);
+      // Do not wipe a just-established SPA identity if the session probe fails
+      if (!getSessionToken()) setIdentity(null);
     }
   };
 

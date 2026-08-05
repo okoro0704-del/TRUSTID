@@ -1,6 +1,7 @@
 /** Same-origin `/api` via Netlify proxy in production; Vite proxy locally. */
 const API_BASE = import.meta.env.VITE_API_URL ?? "/api";
 const SESSION_KEY = "trustid.sessionToken";
+const SESSION_COOKIE = "trustid_session";
 
 export class ApiError extends Error {
   status: number;
@@ -18,6 +19,20 @@ export function getSessionToken(): string | null {
   }
 }
 
+function writeSessionCookie(token: string | null) {
+  try {
+    if (token) {
+      // First-party cookie on the TrustID Netlify host so /api proxy forwards it to Railway
+      const maxAge = 60 * 60 * 24 * 7;
+      document.cookie = `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; Secure; SameSite=Lax; Max-Age=${maxAge}`;
+    } else {
+      document.cookie = `${SESSION_COOKIE}=; Path=/; Secure; SameSite=Lax; Max-Age=0`;
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 export function setSessionToken(token: string | null) {
   try {
     if (token) sessionStorage.setItem(SESSION_KEY, token);
@@ -25,6 +40,7 @@ export function setSessionToken(token: string | null) {
   } catch {
     /* ignore */
   }
+  writeSessionCookie(token);
 }
 
 export async function api<T>(
@@ -37,7 +53,7 @@ export async function api<T>(
   };
   const token = getSessionToken();
   if (token && !headers.Authorization && !headers["X-TrustID-Session"]) {
-    // Netlify proxies often strip Authorization — use a custom header too
+    // Netlify proxies often strip Authorization — send custom header + rely on Cookie
     headers["X-TrustID-Session"] = token;
     headers.Authorization = `Bearer ${token}`;
   }
