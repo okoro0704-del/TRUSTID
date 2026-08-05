@@ -67,7 +67,8 @@ export function setSessionCookie(reply: FastifyReply, token: string) {
   reply.setCookie(config.sessionCookieName, token, {
     path: "/",
     httpOnly: true,
-    sameSite: "lax",
+    // Cross-site (Netlify UI → Railway API) requires None+Secure in production
+    sameSite: config.isDev ? "lax" : "none",
     secure: !config.isDev,
     maxAge: config.sessionTtlHours * 60 * 60,
   });
