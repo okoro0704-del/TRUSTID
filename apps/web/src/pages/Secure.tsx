@@ -1,7 +1,7 @@
 import { FormEvent, useMemo, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import { startRegistration } from "@simplewebauthn/browser";
-import { api } from "../lib/api";
+import { api, setSessionToken } from "../lib/api";
 import { useAuth } from "../lib/auth";
 
 type Onboarding = {
@@ -36,14 +36,18 @@ export function SecurePage() {
         },
       );
       const response = await startRegistration({ optionsJSON: options });
-      await api("/auth/webauthn/register/verify", {
-        method: "POST",
-        body: JSON.stringify({
-          userId: onboarding!.userId,
-          deviceName: deviceName || undefined,
-          response,
-        }),
-      });
+      const verifyResult = await api<{ sessionToken?: string }>(
+        "/auth/webauthn/register/verify",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            userId: onboarding!.userId,
+            deviceName: deviceName || undefined,
+            response,
+          }),
+        },
+      );
+      if (verifyResult.sessionToken) setSessionToken(verifyResult.sessionToken);
       sessionStorage.removeItem("trustid.onboarding");
       await refresh();
       navigate("/secured");

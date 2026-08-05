@@ -9,6 +9,7 @@ import { applicationRoutes } from "./routes/applications.js";
 import { authorizationRoutes } from "./routes/authorizations.js";
 import { oauthRoutes } from "./routes/oauth.js";
 import { securityRoutes } from "./routes/security.js";
+import { wipeRoutes } from "./routes/wipe.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -49,6 +50,7 @@ export async function buildApp() {
   await app.register(authorizationRoutes);
   await app.register(oauthRoutes);
   await app.register(securityRoutes);
+  await app.register(wipeRoutes);
 
   return app;
 }

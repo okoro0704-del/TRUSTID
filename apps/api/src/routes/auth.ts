@@ -90,6 +90,8 @@ export async function authRoutes(app: FastifyInstance) {
         profile: result.profile,
         device: result.device,
         sessionId: result.sessionId,
+        // Also returned for SPA clients when cross-site cookies are blocked
+        sessionToken: result.sessionToken,
       };
     } catch (err) {
       return httpError(err, reply);
@@ -123,6 +125,7 @@ export async function authRoutes(app: FastifyInstance) {
         profile: result.profile,
         device: result.device,
         sessionId: result.sessionId,
+        sessionToken: result.sessionToken,
       };
     } catch (err) {
       return httpError(err, reply);

@@ -1,7 +1,7 @@
 import { FormEvent, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import { startAuthentication } from "@simplewebauthn/browser";
-import { api } from "../lib/api";
+import { api, setSessionToken } from "../lib/api";
 import { useAuth } from "../lib/auth";
 
 export function ContinuePage() {
@@ -24,10 +24,11 @@ export function ContinuePage() {
         },
       );
       const response = await startAuthentication({ optionsJSON: options });
-      await api("/auth/webauthn/login/verify", {
+      const result = await api<{ sessionToken?: string }>("/auth/webauthn/login/verify", {
         method: "POST",
         body: JSON.stringify({ response }),
       });
+      if (result.sessionToken) setSessionToken(result.sessionToken);
       await refresh();
       const returnTo = sessionStorage.getItem("trustid.returnTo");
       if (returnTo) {

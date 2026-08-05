@@ -5,7 +5,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { api } from "./api";
+import { api, setSessionToken } from "./api";
 
 export type Identity = {
   trustId: string;
@@ -53,6 +53,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await api("/auth/logout", { method: "POST" });
     } finally {
+      setSessionToken(null);
       setIdentity(null);
     }
   };

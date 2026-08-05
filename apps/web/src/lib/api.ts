@@ -1,5 +1,6 @@
-/** Same-origin `/api` (Vite proxy locally, Netlify Functions in production). */
+/** Same-origin `/api` via Netlify proxy in production; Vite proxy locally. */
 const API_BASE = import.meta.env.VITE_API_URL ?? "/api";
+const SESSION_KEY = "trustid.sessionToken";
 
 export class ApiError extends Error {
   status: number;
@@ -9,24 +10,47 @@ export class ApiError extends Error {
   }
 }
 
+export function getSessionToken(): string | null {
+  try {
+    return sessionStorage.getItem(SESSION_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setSessionToken(token: string | null) {
+  try {
+    if (token) sessionStorage.setItem(SESSION_KEY, token);
+    else sessionStorage.removeItem(SESSION_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
 export async function api<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(options.headers as Record<string, string> | undefined),
+  };
+  const token = getSessionToken();
+  if (token && !headers.Authorization) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
   let res: Response;
   try {
     res = await fetch(`${API_BASE}${path}`, {
       ...options,
       credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-        ...(options.headers ?? {}),
-      },
+      headers,
     });
   } catch {
     throw new ApiError(
       0,
-      "Cannot reach TrustID API. If you are local, run npm run dev:api. On Netlify, wait for a fresh deploy with API functions.",
+      "Cannot reach TrustID API. Check that Netlify /api proxy and Railway API are online.",
     );
   }
 
@@ -44,7 +68,7 @@ export async function api<T>(
       }
       throw new ApiError(
         res.status,
-        "TrustID API returned a non-JSON response. Check that /api is routed to the backend.",
+        "TrustID API returned a non-JSON response.",
       );
     }
   }

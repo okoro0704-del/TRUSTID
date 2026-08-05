@@ -26,13 +26,16 @@ export function clientMeta(req: FastifyRequest) {
 }
 
 export async function requireSession(req: FastifyRequest, reply: FastifyReply) {
-  const token = req.cookies[config.sessionCookieName];
+  const header = req.headers.authorization;
+  const bearer =
+    header?.startsWith("Bearer ") ? header.slice("Bearer ".length).trim() : undefined;
+  const token = bearer || req.cookies[config.sessionCookieName];
   if (!token) {
     return reply.code(401).send({ error: "unauthorized", message: "Sign in required" });
   }
   const session = await resolveSession(token);
   if (!session) {
-    reply.clearCookie(config.sessionCookieName, { path: "/" });
+    if (!bearer) reply.clearCookie(config.sessionCookieName, { path: "/" });
     return reply.code(401).send({ error: "unauthorized", message: "Session expired" });
   }
   req.auth = {
@@ -40,7 +43,7 @@ export async function requireSession(req: FastifyRequest, reply: FastifyReply) {
     sessionId: session.id,
     deviceId: session.deviceId,
     trustId: session.user.trustId,
-    via: "session",
+    via: bearer ? "bearer" : "session",
   };
 }
 
