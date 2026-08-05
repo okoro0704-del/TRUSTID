@@ -15,6 +15,8 @@ async function main() {
   const lifeosRedirects = [
     "http://localhost:5174/callback",
     "https://lifeos011.netlify.app/callback",
+    // Same-origin demo callback when LifeOS is hosted with TrustID
+    "http://localhost:5173/lifeos/callback",
   ];
 
   await prisma.application.upsert({

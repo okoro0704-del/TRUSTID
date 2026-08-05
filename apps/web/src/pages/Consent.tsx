@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
+import { setReturnTo } from "../lib/returnTo";
 
 export function ConsentPage() {
   const { loading, identity } = useAuth();
@@ -25,8 +26,7 @@ export function ConsentPage() {
   if (loading) return <div className="shell muted">Loading…</div>;
   if (!identity) {
     const next = `/oauth/consent?${params.toString()}`;
-    sessionStorage.setItem("trustid.returnTo", next);
-    // Prefer continue (existing users); register also honors returnTo after secure
+    setReturnTo(next);
     return <Navigate to="/continue" replace />;
   }
 
@@ -38,7 +38,8 @@ export function ConsentPage() {
         method: "POST",
         body: JSON.stringify({ ...consent, approve }),
       });
-      window.location.href = result.redirectTo;
+      // Full navigation back to LifeOS (or other relying party)
+      window.location.assign(result.redirectTo);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Consent failed");
       setBusy(false);
@@ -50,9 +51,7 @@ export function ConsentPage() {
   return (
     <div className="shell">
       <div className="topbar">
-        <Link to="/dashboard" className="brand">
-          TrustID
-        </Link>
+        <span className="brand">TrustID</span>
       </div>
       <div className="panel">
         <h1>Authorize {consent.app_name}</h1>
@@ -85,6 +84,9 @@ export function ConsentPage() {
             Deny
           </button>
         </div>
+        <p className="muted" style={{ marginTop: "1rem" }}>
+          After you allow access, you will return to {consent.app_name}.
+        </p>
       </div>
     </div>
   );

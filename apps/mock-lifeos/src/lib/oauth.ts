@@ -1,6 +1,28 @@
-const TRUSTID_API = import.meta.env.VITE_TRUSTID_API ?? "http://localhost:8787";
+function trustIdApiBase(): string {
+  if (import.meta.env.VITE_TRUSTID_API) {
+    return String(import.meta.env.VITE_TRUSTID_API).replace(/\/$/, "");
+  }
+  if (
+    typeof window !== "undefined" &&
+    (window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1")
+  ) {
+    return "http://localhost:8787";
+  }
+  // Production LifeOS must set VITE_TRUSTID_API to the TrustID site /api URL
+  throw new Error(
+    "Set VITE_TRUSTID_API to your TrustID API base (e.g. https://your-trustid.netlify.app/api)",
+  );
+}
+
+function redirectUri(): string {
+  return (
+    import.meta.env.VITE_LIFEOS_REDIRECT_URI ??
+    `${window.location.origin}/callback`
+  );
+}
+
 const CLIENT_ID = "lifeos_mock_public";
-const REDIRECT_URI = "http://localhost:5174/callback";
 const SCOPES = "openid identity.basic identity.profile identity.email";
 
 function b64url(bytes: ArrayBuffer | Uint8Array) {
@@ -24,14 +46,15 @@ export async function beginTrustIdLogin() {
   const verifier = randomString(64);
   const challenge = b64url(await sha256(verifier));
   const state = randomString(24);
+  const redirect = redirectUri();
   sessionStorage.setItem(
     "lifeos.oauth",
-    JSON.stringify({ verifier, state }),
+    JSON.stringify({ verifier, state, redirect }),
   );
 
-  const url = new URL(`${TRUSTID_API}/oauth/authorize`);
+  const url = new URL(`${trustIdApiBase()}/oauth/authorize`);
   url.searchParams.set("client_id", CLIENT_ID);
-  url.searchParams.set("redirect_uri", REDIRECT_URI);
+  url.searchParams.set("redirect_uri", redirect);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("scope", SCOPES);
   url.searchParams.set("state", state);
@@ -43,16 +66,21 @@ export async function beginTrustIdLogin() {
 export async function exchangeCode(code: string, state: string) {
   const raw = sessionStorage.getItem("lifeos.oauth");
   if (!raw) throw new Error("Missing PKCE state");
-  const saved = JSON.parse(raw) as { verifier: string; state: string };
+  const saved = JSON.parse(raw) as {
+    verifier: string;
+    state: string;
+    redirect?: string;
+  };
   if (saved.state !== state) throw new Error("State mismatch");
 
-  const res = await fetch(`${TRUSTID_API}/oauth/token`, {
+  const redirect = saved.redirect ?? redirectUri();
+  const res = await fetch(`${trustIdApiBase()}/oauth/token`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       grant_type: "authorization_code",
       code,
-      redirect_uri: REDIRECT_URI,
+      redirect_uri: redirect,
       client_id: CLIENT_ID,
       code_verifier: saved.verifier,
     }),
@@ -64,7 +92,7 @@ export async function exchangeCode(code: string, state: string) {
 }
 
 export async function fetchUserInfo(accessToken: string) {
-  const res = await fetch(`${TRUSTID_API}/oauth/userinfo`, {
+  const res = await fetch(`${trustIdApiBase()}/oauth/userinfo`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   const data = await res.json();
@@ -78,7 +106,6 @@ export async function fetchUserInfo(accessToken: string) {
   };
 }
 
-/** LifeOS-local profile keyed by TrustID — not a separate consumer identity. */
 export type LifeOsProfile = {
   trustId: string;
   displayName: string;
@@ -101,7 +128,10 @@ export function upsertLifeOsProfile(identity: {
     trustId: identity.trustId,
     displayName: identity.profile?.name ?? identity.trustId,
     email,
-    createdAt: existing?.trustId === identity.trustId ? existing.createdAt : new Date().toISOString(),
+    createdAt:
+      existing?.trustId === identity.trustId
+        ? existing.createdAt
+        : new Date().toISOString(),
     lastLoginAt: new Date().toISOString(),
   };
   localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));

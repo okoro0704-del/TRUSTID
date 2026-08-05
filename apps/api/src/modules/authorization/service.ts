@@ -1,5 +1,6 @@
 import { AUDIT_EVENTS, DEFAULT_APP_SCOPES, SCOPES } from "@trustid/shared";
 import { prisma } from "../../db/client.js";
+import { config } from "../../lib/config.js";
 import { hashSecret, randomToken, sha256Base64Url } from "../../lib/crypto.js";
 import { recordAudit } from "../audit/service.js";
 
@@ -9,6 +10,24 @@ function parseJsonArray(raw: string): string[] {
   } catch {
     return [];
   }
+}
+
+function isAllowedRedirectUri(appRedirectUrisJson: string, redirectUri: string): boolean {
+  const redirects = parseJsonArray(appRedirectUrisJson);
+  if (redirects.includes(redirectUri)) return true;
+  try {
+    const target = new URL(redirectUri);
+    const origin = new URL(config.webauthn.origin);
+    if (
+      target.origin === origin.origin &&
+      (target.pathname === "/lifeos/callback" || target.pathname === "/callback")
+    ) {
+      return true;
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
 }
 
 export async function listApplications(userId?: string) {
@@ -234,8 +253,7 @@ export async function createAuthorizationCode(input: {
   if (!app || app.status !== "active") {
     throw Object.assign(new Error("invalid_client"), { statusCode: 400 });
   }
-  const redirects = parseJsonArray(app.redirectUris);
-  if (!redirects.includes(input.redirectUri)) {
+  if (!isAllowedRedirectUri(app.redirectUris, input.redirectUri)) {
     throw Object.assign(new Error("invalid_redirect_uri"), { statusCode: 400 });
   }
   const allowed = new Set(parseJsonArray(app.allowedScopes));

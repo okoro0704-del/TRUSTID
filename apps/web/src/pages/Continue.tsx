@@ -1,22 +1,23 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useRef, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import { startAuthentication } from "@simplewebauthn/browser";
 import { api, setSessionToken } from "../lib/api";
 import { useAuth, type Identity } from "../lib/auth";
+import { consumeReturnTo, peekReturnTo } from "../lib/returnTo";
 
 export function ContinuePage() {
   const navigate = useNavigate();
   const { identity, refresh, setIdentity } = useAuth();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const resumeTo = useRef<string | null>(null);
 
-  if (identity) {
-    const returnTo = sessionStorage.getItem("trustid.returnTo");
-    if (returnTo) {
-      sessionStorage.removeItem("trustid.returnTo");
-      return <Navigate to={returnTo} replace />;
+  // Already signed in: resume LifeOS/OAuth consent instead of TrustID dashboard
+  if (identity && !busy) {
+    if (resumeTo.current === null) {
+      resumeTo.current = consumeReturnTo() ?? "/dashboard";
     }
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to={resumeTo.current} replace />;
   }
 
   async function authenticate(email?: string, phone?: string) {
@@ -43,13 +44,8 @@ export function ContinuePage() {
       await refresh().catch(() => {
         /* identity may already be set */
       });
-      const returnTo = sessionStorage.getItem("trustid.returnTo");
-      if (returnTo) {
-        sessionStorage.removeItem("trustid.returnTo");
-        navigate(returnTo);
-      } else {
-        navigate("/dashboard");
-      }
+      const next = consumeReturnTo() ?? "/dashboard";
+      navigate(next, { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sign-in failed");
     } finally {
@@ -78,6 +74,11 @@ export function ContinuePage() {
           Authenticate with your trusted device credential. Your device verifies
           you locally — TrustID never receives fingerprint or face data.
         </p>
+        {peekReturnTo() && (
+          <p className="notice">
+            After you sign in, you will return to authorize the application.
+          </p>
+        )}
         <div className="field">
           <label htmlFor="email">Email</label>
           <input id="email" name="email" type="email" autoComplete="username webauthn" />
