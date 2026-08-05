@@ -1,4 +1,4 @@
-import { FormEvent, useRef, useState } from "react";
+import { FormEvent, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import { startAuthentication } from "@simplewebauthn/browser";
 import { api, setSessionToken } from "../lib/api";
@@ -7,17 +7,14 @@ import { consumeReturnTo, peekReturnTo } from "../lib/returnTo";
 
 export function ContinuePage() {
   const navigate = useNavigate();
-  const { identity, refresh, setIdentity } = useAuth();
+  const { identity, setIdentity } = useAuth();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const resumeTo = useRef<string | null>(null);
 
-  // Already signed in: resume LifeOS/OAuth consent instead of TrustID dashboard
+  // Already signed in when arriving here (e.g. OAuth resume) — go to consent/app, not dashboard by default
   if (identity && !busy) {
-    if (resumeTo.current === null) {
-      resumeTo.current = consumeReturnTo() ?? "/dashboard";
-    }
-    return <Navigate to={resumeTo.current} replace />;
+    const next = peekReturnTo() ? consumeReturnTo()! : null;
+    if (next) return <Navigate to={next} replace />;
   }
 
   async function authenticate(email?: string, phone?: string) {
@@ -41,9 +38,6 @@ export function ContinuePage() {
       );
       if (result.sessionToken) setSessionToken(result.sessionToken);
       if (result.identity) setIdentity(result.identity);
-      await refresh().catch(() => {
-        /* identity may already be set */
-      });
       const next = consumeReturnTo() ?? "/dashboard";
       navigate(next, { replace: true });
     } catch (err) {
