@@ -12,11 +12,16 @@ async function main() {
   const lifeosClientId = "lifeos_mock_public";
   const digiconomyClientId = "digiconomy_placeholder";
 
+  const lifeosRedirects = [
+    "http://localhost:5174/callback",
+    "https://lifeos011.netlify.app/callback",
+  ];
+
   await prisma.application.upsert({
     where: { clientId: lifeosClientId },
     update: {
       name: "LifeOS",
-      redirectUris: JSON.stringify(["http://localhost:5174/callback"]),
+      redirectUris: JSON.stringify(lifeosRedirects),
       allowedScopes: JSON.stringify(DEFAULT_APP_SCOPES),
       status: "active",
       type: "public",
@@ -25,7 +30,7 @@ async function main() {
       name: "LifeOS",
       clientId: lifeosClientId,
       type: "public",
-      redirectUris: JSON.stringify(["http://localhost:5174/callback"]),
+      redirectUris: JSON.stringify(lifeosRedirects),
       allowedScopes: JSON.stringify(DEFAULT_APP_SCOPES),
       status: "active",
     },

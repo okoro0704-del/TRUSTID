@@ -6,10 +6,11 @@
   "scripts": {
     "dev": "tsx watch --env-file=.env src/index.ts",
     "build": "tsc",
-    "start": "node --env-file=.env dist/index.js",
+    "start": "node dist/index.js",
+    "start:dev": "node --env-file=.env dist/index.js",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
-    "db:seed": "tsx --env-file=.env prisma/seed.ts",
+    "db:seed": "tsx prisma/seed.ts",
     "test": "vitest run"
   },
   "dependencies": {
@@ -19,12 +20,12 @@
     "@simplewebauthn/server": "^13.1.1",
     "@trustid/shared": "*",
     "fastify": "^5.2.1",
+    "prisma": "^6.5.0",
+    "tsx": "^4.19.3",
     "zod": "^3.24.2"
   },
   "devDependencies": {
     "@types/node": "^22.13.10",
-    "prisma": "^6.5.0",
-    "tsx": "^4.19.3",
     "typescript": "^5.8.2",
     "vitest": "^3.0.9"
   }
