@@ -14,10 +14,9 @@
     "build": "npm run build -w @trustid/shared && npm run build -w @trustid/api && npm run build -w @trustid/web && npm run build -w @trustid/mock-lifeos",
     "build:api": "npm run build -w @trustid/shared && node scripts/sync-prisma-provider.mjs && npm run db:generate -w @trustid/api && npm run build -w @trustid/api",
     "build:web": "npm run build -w @trustid/shared && node scripts/sync-prisma-provider.mjs && npm run db:generate -w @trustid/api && npm run build -w @trustid/api && node scripts/prepare-netlify-db.mjs && npm run build -w @trustid/web",
-    "start": "node scripts/sync-prisma-provider.mjs && npm run db:push:deploy -w @trustid/api && npm run db:seed -w @trustid/api && npm run start -w @trustid/api",
+    "start": "node scripts/sync-prisma-provider.mjs && npm run db:push -w @trustid/api && npm run db:seed -w @trustid/api && npm run start -w @trustid/api",
     "db:generate": "node scripts/sync-prisma-provider.mjs && npm run db:generate -w @trustid/api",
     "db:push": "node scripts/sync-prisma-provider.mjs && npm run db:push -w @trustid/api",
-    "db:push:deploy": "node scripts/sync-prisma-provider.mjs && npm run db:push:deploy -w @trustid/api",
     "db:seed": "npm run db:seed -w @trustid/api",
     "setup": "npm install && npm run build -w @trustid/shared && npm run db:generate && npm run db:push && npm run db:seed",
     "test": "npm run test -w @trustid/api"
