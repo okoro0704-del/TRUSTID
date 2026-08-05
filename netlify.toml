@@ -1,42 +1,16 @@
-# TrustID PWA + API (Netlify Functions)
+# TrustID PWA only — API runs on Railway
 #
-# In Netlify UI: Base directory empty (repo root).
-# Clear any Publish directory override pointing at mock-lifeos.
+# Set in Netlify UI (Environment variables):
+#   VITE_API_URL=https://lucid-integrity-production.up.railway.app
 
 [build]
-  command = "npm run build:web"
+  command = "npm run build -w @trustid/shared && npm run build -w @trustid/web"
   publish = "apps/web/dist"
 
 [build.environment]
   NODE_VERSION = "20"
-  # Runtime DB for functions — template is copied to /tmp on cold start
-  DATABASE_URL = "file:/tmp/trustid.db"
 
-[functions]
-  directory = "netlify/functions"
-  node_bundler = "esbuild"
-  included_files = [
-    "apps/api/prisma/template.db",
-    "apps/api/dist/**",
-    "node_modules/.prisma/client/**",
-    "node_modules/@prisma/client/**",
-    "packages/shared/dist/**"
-  ]
-
-# API must be matched before the SPA fallback
-[[redirects]]
-  from = "/api/*"
-  to = "/.netlify/functions/api/:splat"
-  status = 200
-  force = true
-
-[[redirects]]
-  from = "/api"
-  to = "/.netlify/functions/api"
-  status = 200
-  force = true
-
-# SPA fallback for React Router
+# SPA fallback for React Router (no Netlify Functions API)
 [[redirects]]
   from = "/*"
   to = "/index.html"
