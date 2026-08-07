@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../../lib/api";
-import { reauthenticate } from "../../lib/reauth";
+import { reauthenticate, prefetchReauth } from "../../lib/reauth";
 import { ApproveDeviceDialog } from "../../components/ApproveDeviceDialog";
 
 type Approval = {
@@ -35,8 +35,10 @@ export function ApprovalsPage() {
     load().catch((err) =>
       setError(err instanceof Error ? err.message : "Failed to load"),
     );
+    prefetchReauth();
     const t = setInterval(() => {
       load().catch(() => undefined);
+      prefetchReauth();
     }, 4000);
     return () => clearInterval(t);
   }, []);
@@ -94,7 +96,11 @@ export function ApprovalsPage() {
                 <button
                   className="btn btn-primary"
                   type="button"
-                  onClick={() => setSelected(r)}
+                  onPointerDown={() => prefetchReauth()}
+                  onClick={() => {
+                    prefetchReauth();
+                    setSelected(r);
+                  }}
                 >
                   Review
                 </button>

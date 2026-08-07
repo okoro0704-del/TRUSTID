@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../../lib/api";
-import { reauthenticate } from "../../lib/reauth";
+import { reauthenticate, prefetchReauth } from "../../lib/reauth";
 
 type Device = {
   id: string;
@@ -55,6 +55,7 @@ export function DevicesPage() {
     load().catch((err) =>
       setError(err instanceof Error ? err.message : "Failed to load devices"),
     );
+    prefetchReauth();
   }, []);
 
   async function rename(id: string, name: string) {
