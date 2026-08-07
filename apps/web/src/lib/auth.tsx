@@ -6,6 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { api, getSessionToken, setSessionToken } from "./api";
+import { rememberFromIdentity } from "./rememberedAccount";
 
 export type Identity = {
   trustId: string;
@@ -40,8 +41,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         method: "POST",
       });
       setIdentity(data.identity);
+      rememberFromIdentity(data.identity);
     } catch {
-      // Do not wipe a just-established SPA identity if the session probe fails
       if (!getSessionToken()) setIdentity(null);
     }
   };
@@ -56,6 +57,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setSessionToken(null);
       setIdentity(null);
+      // Keep remembered account for fast passkey return
     }
   };
 

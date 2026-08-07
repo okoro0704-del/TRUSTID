@@ -3,11 +3,16 @@ import { Link, Navigate, useNavigate } from "react-router-dom";
 import { startRegistration } from "@simplewebauthn/browser";
 import { api, setSessionToken } from "../lib/api";
 import { useAuth } from "../lib/auth";
+import { saveRememberedAccount } from "../lib/rememberedAccount";
 
 type Onboarding = {
   userId: string;
   trustId: string;
   verified?: boolean;
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+  phone?: string;
 };
 
 export function SecurePage() {
@@ -49,6 +54,21 @@ export function SecurePage() {
       });
       if (verifyResult.sessionToken) setSessionToken(verifyResult.sessionToken);
       if (verifyResult.identity) setIdentity(verifyResult.identity);
+
+      saveRememberedAccount({
+        firstName:
+          onboarding!.firstName ||
+          verifyResult.identity?.profile?.firstName ||
+          "",
+        lastName:
+          onboarding!.lastName || verifyResult.identity?.profile?.lastName,
+        displayName: verifyResult.identity?.profile?.name,
+        email: onboarding!.email,
+        phone: onboarding!.phone,
+        deviceName: deviceName.trim() || undefined,
+        trustId: onboarding!.trustId || verifyResult.identity?.trustId,
+      });
+
       sessionStorage.removeItem("trustid.onboarding");
       navigate("/secured", {
         replace: true,
@@ -91,6 +111,7 @@ export function SecurePage() {
             value={deviceName}
             onChange={(e) => setDeviceName(e.target.value)}
             placeholder="e.g. Laptop"
+            autoComplete="off"
           />
         </div>
         {error && <p className="error">{error}</p>}

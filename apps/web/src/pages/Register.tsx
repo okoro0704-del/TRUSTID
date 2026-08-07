@@ -43,6 +43,10 @@ export function RegisterPage() {
           challengeId: result.challengeId,
           debugCode: result.debugCode,
           contactType: result.contactType,
+          firstName: String(fd.get("firstName") || "").trim(),
+          lastName: String(fd.get("lastName") || "").trim(),
+          email: email || undefined,
+          phone: phone || undefined,
         }),
       );
       navigate("/verify");

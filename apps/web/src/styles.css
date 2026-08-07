@@ -418,6 +418,63 @@ input {
   overflow: auto;
 }
 
+.continue-panel {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.continue-eyebrow {
+  margin: 0;
+  font-size: 0.85rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mist);
+}
+
+.continue-name {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 5vw, 2.6rem);
+  line-height: 1.1;
+}
+
+.continue-lead {
+  margin: 0;
+}
+
+.continue-meta {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.85rem 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.continue-meta-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: baseline;
+}
+
+.continue-meta-value {
+  text-align: right;
+  word-break: break-word;
+}
+
+.continue-primary {
+  width: 100%;
+  margin-top: 0.35rem;
+  min-height: 3rem;
+  font-size: 1.05rem;
+}
+
+.continue-switch {
+  width: 100%;
+  color: var(--mist);
+  font-size: 0.92rem;
+}
+
 @media (max-width: 640px) {
   .row {
     align-items: flex-start;
