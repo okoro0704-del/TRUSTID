@@ -36,6 +36,22 @@ function parseTransports(raw: string): AuthenticatorTransportFuture[] | undefine
 }
 
 /**
+ * Android Chrome often hangs then fails when allowCredentials include empty or
+ * mismatched transports. Prefer omitting transports, or ensure `internal` for
+ * platform passkeys so the local authenticator is tried immediately.
+ */
+function allowCredentialDescriptor(credentialId: string, transportsRaw: string) {
+  const parsed = parseTransports(transportsRaw);
+  if (!parsed?.length) {
+    return { id: credentialId, transports: ["internal"] as AuthenticatorTransportFuture[] };
+  }
+  const transports = parsed.includes("internal")
+    ? parsed
+    : (["internal", ...parsed] as AuthenticatorTransportFuture[]);
+  return { id: credentialId, transports };
+}
+
+/**
  * Verify an authentication assertion.
  * Passes counter:0 into SimpleWebAuthn so its strict counter check does not
  * reject platform authenticators that report 0 / flat counters; TrustID applies
@@ -58,7 +74,8 @@ async function verifyAssertion(input: {
     expectedChallenge: input.expectedChallenge,
     expectedOrigin: config.webauthn.origins,
     expectedRPID: config.webauthn.rpID,
-    requireUserVerification: true,
+    // Match login options (preferred) — Android may omit UV bit intermittently.
+    requireUserVerification: false,
     credential: {
       id: input.credentialId,
       publicKey,
@@ -153,10 +170,7 @@ export async function registrationOptions(
     attestationType: "none",
     excludeCredentials: user.credentials
       .filter((c) => c.status !== DEVICE_STATUS.REVOKED)
-      .map((c) => ({
-        id: c.credentialId,
-        transports: parseTransports(c.transports),
-      })),
+      .map((c) => allowCredentialDescriptor(c.credentialId, c.transports)),
     authenticatorSelection: {
       authenticatorAttachment: "platform",
       residentKey: "preferred",
@@ -384,10 +398,9 @@ export async function loginOptions(email?: string, phone?: string) {
     if (!creds.length) {
       throw Object.assign(new Error("No passkeys registered"), { statusCode: 400 });
     }
-    allowCredentials = creds.map((c) => ({
-      id: c.credentialId,
-      transports: parseTransports(c.transports),
-    }));
+    allowCredentials = creds.map((c) =>
+      allowCredentialDescriptor(c.credentialId, c.transports),
+    );
   }
 
   await recordAudit({
@@ -400,7 +413,10 @@ export async function loginOptions(email?: string, phone?: string) {
 
   const options = await generateAuthenticationOptions({
     rpID: config.webauthn.rpID,
-    userVerification: "required",
+    // preferred: Android often delays then fails with "required" when UV
+    // timing/gesture is tight; iOS handles required more reliably.
+    userVerification: "preferred",
+    timeout: 120_000,
     allowCredentials,
   });
 
@@ -593,11 +609,11 @@ export async function reauthenticationOptions(userId: string, deviceId?: string 
 
   const options = await generateAuthenticationOptions({
     rpID: config.webauthn.rpID,
-    userVerification: "required",
-    allowCredentials: creds.map((c) => ({
-      id: c.credentialId,
-      transports: parseTransports(c.transports),
-    })),
+    userVerification: "preferred",
+    timeout: 120_000,
+    allowCredentials: creds.map((c) =>
+      allowCredentialDescriptor(c.credentialId, c.transports),
+    ),
   });
 
   await storeWebAuthnChallenge({

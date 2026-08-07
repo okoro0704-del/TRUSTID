@@ -16,6 +16,9 @@ export default defineConfig({
         background_color: "#071E1C",
         display: "standalone",
         start_url: "/",
+        // Helps Android Chrome Credential Manager associate passkeys with this PWA.
+        id: "/",
+        scope: "/",
         icons: [
           {
             src: "/pwa-192.png",

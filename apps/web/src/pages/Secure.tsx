@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { startRegistration } from "@simplewebauthn/browser";
 import { api, setSessionToken } from "../lib/api";
@@ -16,6 +16,10 @@ type Onboarding = {
   phone?: string;
 };
 
+type PublicKeyCredentialCreationOptionsJSON = Parameters<
+  typeof startRegistration
+>[0]["optionsJSON"];
+
 export function SecurePage() {
   const navigate = useNavigate();
   const { setIdentity } = useAuth();
@@ -26,22 +30,61 @@ export function SecurePage() {
   const [deviceName, setDeviceName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const optionsRef = useRef<PublicKeyCredentialCreationOptionsJSON | null>(null);
+  const optionsAt = useRef(0);
+  const userId = onboarding?.userId;
 
-  if (!onboarding?.userId) return <Navigate to="/register" replace />;
+  async function loadOptions(force = false) {
+    if (!userId) throw new Error("Missing onboarding user");
+    if (
+      !force &&
+      optionsRef.current &&
+      Date.now() - optionsAt.current < 90_000
+    ) {
+      return optionsRef.current;
+    }
+    const options = await api<PublicKeyCredentialCreationOptionsJSON>(
+      "/auth/webauthn/register/options",
+      {
+        method: "POST",
+        body: JSON.stringify({ userId }),
+      },
+    );
+    const {
+      challengeId: _c,
+      purpose: _p,
+      ...optionsJSON
+    } = options as PublicKeyCredentialCreationOptionsJSON & {
+      challengeId?: string;
+      purpose?: string;
+    };
+    void _c;
+    void _p;
+    optionsRef.current = optionsJSON;
+    optionsAt.current = Date.now();
+    return optionsJSON;
+  }
+
+  useEffect(() => {
+    if (!userId) return;
+    void loadOptions().catch(() => undefined);
+    // Warm options once per onboarding user so Android keeps user activation.
+  }, [userId]);
+
+  if (!userId || !onboarding) return <Navigate to="/register" replace />;
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      const options = await api<PublicKeyCredentialCreationOptionsJSON>(
-        "/auth/webauthn/register/options",
-        {
-          method: "POST",
-          body: JSON.stringify({ userId: onboarding!.userId }),
-        },
-      );
+      setStatus("Preparing passkey…");
+      const options = await loadOptions();
+      setStatus("Waiting for your device…");
       const response = await startRegistration({ optionsJSON: options });
+      optionsRef.current = null;
+      setStatus("Verifying…");
       const verifyResult = await api<{
         sessionToken?: string;
         identity?: import("../lib/auth").Identity;
@@ -76,6 +119,8 @@ export function SecurePage() {
         state: { identity: verifyResult.identity },
       });
     } catch (err) {
+      optionsRef.current = null;
+      void loadOptions(true).catch(() => undefined);
       setError(
         err instanceof Error
           ? err.message
@@ -83,6 +128,7 @@ export function SecurePage() {
       );
     } finally {
       setBusy(false);
+      setStatus(null);
     }
   }
 
@@ -111,14 +157,17 @@ export function SecurePage() {
           />
         </div>
         {error && <p className="error">{error}</p>}
-        <button className="btn btn-primary continue-primary" type="submit" disabled={busy}>
-          {busy ? "Waiting for your device…" : "Create passkey"}
+        {status && <p className="muted">{status}</p>}
+        <button
+          className="btn btn-primary continue-primary"
+          type="submit"
+          disabled={busy}
+          onPointerDown={() => void loadOptions().catch(() => undefined)}
+          onTouchStart={() => void loadOptions().catch(() => undefined)}
+        >
+          {busy ? status || "Waiting for your device…" : "Create passkey"}
         </button>
       </form>
     </AuthChrome>
   );
 }
-
-type PublicKeyCredentialCreationOptionsJSON = Parameters<
-  typeof startRegistration
->[0]["optionsJSON"];

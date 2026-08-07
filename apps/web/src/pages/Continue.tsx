@@ -1,6 +1,5 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
-import { startAuthentication } from "@simplewebauthn/browser";
 import { api, setSessionToken } from "../lib/api";
 import { useAuth, type Identity } from "../lib/auth";
 import { consumeReturnTo, peekReturnTo } from "../lib/returnTo";
@@ -11,9 +10,11 @@ import {
   saveRememberedAccount,
   type RememberedAccount,
 } from "../lib/rememberedAccount";
+import {
+  createLoginOptionsCache,
+  runPasskeyLogin,
+} from "../lib/passkeyAuth";
 import { AuthChrome } from "../components/AuthChrome";
-
-type AuthOptions = Parameters<typeof startAuthentication>[0]["optionsJSON"];
 
 export function ContinuePage() {
   const navigate = useNavigate();
@@ -31,16 +32,42 @@ export function ContinuePage() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const inFlight = useRef(false);
+  const optionsCache = useRef(createLoginOptionsCache());
 
   const showQuick =
     Boolean(remembered) &&
     !switchAccount &&
     Boolean(remembered?.email || remembered?.phone);
 
-  if (identity && !busy) {
-    const next = peekReturnTo() ? consumeReturnTo()! : null;
-    if (next) return <Navigate to={next} replace />;
-  }
+  const contactHints = useCallback(() => {
+    if (showQuick && remembered) {
+      return {
+        email: remembered.email,
+        phone: remembered.phone,
+      };
+    }
+    return {
+      email: email.trim() || undefined,
+      phone: phone.trim() || undefined,
+    };
+  }, [showQuick, remembered, email, phone]);
+
+  // Prefetch options while the page is open so Android can call credentials.get
+  // immediately on tap (user activation). Never auto-start the ceremony.
+  useEffect(() => {
+    const hints = contactHints();
+    if (!hints.email && !hints.phone && !showQuick) return;
+    void optionsCache.current.prefetch(hints.email, hints.phone);
+    const warm = window.setInterval(() => {
+      void optionsCache.current.prefetch(hints.email, hints.phone);
+    }, 75_000);
+    return () => window.clearInterval(warm);
+  }, [contactHints, showQuick]);
+
+  const warmOptions = useCallback(() => {
+    const hints = contactHints();
+    void optionsCache.current.prefetch(hints.email, hints.phone);
+  }, [contactHints]);
 
   const authenticate = useCallback(
     async (opts?: { email?: string; phone?: string }) => {
@@ -48,35 +75,15 @@ export function ContinuePage() {
       inFlight.current = true;
       setBusy(true);
       setError(null);
-      setStatus("Waiting for passkey…");
       const emailHint = opts?.email?.trim() || undefined;
       const phoneHint = opts?.phone?.trim() || undefined;
 
       try {
-        // Always request a fresh challenge on user gesture.
-        // Prefetch/auto-start previously reused challenges and broke after logout
-        // (React Strict Mode double-mount + consumed challenge).
-        const options = await api<AuthOptions>("/auth/webauthn/login/options", {
-          method: "POST",
-          body: JSON.stringify({
-            email: emailHint,
-            phone: phoneHint,
-          }),
-        });
-
-        // Library options only — strip our challengeId/purpose extras
-        const {
-          challengeId: _challengeId,
-          purpose: _purpose,
-          ...optionsJSON
-        } = options as AuthOptions & {
-          challengeId?: string;
-          purpose?: string;
-        };
-        void _challengeId;
-        void _purpose;
-
-        const response = await startAuthentication({ optionsJSON });
+        setStatus("Preparing passkey…");
+        const optionsJSON = await optionsCache.current.take(emailHint, phoneHint);
+        setStatus("Waiting for passkey…");
+        // Ceremony must start ASAP after the gesture — options already ready.
+        const response = await runPasskeyLogin(optionsJSON);
         setStatus("Verifying…");
         const result = await api<{ sessionToken?: string; identity?: Identity }>(
           "/auth/webauthn/login/verify",
@@ -105,15 +112,16 @@ export function ContinuePage() {
         }
         navigate(consumeReturnTo() ?? "/dashboard", { replace: true });
       } catch (err) {
+        optionsCache.current.invalidate();
+        void optionsCache.current.prefetch(emailHint, phoneHint);
         const message =
           err instanceof Error ? err.message : "Sign-in failed";
-        // Browser cancel should not look like a broken account
         const cancelled =
-          /not allowed|abort|cancel|timed out/i.test(message) ||
+          /not allowed|abort|cancel|timed out|timeout/i.test(message) ||
           (err as { name?: string })?.name === "NotAllowedError";
         setError(
           cancelled
-            ? "Passkey prompt was dismissed. Tap Use passkey to try again."
+            ? "Passkey prompt was dismissed or timed out. Tap Use passkey to try again."
             : message,
         );
       } finally {
@@ -124,6 +132,11 @@ export function ContinuePage() {
     },
     [deviceName, navigate, setIdentity],
   );
+
+  if (identity && !busy) {
+    const next = peekReturnTo() ? consumeReturnTo()! : null;
+    if (next) return <Navigate to={next} replace />;
+  }
 
   async function onPasskey(e: FormEvent) {
     e.preventDefault();
@@ -142,6 +155,7 @@ export function ContinuePage() {
 
   function onSwitchAccount() {
     clearRememberedAccount();
+    optionsCache.current.invalidate();
     setRemembered(null);
     setSwitchAccount(true);
     setEmail("");
@@ -189,17 +203,6 @@ export function ContinuePage() {
       setBusy(false);
     }
   }
-
-  // Warm the API connection only (no challenge stored — avoids stale/double-use)
-  useEffect(() => {
-    if (!showQuick || !remembered) return;
-    const ctrl = new AbortController();
-    void fetch(`${import.meta.env.VITE_API_URL ?? "/api"}/health`, {
-      signal: ctrl.signal,
-      credentials: "include",
-    }).catch(() => undefined);
-    return () => ctrl.abort();
-  }, [showQuick, remembered]);
 
   const contactLine = remembered
     ? [remembered.email, remembered.phone].filter(Boolean).join(" · ")
@@ -249,6 +252,8 @@ export function ContinuePage() {
                 type="submit"
                 disabled={busy}
                 autoFocus
+                onPointerDown={warmOptions}
+                onTouchStart={warmOptions}
               >
                 {busy ? status || "Authenticating…" : "Use passkey"}
               </button>
@@ -291,6 +296,7 @@ export function ContinuePage() {
                   autoComplete="username webauthn"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
+                  onBlur={warmOptions}
                 />
               </div>
               <div className="field">
@@ -300,6 +306,7 @@ export function ContinuePage() {
                   type="tel"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
+                  onBlur={warmOptions}
                 />
               </div>
               <div className="field">
@@ -316,8 +323,10 @@ export function ContinuePage() {
                 className="btn btn-primary continue-primary"
                 type="submit"
                 disabled={busy}
+                onPointerDown={warmOptions}
+                onTouchStart={warmOptions}
               >
-                {busy ? "Authenticating…" : "Use passkey"}
+                {busy ? status || "Authenticating…" : "Use passkey"}
               </button>
             </form>
             <form onSubmit={onRequestApproval} style={{ marginTop: "0.75rem" }}>
