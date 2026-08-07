@@ -8,12 +8,28 @@ function siteUrl(): string | undefined {
   return process.env.URL || process.env.DEPLOY_PRIME_URL || process.env.DEPLOY_URL;
 }
 
+/** Normalize to scheme://host (no path / trailing slash). */
+function normalizeOrigin(raw?: string | null): string | null {
+  if (!raw?.trim()) return null;
+  try {
+    const u = new URL(raw.trim());
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return null;
+  }
+}
+
 function derivedOrigin(): string {
-  return process.env.WEBAUTHN_ORIGIN || siteUrl() || "http://localhost:5173";
+  return (
+    normalizeOrigin(process.env.WEBAUTHN_ORIGIN) ||
+    normalizeOrigin(siteUrl()) ||
+    "http://localhost:5173"
+  );
 }
 
 function derivedRpId(): string {
-  if (process.env.WEBAUTHN_RP_ID) return process.env.WEBAUTHN_RP_ID;
+  if (process.env.WEBAUTHN_RP_ID?.trim()) return process.env.WEBAUTHN_RP_ID.trim();
   try {
     return new URL(derivedOrigin()).hostname;
   } catch {
@@ -21,7 +37,37 @@ function derivedRpId(): string {
   }
 }
 
-/** Lazy config so Netlify can set URL / WEBAUTHN_* before first use. */
+/**
+ * All origins allowed for WebAuthn verification.
+ * PWA is on Netlify; API is on Railway — RP ID/origin must match the browser host,
+ * not the Railway hostname. Accept WEBAUTHN_ORIGIN, WEBAUTHN_ORIGINS, CORS_ORIGINS,
+ * and https://{rpID} so a wrong single WEBAUTHN_ORIGIN cannot break login.
+ */
+function derivedOrigins(): string[] {
+  const origins = new Set<string>();
+  const add = (raw?: string | null) => {
+    const o = normalizeOrigin(raw);
+    if (o) origins.add(o);
+  };
+
+  add(process.env.WEBAUTHN_ORIGIN);
+  add(siteUrl());
+  for (const part of (process.env.WEBAUTHN_ORIGINS ?? "").split(",")) add(part);
+  for (const part of (process.env.CORS_ORIGINS ?? "").split(",")) add(part);
+
+  const rp = derivedRpId();
+  if (rp === "localhost") {
+    add("http://localhost:5173");
+    add("http://localhost:5174");
+  } else {
+    add(`https://${rp}`);
+  }
+
+  if (!origins.size) add("http://localhost:5173");
+  return [...origins];
+}
+
+/** Lazy config so Netlify/Railway can set URL / WEBAUTHN_* before first use. */
 export const config = {
   get port() {
     return Number(process.env.PORT ?? 8787);
@@ -60,18 +106,21 @@ export const config = {
     return process.env.OTP_EXPOSE_DEBUG === "true" || this.isDev;
   },
   get webauthn() {
+    const origins = derivedOrigins();
     return {
       rpID: derivedRpId(),
       rpName: required("WEBAUTHN_RP_NAME", "TrustID"),
-      origin: derivedOrigin(),
+      /** Primary origin (redirects, consent links). */
+      origin: origins[0]!,
+      /** All accepted browser origins for assertion/attestation verify. */
+      origins,
     };
   },
   get corsOrigins() {
-    const origin = derivedOrigin();
     const defaults = [
       "http://localhost:5173",
       "http://localhost:5174",
-      origin,
+      ...derivedOrigins(),
       siteUrl(),
     ]
       .filter(Boolean)

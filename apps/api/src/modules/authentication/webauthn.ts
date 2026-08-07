@@ -35,6 +35,52 @@ function parseTransports(raw: string): AuthenticatorTransportFuture[] | undefine
   }
 }
 
+/**
+ * Verify an authentication assertion.
+ * Passes counter:0 into SimpleWebAuthn so its strict counter check does not
+ * reject platform authenticators that report 0 / flat counters; TrustID applies
+ * evaluateSignatureCounter afterward (see counter.ts).
+ */
+async function verifyAssertion(input: {
+  response: AuthenticationResponseJSON;
+  expectedChallenge: string;
+  credentialId: string;
+  publicKey: Uint8Array;
+  transports?: AuthenticatorTransportFuture[];
+}) {
+  return verifyAuthenticationResponse({
+    response: input.response,
+    expectedChallenge: input.expectedChallenge,
+    expectedOrigin: config.webauthn.origins,
+    expectedRPID: config.webauthn.rpID,
+    requireUserVerification: true,
+    credential: {
+      id: input.credentialId,
+      publicKey: input.publicKey,
+      // Skip library counter gate; we enforce our own policy below.
+      counter: 0,
+      transports: input.transports,
+    },
+  });
+}
+
+function assertionFailureMessage(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  if (/origin/i.test(raw)) {
+    return "Passkey verification failed (origin mismatch). This site must match the TrustID address where the passkey was created.";
+  }
+  if (/rp.?id|rpID/i.test(raw)) {
+    return "Passkey verification failed (RP ID mismatch). Open TrustID on the same domain used when you registered.";
+  }
+  if (/counter/i.test(raw)) {
+    return "Passkey verification failed (authenticator counter). Tap Use passkey and try again.";
+  }
+  if (/user.?verif/i.test(raw)) {
+    return "Passkey verification failed. Complete biometric or device unlock when prompted.";
+  }
+  return "Passkey verification failed. Make sure you use the same browser/device that created the passkey, then try again.";
+}
+
 async function failRegistration(
   userId: string | undefined,
   reason: string,
@@ -165,7 +211,7 @@ export async function verifyRegistration(input: {
     verification = await verifyRegistrationResponse({
       response: input.response,
       expectedChallenge: consumed.challenge.challenge,
-      expectedOrigin: config.webauthn.origin,
+      expectedOrigin: config.webauthn.origins,
       expectedRPID: config.webauthn.rpID,
       requireUserVerification: true,
     });
@@ -425,18 +471,12 @@ export async function verifyLogin(input: {
 
   let verification;
   try {
-    verification = await verifyAuthenticationResponse({
+    verification = await verifyAssertion({
       response: input.response,
       expectedChallenge: consumed.challenge.challenge,
-      expectedOrigin: config.webauthn.origin,
-      expectedRPID: config.webauthn.rpID,
-      requireUserVerification: true,
-      credential: {
-        id: cred.credentialId,
-        publicKey: new Uint8Array(cred.publicKey),
-        counter: Number(cred.counter),
-        transports: parseTransports(cred.transports),
-      },
+      credentialId: cred.credentialId,
+      publicKey: new Uint8Array(cred.publicKey),
+      transports: parseTransports(cred.transports),
     });
   } catch (err) {
     await failAuthentication(
@@ -444,12 +484,9 @@ export async function verifyLogin(input: {
       err instanceof Error ? err.message : "assertion_verify_error",
       input,
     );
-    throw Object.assign(
-      new Error(
-        "Passkey verification failed. Make sure you use the same browser/device that created the passkey, then try again.",
-      ),
-      { statusCode: 400 },
-    );
+    throw Object.assign(new Error(assertionFailureMessage(err)), {
+      statusCode: 400,
+    });
   }
 
   if (!verification.verified) {
@@ -615,18 +652,12 @@ export async function verifyReauthentication(input: {
 
   let verification;
   try {
-    verification = await verifyAuthenticationResponse({
+    verification = await verifyAssertion({
       response: input.response,
       expectedChallenge: consumed.challenge.challenge,
-      expectedOrigin: config.webauthn.origin,
-      expectedRPID: config.webauthn.rpID,
-      requireUserVerification: true,
-      credential: {
-        id: cred.credentialId,
-        publicKey: new Uint8Array(cred.publicKey),
-        counter: Number(cred.counter),
-        transports: parseTransports(cred.transports),
-      },
+      credentialId: cred.credentialId,
+      publicKey: new Uint8Array(cred.publicKey),
+      transports: parseTransports(cred.transports),
     });
   } catch {
     throw Object.assign(new Error("Re-authentication failed"), { statusCode: 401 });

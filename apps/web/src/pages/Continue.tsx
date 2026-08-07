@@ -64,7 +64,19 @@ export function ContinuePage() {
           }),
         });
 
-        const response = await startAuthentication({ optionsJSON: options });
+        // Library options only — strip our challengeId/purpose extras
+        const {
+          challengeId: _challengeId,
+          purpose: _purpose,
+          ...optionsJSON
+        } = options as AuthOptions & {
+          challengeId?: string;
+          purpose?: string;
+        };
+        void _challengeId;
+        void _purpose;
+
+        const response = await startAuthentication({ optionsJSON });
         setStatus("Verifying…");
         const result = await api<{ sessionToken?: string; identity?: Identity }>(
           "/auth/webauthn/login/verify",

@@ -48,7 +48,15 @@ export async function buildApp() {
     });
   });
 
-  app.get("/health", async () => ({ ok: true, service: "trustid-api" }));
+  app.get("/health", async () => ({
+    ok: true,
+    service: "trustid-api",
+    // Non-secret: helps diagnose WebAuthn origin/RP ID misconfig in production
+    webauthn: {
+      rpID: config.webauthn.rpID,
+      origins: config.webauthn.origins,
+    },
+  }));
 
   await app.register(authRoutes);
   await app.register(identityRoutes);
