@@ -412,10 +412,10 @@ export async function verifyLogin(input: {
     await failAuthentication(cred.userId, `challenge_${consumed.reason}`, input);
     const message =
       consumed.reason === "expired"
-        ? "Challenge expired"
+        ? "Sign-in expired. Tap Use passkey and try again."
         : consumed.reason === "consumed"
-          ? "Challenge already used"
-          : "Challenge not found or invalid";
+          ? "That passkey prompt was already used. Tap Use passkey for a new one."
+          : "Sign-in challenge invalid. Tap Use passkey and try again.";
     throw Object.assign(new Error(message), { statusCode: 400 });
   }
   if (consumed.challenge.userId && consumed.challenge.userId !== cred.userId) {
@@ -444,12 +444,22 @@ export async function verifyLogin(input: {
       err instanceof Error ? err.message : "assertion_verify_error",
       input,
     );
-    throw Object.assign(new Error("WebAuthn authentication failed"), { statusCode: 400 });
+    throw Object.assign(
+      new Error(
+        "Passkey verification failed. Make sure you use the same browser/device that created the passkey, then try again.",
+      ),
+      { statusCode: 400 },
+    );
   }
 
   if (!verification.verified) {
     await failAuthentication(cred.userId, "not_verified", input);
-    throw Object.assign(new Error("WebAuthn authentication failed"), { statusCode: 400 });
+    throw Object.assign(
+      new Error(
+        "Passkey verification failed. Tap Use passkey and try again.",
+      ),
+      { statusCode: 400 },
+    );
   }
 
   const newCounter = verification.authenticationInfo.newCounter;

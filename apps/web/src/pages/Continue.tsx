@@ -15,8 +15,6 @@ import { AuthChrome } from "../components/AuthChrome";
 
 type AuthOptions = Parameters<typeof startAuthentication>[0]["optionsJSON"];
 
-const PREFETCH_TTL_MS = 90_000;
-
 export function ContinuePage() {
   const navigate = useNavigate();
   const { identity, setIdentity } = useAuth();
@@ -32,15 +30,7 @@ export function ContinuePage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
-  const [ready, setReady] = useState(false);
-
-  const prefetchRef = useRef<{
-    options: AuthOptions;
-    email?: string;
-    phone?: string;
-    at: number;
-  } | null>(null);
-  const autoStarted = useRef(false);
+  const inFlight = useRef(false);
 
   const showQuick =
     Boolean(remembered) &&
@@ -52,60 +42,27 @@ export function ContinuePage() {
     if (next) return <Navigate to={next} replace />;
   }
 
-  const prefetchOptions = useCallback(
-    async (emailHint?: string, phoneHint?: string) => {
-      if (!emailHint && !phoneHint) return null;
-      try {
-        const options = await api<AuthOptions>("/auth/webauthn/login/options", {
-          method: "POST",
-          body: JSON.stringify({
-            email: emailHint || undefined,
-            phone: phoneHint || undefined,
-          }),
-        });
-        prefetchRef.current = {
-          options,
-          email: emailHint,
-          phone: phoneHint,
-          at: Date.now(),
-        };
-        setReady(true);
-        return options;
-      } catch {
-        prefetchRef.current = null;
-        setReady(false);
-        return null;
-      }
-    },
-    [],
-  );
-
   const authenticate = useCallback(
-    async (opts?: { email?: string; phone?: string; auto?: boolean }) => {
+    async (opts?: { email?: string; phone?: string }) => {
+      if (inFlight.current) return;
+      inFlight.current = true;
       setBusy(true);
       setError(null);
-      setStatus(opts?.auto ? "Unlocking…" : "Waiting for passkey…");
+      setStatus("Waiting for passkey…");
       const emailHint = opts?.email?.trim() || undefined;
       const phoneHint = opts?.phone?.trim() || undefined;
 
       try {
-        let options: AuthOptions | null = null;
-        const cached = prefetchRef.current;
-        const cacheFresh =
-          cached &&
-          Date.now() - cached.at < PREFETCH_TTL_MS &&
-          cached.email === emailHint &&
-          cached.phone === phoneHint;
-
-        if (cacheFresh) {
-          options = cached!.options;
-          prefetchRef.current = null;
-        } else {
-          options = await api<AuthOptions>("/auth/webauthn/login/options", {
-            method: "POST",
-            body: JSON.stringify({ email: emailHint, phone: phoneHint }),
-          });
-        }
+        // Always request a fresh challenge on user gesture.
+        // Prefetch/auto-start previously reused challenges and broke after logout
+        // (React Strict Mode double-mount + consumed challenge).
+        const options = await api<AuthOptions>("/auth/webauthn/login/options", {
+          method: "POST",
+          body: JSON.stringify({
+            email: emailHint,
+            phone: phoneHint,
+          }),
+        });
 
         const response = await startAuthentication({ optionsJSON: options });
         setStatus("Verifying…");
@@ -136,36 +93,25 @@ export function ContinuePage() {
         }
         navigate(consumeReturnTo() ?? "/dashboard", { replace: true });
       } catch (err) {
-        prefetchRef.current = null;
-        setReady(false);
-        if (!opts?.auto) {
-          setError(err instanceof Error ? err.message : "Sign-in failed");
-        }
-        if (emailHint || phoneHint) void prefetchOptions(emailHint, phoneHint);
+        const message =
+          err instanceof Error ? err.message : "Sign-in failed";
+        // Browser cancel should not look like a broken account
+        const cancelled =
+          /not allowed|abort|cancel|timed out/i.test(message) ||
+          (err as { name?: string })?.name === "NotAllowedError";
+        setError(
+          cancelled
+            ? "Passkey prompt was dismissed. Tap Use passkey to try again."
+            : message,
+        );
       } finally {
+        inFlight.current = false;
         setBusy(false);
         setStatus(null);
       }
     },
-    [deviceName, navigate, setIdentity, prefetchOptions],
+    [deviceName, navigate, setIdentity],
   );
-
-  // Prefetch challenge for returning users
-  useEffect(() => {
-    if (!showQuick || !remembered) return;
-    void prefetchOptions(remembered.email, remembered.phone);
-  }, [showQuick, remembered, prefetchOptions]);
-
-  // Auto-start WebAuthn as soon as options are ready (fast path)
-  useEffect(() => {
-    if (!showQuick || !remembered || !ready || autoStarted.current || busy) return;
-    autoStarted.current = true;
-    void authenticate({
-      email: remembered.email,
-      phone: remembered.phone,
-      auto: true,
-    });
-  }, [showQuick, remembered, ready, busy, authenticate]);
 
   async function onPasskey(e: FormEvent) {
     e.preventDefault();
@@ -189,9 +135,6 @@ export function ContinuePage() {
     setEmail("");
     setPhone("");
     setDeviceName("");
-    prefetchRef.current = null;
-    autoStarted.current = true;
-    setReady(false);
     setError(null);
   }
 
@@ -234,6 +177,17 @@ export function ContinuePage() {
       setBusy(false);
     }
   }
+
+  // Warm the API connection only (no challenge stored — avoids stale/double-use)
+  useEffect(() => {
+    if (!showQuick || !remembered) return;
+    const ctrl = new AbortController();
+    void fetch(`${import.meta.env.VITE_API_URL ?? "/api"}/health`, {
+      signal: ctrl.signal,
+      credentials: "include",
+    }).catch(() => undefined);
+    return () => ctrl.abort();
+  }, [showQuick, remembered]);
 
   const contactLine = remembered
     ? [remembered.email, remembered.phone].filter(Boolean).join(" · ")
