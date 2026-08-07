@@ -48,6 +48,11 @@ async function verifyAssertion(input: {
   publicKey: Uint8Array;
   transports?: AuthenticatorTransportFuture[];
 }) {
+  // Copy into a fresh ArrayBuffer-backed view (TS 5.7+ Uint8Array generic vs SimpleWebAuthn).
+  const publicKey = new Uint8Array(
+    input.publicKey,
+  ) as Uint8Array<ArrayBuffer>;
+
   return verifyAuthenticationResponse({
     response: input.response,
     expectedChallenge: input.expectedChallenge,
@@ -56,7 +61,7 @@ async function verifyAssertion(input: {
     requireUserVerification: true,
     credential: {
       id: input.credentialId,
-      publicKey: input.publicKey,
+      publicKey,
       // Skip library counter gate; we enforce our own policy below.
       counter: 0,
       transports: input.transports,
