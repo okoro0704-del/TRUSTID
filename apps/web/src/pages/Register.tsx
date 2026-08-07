@@ -1,6 +1,7 @@
 import { FormEvent, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
+import { AuthChrome } from "../components/AuthChrome";
 
 export function RegisterPage() {
   const navigate = useNavigate();
@@ -58,13 +59,8 @@ export function RegisterPage() {
   }
 
   return (
-    <div className="shell">
-      <div className="topbar">
-        <Link to="/" className="brand">
-          TrustID
-        </Link>
-      </div>
-      <form className="panel" onSubmit={onSubmit}>
+    <AuthChrome title="Create" backTo="/">
+      <form className="panel surface-block" onSubmit={onSubmit}>
         <h1>Create TrustID</h1>
         <p className="lead">Minimum details. One identity for the ecosystem.</p>
         <div className="field">
@@ -85,10 +81,13 @@ export function RegisterPage() {
         </div>
         <p className="muted">Provide at least one contact method to verify.</p>
         {error && <p className="error">{error}</p>}
-        <button className="btn btn-primary" type="submit" disabled={busy}>
+        <button className="btn btn-primary continue-primary" type="submit" disabled={busy}>
           {busy ? "Creating…" : "Continue"}
         </button>
+        <p className="muted">
+          Already have one? <Link to="/continue">Use passkey</Link>
+        </p>
       </form>
-    </div>
+    </AuthChrome>
   );
 }

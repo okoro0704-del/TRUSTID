@@ -1,6 +1,7 @@
 import { FormEvent, useMemo, useState } from "react";
-import { Link, Navigate, useNavigate } from "react-router-dom";
+import { Navigate, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
+import { AuthChrome } from "../components/AuthChrome";
 
 type Onboarding = {
   userId: string;
@@ -47,13 +48,8 @@ export function VerifyPage() {
   }
 
   return (
-    <div className="shell">
-      <div className="topbar">
-        <Link to="/" className="brand">
-          TrustID
-        </Link>
-      </div>
-      <form className="panel" onSubmit={onSubmit}>
+    <AuthChrome title="Verify" backTo="/register">
+      <form className="panel surface-block" onSubmit={onSubmit}>
         <h1>Verify</h1>
         <p className="lead">
           Confirm ownership of your {onboarding.contactType}. This is contact
@@ -67,10 +63,10 @@ export function VerifyPage() {
           <input id="code" name="code" inputMode="numeric" required autoComplete="one-time-code" />
         </div>
         {error && <p className="error">{error}</p>}
-        <button className="btn btn-primary" type="submit" disabled={busy}>
+        <button className="btn btn-primary continue-primary" type="submit" disabled={busy}>
           {busy ? "Verifying…" : "Verify"}
         </button>
       </form>
-    </div>
+    </AuthChrome>
   );
 }

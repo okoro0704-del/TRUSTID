@@ -11,6 +11,7 @@ import {
   saveRememberedAccount,
   type RememberedAccount,
 } from "../lib/rememberedAccount";
+import { AuthChrome } from "../components/AuthChrome";
 
 type AuthOptions = Parameters<typeof startAuthentication>[0]["optionsJSON"];
 
@@ -240,13 +241,8 @@ export function ContinuePage() {
   const firstName = remembered?.firstName || remembered?.displayName || "you";
 
   return (
-    <div className="shell">
-      <div className="topbar">
-        <Link to="/" className="brand">
-          TrustID
-        </Link>
-      </div>
-      <div className="panel continue-panel">
+    <AuthChrome title="Sign in">
+      <div className="panel continue-panel surface-block">
         {showQuick && remembered ? (
           <>
             <p className="continue-eyebrow">Welcome back</p>
@@ -374,6 +370,6 @@ export function ContinuePage() {
           </>
         )}
       </div>
-    </div>
+    </AuthChrome>
   );
 }

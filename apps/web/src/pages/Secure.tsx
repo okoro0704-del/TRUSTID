@@ -1,9 +1,10 @@
 import { FormEvent, useMemo, useState } from "react";
-import { Link, Navigate, useNavigate } from "react-router-dom";
+import { Navigate, useNavigate } from "react-router-dom";
 import { startRegistration } from "@simplewebauthn/browser";
 import { api, setSessionToken } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { saveRememberedAccount } from "../lib/rememberedAccount";
+import { AuthChrome } from "../components/AuthChrome";
 
 type Onboarding = {
   userId: string;
@@ -86,14 +87,9 @@ export function SecurePage() {
   }
 
   return (
-    <div className="shell">
-      <div className="topbar">
-        <Link to="/" className="brand">
-          TrustID
-        </Link>
-      </div>
-      <form className="panel" onSubmit={onSubmit}>
-        <h1>Secure this TrustID with your device</h1>
+    <AuthChrome title="Secure device" backTo="/verify">
+      <form className="panel surface-block" onSubmit={onSubmit}>
+        <h1>Secure this TrustID</h1>
         <p className="lead">
           Your device will create a passkey. Your biometric or device security
           method stays on your device. TrustID never receives your fingerprint
@@ -115,11 +111,11 @@ export function SecurePage() {
           />
         </div>
         {error && <p className="error">{error}</p>}
-        <button className="btn btn-primary" type="submit" disabled={busy}>
+        <button className="btn btn-primary continue-primary" type="submit" disabled={busy}>
           {busy ? "Waiting for your device…" : "Create passkey"}
         </button>
       </form>
-    </div>
+    </AuthChrome>
   );
 }
 

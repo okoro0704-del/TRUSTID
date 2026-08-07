@@ -24,7 +24,14 @@ import { AccountPage } from "./pages/trust/Account";
 
 function Guard({ children }: { children: React.ReactNode }) {
   const { loading, identity } = useAuth();
-  if (loading) return <div className="shell muted">Loading…</div>;
+  if (loading)
+    return (
+      <div className="app-frame">
+        <p className="muted" style={{ padding: "2rem" }}>
+          Loading…
+        </p>
+      </div>
+    );
   if (!identity) return <Navigate to="/" replace />;
   return <>{children}</>;
 }

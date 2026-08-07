@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { startRegistration } from "@simplewebauthn/browser";
 import { api, setSessionToken } from "../lib/api";
 import { useAuth } from "../lib/auth";
+import { AuthChrome } from "../components/AuthChrome";
 
 type EnrollmentStatus = {
   id: string;
@@ -107,13 +108,8 @@ export function EnrollPage() {
   }
 
   return (
-    <div className="shell">
-      <div className="topbar">
-        <Link to="/" className="brand">
-          TrustID
-        </Link>
-      </div>
-      <div className="panel">
+    <AuthChrome title="Enroll device">
+      <div className="panel surface-block">
         <h1>Enroll this device</h1>
         <p className="lead">
           Enter the code from your existing trusted device. After approval,
@@ -164,6 +160,6 @@ export function EnrollPage() {
         )}
         {error && <p className="error">{error}</p>}
       </div>
-    </div>
+    </AuthChrome>
   );
 }

@@ -4,6 +4,7 @@ import { startRegistration } from "@simplewebauthn/browser";
 import { api, setSessionToken } from "../lib/api";
 import { useAuth, type Identity } from "../lib/auth";
 import { consumeReturnTo } from "../lib/returnTo";
+import { AuthChrome } from "../components/AuthChrome";
 
 type PollStatus = {
   requestId: string;
@@ -124,13 +125,9 @@ export function WaitingApprovalPage() {
   }
 
   return (
-    <div className="shell">
-      <div className="topbar">
-        <Link to="/" className="brand">
-          TrustID
-        </Link>
-      </div>
-      <div className="panel">
+    <AuthChrome title="Waiting" backTo="/continue">
+      <div className="panel surface-block">
+        <div className="app-loading-ring waiting-ring" aria-hidden="true" />
         <h1>Waiting for approval</h1>
         <p className="lead">
           {status?.message ??
@@ -163,10 +160,10 @@ export function WaitingApprovalPage() {
         )}
         {busy && <p className="muted">Completing sign-in…</p>}
         {error && <p className="error">{error}</p>}
-        <Link className="btn btn-ghost" to="/continue">
+        <Link className="btn btn-ghost continue-primary" to="/continue">
           Back
         </Link>
       </div>
-    </div>
+    </AuthChrome>
   );
 }

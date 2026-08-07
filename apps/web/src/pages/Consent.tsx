@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
-import { Link, Navigate, useSearchParams } from "react-router-dom";
+import { Navigate, useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { setReturnTo } from "../lib/returnTo";
+import { AuthChrome } from "../components/AuthChrome";
 
 export function ConsentPage() {
   const { loading, identity } = useAuth();
@@ -23,7 +24,13 @@ export function ConsentPage() {
     [params],
   );
 
-  if (loading) return <div className="shell muted">Loading…</div>;
+  if (loading) {
+    return (
+      <AuthChrome title="Authorize">
+        <p className="muted">Loading…</p>
+      </AuthChrome>
+    );
+  }
   if (!identity) {
     const next = `/oauth/consent?${params.toString()}`;
     setReturnTo(next);
@@ -49,18 +56,15 @@ export function ConsentPage() {
   const scopes = consent.scope.split(/[\s+]+/).filter(Boolean);
 
   return (
-    <div className="shell">
-      <div className="topbar">
-        <span className="brand">TrustID</span>
-      </div>
-      <div className="panel">
+    <AuthChrome title="Authorize">
+      <div className="panel surface-block">
         <h1>Authorize {consent.app_name}</h1>
         <p className="lead">
           {consent.app_name} wants scoped access to your TrustID. It will not
           receive your passkeys or recovery secrets.
         </p>
         <p className="muted">Signed in as {identity.trustId}</p>
-        <ul className="list">
+        <ul className="list compact-list">
           {scopes.map((s) => (
             <li key={s} className="row">
               <span className="event-type">{s}</span>
@@ -68,26 +72,26 @@ export function ConsentPage() {
           ))}
         </ul>
         {error && <p className="error">{error}</p>}
-        <div className="inline-actions">
+        <div className="inline-actions stacked-actions">
           <button
-            className="btn btn-primary"
+            className="btn btn-primary continue-primary"
             disabled={busy}
             onClick={() => decide(true)}
           >
             Allow
           </button>
           <button
-            className="btn btn-ghost"
+            className="btn btn-ghost continue-primary"
             disabled={busy}
             onClick={() => decide(false)}
           >
             Deny
           </button>
         </div>
-        <p className="muted" style={{ marginTop: "1rem" }}>
+        <p className="muted">
           After you allow access, you will return to {consent.app_name}.
         </p>
       </div>
-    </div>
+    </AuthChrome>
   );
 }

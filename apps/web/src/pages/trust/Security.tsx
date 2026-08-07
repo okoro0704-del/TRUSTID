@@ -24,6 +24,16 @@ type IdentityVerification = {
   note: string;
 };
 
+const HUB = [
+  { to: "/dashboard/devices", title: "Trusted devices", blurb: "Primary & standard" },
+  { to: "/dashboard/approvals", title: "Device approvals", blurb: "Pending requests" },
+  { to: "/dashboard/passkeys", title: "Passkeys", blurb: "Credentials on device" },
+  { to: "/dashboard/sessions", title: "Active sessions", blurb: "End unknown access" },
+  { to: "/dashboard/temporary", title: "Temporary access", blurb: "Short-lived devices" },
+  { to: "/dashboard/notifications", title: "Alerts", blurb: "Security notifications" },
+  { to: "/dashboard/applications", title: "Connected apps", blurb: "Permissions & revoke" },
+];
+
 export function SecurityPage() {
   const [events, setEvents] = useState<EventRow[]>([]);
   const [logins, setLogins] = useState<LoginRow[]>([]);
@@ -53,30 +63,26 @@ export function SecurityPage() {
 
   return (
     <div className="dashboard">
-      <section className="section">
-        <h2>Security Center</h2>
-        <p className="sub">Central hub for TrustID security and assurance.</p>
-        <div className="inline-actions">
-          <Link className="btn btn-ghost" to="/dashboard/devices">
-            Devices
-          </Link>
-          <Link className="btn btn-ghost" to="/dashboard/passkeys">
-            Passkeys
-          </Link>
-          <Link className="btn btn-ghost" to="/dashboard/applications">
-            Apps
-          </Link>
-          <Link className="btn btn-ghost" to="/dashboard/sessions">
-            Sessions
-          </Link>
+      <section className="section surface-block">
+        <h2>Security hub</h2>
+        <p className="sub">
+          Every trust decision is made here — devices, sessions, and assurance.
+        </p>
+        <div className="hub-grid">
+          {HUB.map((item) => (
+            <Link key={item.to} className="hub-card" to={item.to}>
+              <strong>{item.title}</strong>
+              <span className="muted">{item.blurb}</span>
+            </Link>
+          ))}
         </div>
       </section>
 
-      <section className="section">
+      <section className="section surface-block">
         <h2>Identity verification</h2>
         <p className="sub">Future capability — not government verified today.</p>
         {verification && (
-          <ul className="list">
+          <ul className="list compact-list">
             <li className="row">
               <span className="muted">Status</span>
               <span>{verification.status}</span>
@@ -94,11 +100,11 @@ export function SecurityPage() {
         <p className="muted">{verification?.note}</p>
       </section>
 
-      <section className="section">
+      <section className="section surface-block">
         <h2>Login history</h2>
         <p className="sub">Read-only authentication history.</p>
-        <ul className="list">
-          {logins.map((l) => (
+        <ul className="list compact-list">
+          {logins.slice(0, 8).map((l) => (
             <li key={l.id} className="row">
               <div className="row-main">
                 <strong>{l.result}</strong>
@@ -112,7 +118,7 @@ export function SecurityPage() {
         </ul>
       </section>
 
-      <section className="section">
+      <section className="section surface-block">
         <h2>Security events</h2>
         <div className="field">
           <label htmlFor="filter">Filter by event type</label>
@@ -123,8 +129,8 @@ export function SecurityPage() {
             placeholder="e.g. device.revoked"
           />
         </div>
-        <ul className="list">
-          {events.map((ev) => (
+        <ul className="list compact-list">
+          {events.slice(0, 12).map((ev) => (
             <li key={ev.id} className="row">
               <span className="event-type">{ev.type}</span>
               <span className="muted">{new Date(ev.createdAt).toLocaleString()}</span>
@@ -133,7 +139,7 @@ export function SecurityPage() {
         </ul>
       </section>
 
-      <section className="section">
+      <section className="section surface-block">
         <h2>Recovery methods</h2>
         <p className="muted">Placeholder — high-assurance recovery comes later.</p>
       </section>
