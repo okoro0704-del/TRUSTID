@@ -444,7 +444,7 @@ describe("Trusted device credential flows", () => {
 
   it("device management: list rename revoke", async () => {
     const user = await createUser("mgmt@example.com");
-    await loginOptions(undefined, undefined); // smoke
+    await loginOptions({}); // smoke
     const challenge = createSecureChallenge();
     await storeWebAuthnChallenge({
       purpose: WEBAUTHN_PURPOSES.REGISTRATION,

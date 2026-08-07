@@ -17,8 +17,29 @@ export function getRememberedAccount(): RememberedAccount | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as RememberedAccount;
     if (!parsed?.displayName && !parsed?.firstName) return null;
-    if (!parsed.email && !parsed.phone) return null;
-    return parsed;
+    const email =
+      typeof parsed.email === "string" && parsed.email.trim()
+        ? parsed.email.trim()
+        : undefined;
+    const phone =
+      typeof parsed.phone === "string" && parsed.phone.trim()
+        ? parsed.phone.trim()
+        : undefined;
+    const trustId =
+      typeof parsed.trustId === "string" && parsed.trustId.trim()
+        ? parsed.trustId.trim()
+        : undefined;
+    if (!email && !phone && !trustId) return null;
+    return {
+      ...parsed,
+      email,
+      phone,
+      trustId,
+      deviceName:
+        typeof parsed.deviceName === "string" && parsed.deviceName.trim()
+          ? parsed.deviceName.trim()
+          : undefined,
+    };
   } catch {
     return null;
   }

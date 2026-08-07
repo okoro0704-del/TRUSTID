@@ -100,14 +100,24 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   app.post("/auth/webauthn/login/options", async (req, reply) => {
+    const emptyToUndef = (v: unknown) =>
+      v == null || (typeof v === "string" && v.trim() === "") ? undefined : v;
     const body = z
       .object({
-        email: z.string().email().optional(),
-        phone: z.string().optional(),
+        email: z.preprocess(
+          emptyToUndef,
+          z.string().email().optional(),
+        ),
+        phone: z.preprocess(emptyToUndef, z.string().optional()),
+        trustId: z.preprocess(emptyToUndef, z.string().optional()),
       })
       .parse(req.body ?? {});
     try {
-      return await loginOptions(body.email, body.phone);
+      return await loginOptions({
+        email: body.email,
+        phone: body.phone,
+        trustId: body.trustId,
+      });
     } catch (err) {
       return httpError(err, reply);
     }

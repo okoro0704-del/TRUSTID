@@ -3,6 +3,12 @@ import { api } from "./api";
 
 export type AuthOptions = Parameters<typeof startAuthentication>[0]["optionsJSON"];
 
+export type LoginHints = {
+  email?: string;
+  phone?: string;
+  trustId?: string;
+};
+
 type CacheEntry = {
   key: string;
   options: AuthOptions;
@@ -11,11 +17,24 @@ type CacheEntry = {
 
 const MAX_AGE_MS = 90_000;
 
-function contactKey(email?: string, phone?: string) {
-  return `${email?.trim().toLowerCase() ?? ""}|${phone?.trim() ?? ""}`;
+function hintsKey(hints: LoginHints) {
+  return [
+    hints.trustId?.trim() ?? "",
+    hints.email?.trim().toLowerCase() ?? "",
+    hints.phone?.trim() ?? "",
+  ].join("|");
 }
 
-function stripServerExtras(raw: AuthOptions & { challengeId?: string; purpose?: string }): AuthOptions {
+function cleanHints(hints: LoginHints = {}): LoginHints {
+  const email = hints.email?.trim() || undefined;
+  const phone = hints.phone?.trim() || undefined;
+  const trustId = hints.trustId?.trim() || undefined;
+  return { email, phone, trustId };
+}
+
+function stripServerExtras(
+  raw: AuthOptions & { challengeId?: string; purpose?: string },
+): AuthOptions {
   const { challengeId: _c, purpose: _p, ...optionsJSON } = raw;
   void _c;
   void _p;
@@ -32,36 +51,39 @@ export function createLoginOptionsCache() {
   let inflight: Promise<AuthOptions> | null = null;
   let inflightKey = "";
 
-  async function fetchOptions(email?: string, phone?: string): Promise<AuthOptions> {
+  async function fetchOptions(hints: LoginHints = {}): Promise<AuthOptions> {
+    const cleaned = cleanHints(hints);
     const raw = await api<AuthOptions & { challengeId?: string; purpose?: string }>(
       "/auth/webauthn/login/options",
       {
         method: "POST",
         body: JSON.stringify({
-          email: email?.trim() || undefined,
-          phone: phone?.trim() || undefined,
+          trustId: cleaned.trustId,
+          email: cleaned.email,
+          phone: cleaned.phone,
         }),
       },
     );
     return stripServerExtras(raw);
   }
 
-  function peek(email?: string, phone?: string): AuthOptions | null {
+  function peek(hints: LoginHints = {}): AuthOptions | null {
     if (!entry) return null;
-    if (entry.key !== contactKey(email, phone)) return null;
+    if (entry.key !== hintsKey(cleanHints(hints))) return null;
     if (Date.now() - entry.fetchedAt > MAX_AGE_MS) return null;
     return entry.options;
   }
 
-  async function prefetch(email?: string, phone?: string): Promise<void> {
-    const key = contactKey(email, phone);
-    if (peek(email, phone)) return;
+  async function prefetch(hints: LoginHints = {}): Promise<void> {
+    const cleaned = cleanHints(hints);
+    const key = hintsKey(cleaned);
+    if (peek(cleaned)) return;
     if (inflight && inflightKey === key) {
       await inflight.catch(() => undefined);
       return;
     }
     inflightKey = key;
-    inflight = fetchOptions(email, phone)
+    inflight = fetchOptions(cleaned)
       .then((options) => {
         entry = { key, options, fetchedAt: Date.now() };
         return options;
@@ -74,9 +96,10 @@ export function createLoginOptionsCache() {
   }
 
   /** Take cached options (single-use) or fetch now. */
-  async function take(email?: string, phone?: string): Promise<AuthOptions> {
-    const key = contactKey(email, phone);
-    const cached = peek(email, phone);
+  async function take(hints: LoginHints = {}): Promise<AuthOptions> {
+    const cleaned = cleanHints(hints);
+    const key = hintsKey(cleaned);
+    const cached = peek(cleaned);
     if (cached) {
       entry = null;
       return cached;
@@ -86,7 +109,7 @@ export function createLoginOptionsCache() {
       entry = null;
       return options;
     }
-    const options = await fetchOptions(email, phone);
+    const options = await fetchOptions(cleaned);
     entry = null;
     return options;
   }

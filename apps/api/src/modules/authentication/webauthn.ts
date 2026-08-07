@@ -373,34 +373,42 @@ export async function verifyRegistration(input: {
   };
 }
 
-export async function loginOptions(email?: string, phone?: string) {
+export async function loginOptions(input: {
+  email?: string;
+  phone?: string;
+  trustId?: string;
+} = {}) {
   let allowCredentials:
     | { id: string; transports?: AuthenticatorTransportFuture[] }[]
     | undefined;
   let userId: string | undefined;
 
-  if (email || phone) {
-    const { findUserByContact } = await import("./service.js");
-    const user = await findUserByContact(email, phone);
-    if (!user) {
-      throw Object.assign(new Error("No account found for that contact"), {
-        statusCode: 404,
+  const email = input.email?.trim() || undefined;
+  const phone = input.phone?.trim() || undefined;
+  const trustId = input.trustId?.trim() || undefined;
+
+  if (email || phone || trustId) {
+    const { findUserByContact, findUserByTrustId } = await import("./service.js");
+    const user =
+      (await findUserByTrustId(trustId)) ||
+      (await findUserByContact(email, phone));
+    if (user) {
+      userId = user.id;
+      const creds = await prisma.credential.findMany({
+        where: {
+          userId: user.id,
+          status: { not: DEVICE_STATUS.REVOKED },
+          device: { status: { in: [DEVICE_STATUS.ACTIVE, DEVICE_STATUS.TRUSTED] } },
+        },
       });
+      if (creds.length) {
+        allowCredentials = creds.map((c) =>
+          allowCredentialDescriptor(c.credentialId, c.transports),
+        );
+      }
     }
-    userId = user.id;
-    const creds = await prisma.credential.findMany({
-      where: {
-        userId: user.id,
-        status: { not: DEVICE_STATUS.REVOKED },
-        device: { status: { in: [DEVICE_STATUS.ACTIVE, DEVICE_STATUS.TRUSTED] } },
-      },
-    });
-    if (!creds.length) {
-      throw Object.assign(new Error("No passkeys registered"), { statusCode: 400 });
-    }
-    allowCredentials = creds.map((c) =>
-      allowCredentialDescriptor(c.credentialId, c.transports),
-    );
+    // If contact/trustId not found (stale remembered account or DB reset),
+    // fall through to discoverable passkeys instead of blocking login.
   }
 
   await recordAudit({

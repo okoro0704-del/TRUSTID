@@ -43,6 +43,13 @@ export function setSessionToken(token: string | null) {
   writeSessionCookie(token);
 }
 
+function networkErrorMessage(): string {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    return "You're offline. Connect to the internet and try again.";
+  }
+  return "Can't reach TrustID right now. Check your connection and try again.";
+}
+
 export async function api<T>(
   path: string,
   options: RequestInit = {},
@@ -66,10 +73,7 @@ export async function api<T>(
       headers,
     });
   } catch {
-    throw new ApiError(
-      0,
-      "Cannot reach TrustID API. Check that Netlify /api proxy and Railway API are online.",
-    );
+    throw new ApiError(0, networkErrorMessage());
   }
 
   const text = await res.text();
@@ -81,12 +85,14 @@ export async function api<T>(
       if (!res.ok) {
         throw new ApiError(
           res.status,
-          `TrustID API error (${res.status}). The API may not be deployed.`,
+          res.status >= 500
+            ? "TrustID is temporarily unavailable. Please try again in a moment."
+            : `Something went wrong (${res.status}). Please try again.`,
         );
       }
       throw new ApiError(
         res.status,
-        "TrustID API returned a non-JSON response.",
+        "Unexpected response from TrustID. Please try again.",
       );
     }
   }

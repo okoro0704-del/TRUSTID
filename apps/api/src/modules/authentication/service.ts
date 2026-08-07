@@ -189,14 +189,26 @@ export async function findUserByContact(email?: string, phone?: string) {
       where: { type_value: { type: "email", value: normalizeEmail(email) } },
       include: { user: true },
     });
-    if (contact?.verifiedAt) return contact.user;
+    // Login must work even if OTP verification was skipped / lost after a DB reset.
+    if (contact) return contact.user;
   }
   if (phone) {
-    const contact = await prisma.contactMethod.findUnique({
-      where: { type_value: { type: "phone", value: normalizePhone(phone) } },
-      include: { user: true },
-    });
-    if (contact?.verifiedAt) return contact.user;
+    const normalized = normalizePhone(phone);
+    const digits = normalized.replace(/\D/g, "");
+    const candidates = [...new Set([normalized, digits].filter(Boolean))];
+    for (const value of candidates) {
+      const contact = await prisma.contactMethod.findUnique({
+        where: { type_value: { type: "phone", value } },
+        include: { user: true },
+      });
+      if (contact) return contact.user;
+    }
   }
   return null;
+}
+
+export async function findUserByTrustId(trustId?: string) {
+  const id = trustId?.trim();
+  if (!id) return null;
+  return prisma.user.findUnique({ where: { trustId: id } });
 }

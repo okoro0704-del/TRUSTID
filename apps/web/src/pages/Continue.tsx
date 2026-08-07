@@ -37,14 +37,15 @@ export function ContinuePage() {
   const showQuick =
     Boolean(remembered) &&
     !switchAccount &&
-    Boolean(remembered?.email || remembered?.phone);
+    Boolean(remembered?.email || remembered?.phone || remembered?.trustId);
 
   const contactHints = useCallback(() => {
     if (showQuick && remembered) {
-      return {
-        email: remembered.email,
-        phone: remembered.phone,
-      };
+      // Returning-user screen: identify by trustId when possible.
+      // Never send empty/invalid email (caused iOS "Validation failed").
+      // If trustId is missing, use discoverable passkeys (no contact lookup).
+      if (remembered.trustId) return { trustId: remembered.trustId };
+      return {};
     }
     return {
       email: email.trim() || undefined,
@@ -56,31 +57,33 @@ export function ContinuePage() {
   // immediately on tap (user activation). Never auto-start the ceremony.
   useEffect(() => {
     const hints = contactHints();
-    if (!hints.email && !hints.phone && !showQuick) return;
-    void optionsCache.current.prefetch(hints.email, hints.phone);
+    if (!hints.email && !hints.phone && !hints.trustId && !showQuick) return;
+    void optionsCache.current.prefetch(hints);
     const warm = window.setInterval(() => {
-      void optionsCache.current.prefetch(hints.email, hints.phone);
+      void optionsCache.current.prefetch(hints);
     }, 75_000);
     return () => window.clearInterval(warm);
   }, [contactHints, showQuick]);
 
   const warmOptions = useCallback(() => {
-    const hints = contactHints();
-    void optionsCache.current.prefetch(hints.email, hints.phone);
+    void optionsCache.current.prefetch(contactHints());
   }, [contactHints]);
 
   const authenticate = useCallback(
-    async (opts?: { email?: string; phone?: string }) => {
+    async (opts?: { email?: string; phone?: string; trustId?: string }) => {
       if (inFlight.current) return;
       inFlight.current = true;
       setBusy(true);
       setError(null);
-      const emailHint = opts?.email?.trim() || undefined;
-      const phoneHint = opts?.phone?.trim() || undefined;
+      const hints = {
+        trustId: opts?.trustId?.trim() || undefined,
+        email: opts?.trustId ? undefined : opts?.email?.trim() || undefined,
+        phone: opts?.trustId ? undefined : opts?.phone?.trim() || undefined,
+      };
 
       try {
         setStatus("Preparing passkey…");
-        const optionsJSON = await optionsCache.current.take(emailHint, phoneHint);
+        const optionsJSON = await optionsCache.current.take(hints);
         setStatus("Waiting for passkey…");
         // Ceremony must start ASAP after the gesture — options already ready.
         const response = await runPasskeyLogin(optionsJSON);
@@ -99,21 +102,21 @@ export function ContinuePage() {
             result.identity,
             deviceName.trim() || getRememberedAccount()?.deviceName,
           );
-        } else if (emailHint || phoneHint) {
+        } else if (hints.email || hints.phone || hints.trustId) {
           const prev = getRememberedAccount();
           saveRememberedAccount({
             firstName: prev?.firstName ?? "",
             lastName: prev?.lastName,
-            email: emailHint,
-            phone: phoneHint,
+            email: hints.email,
+            phone: hints.phone,
             deviceName: deviceName.trim() || prev?.deviceName,
-            trustId: prev?.trustId,
+            trustId: hints.trustId || prev?.trustId,
           });
         }
         navigate(consumeReturnTo() ?? "/dashboard", { replace: true });
       } catch (err) {
         optionsCache.current.invalidate();
-        void optionsCache.current.prefetch(emailHint, phoneHint);
+        void optionsCache.current.prefetch(hints);
         const message =
           err instanceof Error ? err.message : "Sign-in failed";
         const cancelled =
@@ -141,10 +144,9 @@ export function ContinuePage() {
   async function onPasskey(e: FormEvent) {
     e.preventDefault();
     if (showQuick && remembered) {
-      await authenticate({
-        email: remembered.email,
-        phone: remembered.phone,
-      });
+      await authenticate(
+        remembered.trustId ? { trustId: remembered.trustId } : {},
+      );
       return;
     }
     await authenticate({
