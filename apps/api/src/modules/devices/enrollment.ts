@@ -1,9 +1,15 @@
 import { randomInt } from "node:crypto";
-import { AUDIT_EVENTS } from "@trustid/shared";
+import {
+  AUDIT_EVENTS,
+  DEVICE_STATUS,
+  DEVICE_TRUST_LEVELS,
+  SESSION_KINDS,
+} from "@trustid/shared";
 import { prisma } from "../../db/client.js";
 import { config } from "../../lib/config.js";
 import { hashSecret, randomToken } from "../../lib/crypto.js";
 import { recordAudit } from "../audit/service.js";
+import { createSession } from "../sessions/service.js";
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const CODE_TTL_MS = 10 * 60 * 1000;
@@ -17,10 +23,20 @@ function generatePairingCode(length = 6): string {
   return out;
 }
 
+function guessDeviceName(userAgent?: string) {
+  if (!userAgent) return "Signed-in device";
+  if (/iPhone/i.test(userAgent)) return "iPhone";
+  if (/iPad/i.test(userAgent)) return "iPad";
+  if (/Android/i.test(userAgent)) return "Android device";
+  if (/Mac OS/i.test(userAgent)) return "Mac";
+  if (/Windows/i.test(userAgent)) return "Windows PC";
+  return "Browser device";
+}
+
 /**
- * Create an enrollment invite from an authenticated trusted session.
- * Generating the code on the master device IS consent — invite is
- * immediately claimable on the new device (no second Approve tap).
+ * Create a sign-in code from an authenticated trusted (master) session.
+ * The new device claims this code for a session — no extra passkey required.
+ * The master device keeps the account's passkey.
  */
 export async function createEnrollmentInvite(
   userId: string,
@@ -43,11 +59,11 @@ export async function createEnrollmentInvite(
       pairingCode,
       requestingDeviceMeta: JSON.stringify({
         initiatedBy: "trusted_session",
+        purpose: "cross_device_sign_in",
         ip: meta?.ip ?? null,
         userAgent: meta?.userAgent ?? null,
         createdAt: new Date().toISOString(),
       }),
-      // Auto-approved: master device generated the code intentionally
       status: "approved",
       approvedByDeviceId: meta?.deviceId ?? null,
       enrollmentTokenHash: hashSecret(enrollmentToken),
@@ -62,7 +78,12 @@ export async function createEnrollmentInvite(
     userId,
     actorType: "user",
     actorId: userId,
-    metadata: { requestId: request.id, pairingCode, autoApproved: true },
+    metadata: {
+      requestId: request.id,
+      pairingCode,
+      autoApproved: true,
+      mode: "session_sign_in",
+    },
     ip: meta?.ip,
     userAgent: meta?.userAgent,
   });
@@ -71,7 +92,7 @@ export async function createEnrollmentInvite(
     userId,
     actorType: "user",
     actorId: userId,
-    metadata: { requestId: request.id, autoApproved: true },
+    metadata: { requestId: request.id, autoApproved: true, mode: "session_sign_in" },
     ip: meta?.ip,
     userAgent: meta?.userAgent,
   });
@@ -86,8 +107,8 @@ export async function createEnrollmentInvite(
     joinPath,
     joinUrl,
     status: request.status,
-    /** Ready for the new device immediately */
     canEnroll: true,
+    canSignIn: true,
     qr: enrollmentQrPayload(joinUrl),
   };
 }
@@ -98,7 +119,7 @@ export async function getEnrollmentByCode(code: string) {
     where: { pairingCode: normalized },
   });
   if (!row) {
-    throw Object.assign(new Error("Invalid enrollment code"), { statusCode: 404 });
+    throw Object.assign(new Error("Invalid sign-in code"), { statusCode: 404 });
   }
   const expired =
     row.expiresAt.getTime() < Date.now() ||
@@ -111,10 +132,10 @@ export async function getEnrollmentByCode(code: string) {
       where: { id: row.id },
       data: { status: "expired", resolvedAt: new Date() },
     });
-    throw Object.assign(new Error("Enrollment code expired"), { statusCode: 400 });
+    throw Object.assign(new Error("Sign-in code expired"), { statusCode: 400 });
   }
   if (row.status === "expired") {
-    throw Object.assign(new Error("Enrollment code expired"), { statusCode: 400 });
+    throw Object.assign(new Error("Sign-in code expired"), { statusCode: 400 });
   }
   if (row.status === "completed") {
     throw Object.assign(new Error("This code was already used"), { statusCode: 400 });
@@ -124,6 +145,7 @@ export async function getEnrollmentByCode(code: string) {
     status: row.status,
     expiresAt: row.expiresAt.toISOString(),
     canEnroll: row.status === "approved" && Boolean(row.enrollmentTokenHash),
+    canSignIn: row.status === "approved" && Boolean(row.enrollmentTokenHash),
   };
 }
 
@@ -179,41 +201,107 @@ export async function approveEnrollment(
   };
 }
 
-/** New device claims enrollment token (single use via hash rotation). */
-export async function claimEnrollment(code: string) {
+/**
+ * New device redeems the master-generated code for a session.
+ * Does NOT create a passkey — the master device remains the passkey holder.
+ */
+export async function claimEnrollment(
+  code: string,
+  meta?: { ip?: string; userAgent?: string; deviceName?: string },
+) {
   const status = await getEnrollmentByCode(code);
   if (status.status !== "approved") {
     throw Object.assign(
       new Error(
         status.status === "pending"
           ? "Waiting for approval on your existing trusted device"
-          : "Enrollment is not available",
+          : "Sign-in is not available",
       ),
       { statusCode: 400 },
     );
   }
   const row = await prisma.devicePairingRequest.findUnique({
     where: { pairingCode: code.trim().toUpperCase() },
+    include: { user: { include: { profile: true } } },
   });
   if (!row?.enrollmentTokenHash || !row.enrollmentTokenExpires) {
-    throw Object.assign(new Error("Enrollment token missing"), { statusCode: 400 });
+    throw Object.assign(new Error("Sign-in code is not ready"), { statusCode: 400 });
   }
   if (row.enrollmentTokenExpires.getTime() < Date.now()) {
-    throw Object.assign(new Error("Enrollment token expired"), { statusCode: 400 });
+    throw Object.assign(new Error("Sign-in code expired"), { statusCode: 400 });
   }
-  const claimToken = randomToken(24);
+
+  const expiresAt = new Date(
+    Date.now() + config.temporarySessionHours * 60 * 60 * 1000,
+  );
+  const device = await prisma.device.create({
+    data: {
+      userId: row.userId,
+      name: meta?.deviceName?.trim() || guessDeviceName(meta?.userAgent),
+      status: DEVICE_STATUS.ACTIVE,
+      trustLevel: DEVICE_TRUST_LEVELS.TEMPORARY,
+      userAgent: meta?.userAgent ?? null,
+      lastIp: meta?.ip ?? null,
+      lastActiveAt: new Date(),
+      expiresAt,
+    },
+  });
+
+  const { session, token } = await createSession({
+    userId: row.userId,
+    deviceId: device.id,
+    kind: SESSION_KINDS.TEMPORARY,
+    expiresAt,
+    ip: meta?.ip,
+    userAgent: meta?.userAgent,
+  });
+
   await prisma.devicePairingRequest.update({
     where: { id: row.id },
     data: {
-      enrollmentTokenHash: hashSecret(claimToken),
-      enrollmentTokenExpires: new Date(Date.now() + ENROLL_TOKEN_TTL_MS),
+      status: "completed",
+      enrollmentTokenHash: null,
+      enrollmentTokenExpires: null,
     },
   });
+
+  await recordAudit({
+    type: AUDIT_EVENTS.DEVICE_ENROLLMENT_COMPLETED,
+    userId: row.userId,
+    actorType: "user",
+    actorId: row.userId,
+    metadata: {
+      requestId: row.id,
+      deviceId: device.id,
+      sessionId: session.id,
+      mode: "session_sign_in",
+      passkeyCreated: false,
+    },
+    ip: meta?.ip,
+    userAgent: meta?.userAgent,
+  });
+
   return {
-    enrollmentToken: claimToken,
+    mode: "session" as const,
+    sessionToken: token,
+    sessionId: session.id,
+    trustId: row.user.trustId,
     userId: row.userId,
     requestId: row.id,
-    expiresAt: new Date(Date.now() + ENROLL_TOKEN_TTL_MS).toISOString(),
+    device: {
+      id: device.id,
+      name: device.name,
+      trustLevel: device.trustLevel,
+      expiresAt: expiresAt.toISOString(),
+    },
+    profile: row.user.profile
+      ? {
+          firstName: row.user.profile.firstName,
+          lastName: row.user.profile.lastName,
+          name: `${row.user.profile.firstName} ${row.user.profile.lastName}`,
+        }
+      : null,
+    note: "Signed in with a master-device code. No new passkey was created on this device.",
   };
 }
 

@@ -155,7 +155,7 @@ export function DevicesPage() {
         <h2>Sign in on another device</h2>
         <p className="sub">
           Generate a one-time code on this trusted device. Enter it on the new
-          device to create a passkey and sign in — no email needed.
+          device to sign in — no new passkey needed. Your passkey stays here.
         </p>
         <form onSubmit={startEnrollment}>
           <button className="btn btn-primary" disabled={busy} type="submit">
@@ -185,7 +185,7 @@ export function DevicesPage() {
               <li>
                 Tap <strong>I have a device code</strong> (or open Enroll)
               </li>
-              <li>Enter this code and create a passkey</li>
+              <li>Enter this code to sign in (no new passkey)</li>
             </ol>
             <p className="muted break-all" style={{ fontSize: "0.8rem" }}>
               Or open: {enrollment.joinUrl}

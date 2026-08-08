@@ -203,8 +203,16 @@ export async function deviceRoutes(app: FastifyInstance) {
 
   app.post("/devices/enrollment/:code/claim", async (req, reply) => {
     const params = z.object({ code: z.string().min(4).max(12) }).parse(req.params);
+    const body = z
+      .object({ deviceName: z.string().max(100).optional() })
+      .parse(req.body ?? {});
     try {
-      return await claimEnrollment(params.code);
+      const result = await claimEnrollment(params.code, {
+        ...clientMeta(req),
+        deviceName: body.deviceName,
+      });
+      if (result.sessionToken) setSessionCookie(reply, result.sessionToken);
+      return result;
     } catch (err) {
       return httpError(err, reply);
     }

@@ -49,7 +49,7 @@ describe("Trust Center services", () => {
     expect(trust.label).toMatch(/Trusted device/i);
   });
 
-  it("creates enrollment invite, approve, and claim token", async () => {
+  it("creates enrollment invite and claims a session without a passkey", async () => {
     const user = await createUser("enroll@example.com");
     const invite = await createEnrollmentInvite(user.id);
     expect(invite.pairingCode).toHaveLength(6);
@@ -58,13 +58,20 @@ describe("Trust Center services", () => {
     expect(invite.canEnroll).toBe(true);
 
     const claimed = await claimEnrollment(invite.pairingCode);
-    expect(claimed.enrollmentToken).toBeTruthy();
+    expect(claimed.mode).toBe("session");
+    expect(claimed.sessionToken).toBeTruthy();
     expect(claimed.userId).toBe(user.id);
+    expect(claimed.device.trustLevel).toBeTruthy();
 
     const event = await prisma.auditEvent.findFirst({
       where: { userId: user.id, type: AUDIT_EVENTS.DEVICE_ENROLLMENT_CREATED },
     });
     expect(event).toBeTruthy();
+
+    const completed = await prisma.auditEvent.findFirst({
+      where: { userId: user.id, type: AUDIT_EVENTS.DEVICE_ENROLLMENT_COMPLETED },
+    });
+    expect(completed).toBeTruthy();
   });
 
   it("renames and removes passkeys while retaining one", async () => {
