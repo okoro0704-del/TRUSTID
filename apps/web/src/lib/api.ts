@@ -54,10 +54,23 @@ export async function api<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
+  const method = (options.method ?? "GET").toUpperCase();
+  const hasBody = options.body != null && options.body !== "";
+  // Fastify rejects Content-Type: application/json with an empty body.
+  const body =
+    hasBody
+      ? options.body
+      : ["POST", "PUT", "PATCH"].includes(method)
+        ? "{}"
+        : undefined;
+
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
     ...(options.headers as Record<string, string> | undefined),
   };
+  if (body != null) {
+    headers["Content-Type"] = headers["Content-Type"] ?? "application/json";
+  }
+
   const token = getSessionToken();
   if (token && !headers.Authorization && !headers["X-TrustID-Session"]) {
     // Netlify proxies often strip Authorization — send custom header + rely on Cookie
@@ -69,6 +82,8 @@ export async function api<T>(
   try {
     res = await fetch(`${API_BASE}${path}`, {
       ...options,
+      method,
+      body,
       credentials: "include",
       headers,
     });
