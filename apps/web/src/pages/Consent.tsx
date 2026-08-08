@@ -1,15 +1,30 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { setReturnTo } from "../lib/returnTo";
 import { AuthChrome } from "../components/AuthChrome";
 
+function forceConsentUi(prompt?: string | null): boolean {
+  if (!prompt) return false;
+  return prompt
+    .split(/[\s+]+/)
+    .map((p) => p.trim().toLowerCase())
+    .includes("consent");
+}
+
+/**
+ * OAuth finish page. After TrustID login we auto-approve and return to the app.
+ * The Allow / Deny screen only appears when prompt=consent is requested.
+ */
 export function ConsentPage() {
   const { loading, identity } = useAuth();
   const [params] = useSearchParams();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** null = connecting; true = show Allow UI; false = redirecting */
+  const [needsConsent, setNeedsConsent] = useState<boolean | null>(null);
+  const finishStarted = useRef(false);
 
   const consent = useMemo(
     () => ({
@@ -20,14 +35,69 @@ export function ConsentPage() {
       code_challenge: params.get("code_challenge") ?? "",
       code_challenge_method: "S256" as const,
       app_name: params.get("app_name") ?? "Application",
+      prompt: params.get("prompt") ?? "",
     }),
     [params],
   );
 
-  if (loading) {
+  useEffect(() => {
+    if (loading || !identity) return;
+    if (finishStarted.current) return;
+    finishStarted.current = true;
+
+    if (forceConsentUi(consent.prompt)) {
+      setNeedsConsent(true);
+      return;
+    }
+
+    void (async () => {
+      try {
+        const result = await api<{ redirectTo?: string; needsConsent: boolean }>(
+          "/oauth/consent/resume",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              client_id: consent.client_id,
+              redirect_uri: consent.redirect_uri,
+              scope: consent.scope,
+              state: consent.state,
+              code_challenge: consent.code_challenge,
+              code_challenge_method: consent.code_challenge_method,
+              prompt: consent.prompt || undefined,
+            }),
+          },
+        );
+        if (result.redirectTo) {
+          setNeedsConsent(false);
+          window.location.assign(result.redirectTo);
+          return;
+        }
+        // Fallback: explicit approve (should be rare)
+        const approved = await api<{ redirectTo: string }>("/oauth/consent", {
+          method: "POST",
+          body: JSON.stringify({
+            client_id: consent.client_id,
+            redirect_uri: consent.redirect_uri,
+            scope: consent.scope,
+            state: consent.state,
+            code_challenge: consent.code_challenge,
+            code_challenge_method: consent.code_challenge_method,
+            approve: true,
+          }),
+        });
+        setNeedsConsent(false);
+        window.location.assign(approved.redirectTo);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Could not finish sign-in");
+        setNeedsConsent(true);
+      }
+    })();
+  }, [loading, identity, consent]);
+
+  if (loading || (identity && needsConsent === null && !error)) {
     return (
-      <AuthChrome title="Authorize">
-        <p className="muted">Loading…</p>
+      <AuthChrome title="Connecting">
+        <p className="muted">Returning to {consent.app_name}…</p>
       </AuthChrome>
     );
   }
@@ -36,6 +106,13 @@ export function ConsentPage() {
     setReturnTo(next);
     return <Navigate to="/continue" replace />;
   }
+  if (needsConsent === false) {
+    return (
+      <AuthChrome title="Connecting">
+        <p className="muted">Returning to {consent.app_name}…</p>
+      </AuthChrome>
+    );
+  }
 
   async function decide(approve: boolean) {
     setBusy(true);
@@ -43,9 +120,16 @@ export function ConsentPage() {
     try {
       const result = await api<{ redirectTo: string }>("/oauth/consent", {
         method: "POST",
-        body: JSON.stringify({ ...consent, approve }),
+        body: JSON.stringify({
+          client_id: consent.client_id,
+          redirect_uri: consent.redirect_uri,
+          scope: consent.scope,
+          state: consent.state,
+          code_challenge: consent.code_challenge,
+          code_challenge_method: consent.code_challenge_method,
+          approve,
+        }),
       });
-      // Full navigation back to LifeOS (or other relying party)
       window.location.assign(result.redirectTo);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Consent failed");
@@ -53,6 +137,7 @@ export function ConsentPage() {
     }
   }
 
+  // Only shown for prompt=consent or if auto-finish failed.
   const scopes = consent.scope.split(/[\s+]+/).filter(Boolean);
 
   return (
@@ -88,9 +173,6 @@ export function ConsentPage() {
             Deny
           </button>
         </div>
-        <p className="muted">
-          After you allow access, you will return to {consent.app_name}.
-        </p>
       </div>
     </AuthChrome>
   );

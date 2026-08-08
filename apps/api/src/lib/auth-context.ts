@@ -25,7 +25,10 @@ export function clientMeta(req: FastifyRequest) {
   };
 }
 
-export async function requireSession(req: FastifyRequest, reply: FastifyReply) {
+function readSessionToken(req: FastifyRequest): {
+  token: string | undefined;
+  viaHeader: boolean;
+} {
   const header = req.headers.authorization;
   const bearer =
     header?.startsWith("Bearer ") ? header.slice("Bearer ".length).trim() : undefined;
@@ -33,13 +36,34 @@ export async function requireSession(req: FastifyRequest, reply: FastifyReply) {
     typeof req.headers["x-trustid-session"] === "string"
       ? req.headers["x-trustid-session"].trim()
       : undefined;
-  const token = custom || bearer || req.cookies[config.sessionCookieName];
+  const cookie = req.cookies[config.sessionCookieName];
+  const token = custom || bearer || cookie;
+  return { token, viaHeader: Boolean(custom || bearer) };
+}
+
+/** Resolve a TrustID session if present; does not send 401. */
+export async function tryResolveSession(req: FastifyRequest): Promise<AuthUser | null> {
+  const { token, viaHeader } = readSessionToken(req);
+  if (!token) return null;
+  const session = await resolveSession(token);
+  if (!session) return null;
+  return {
+    userId: session.userId,
+    sessionId: session.id,
+    deviceId: session.deviceId,
+    trustId: session.user.trustId,
+    via: viaHeader ? "bearer" : "session",
+  };
+}
+
+export async function requireSession(req: FastifyRequest, reply: FastifyReply) {
+  const { token, viaHeader } = readSessionToken(req);
   if (!token) {
     return reply.code(401).send({ error: "unauthorized", message: "Sign in required" });
   }
   const session = await resolveSession(token);
   if (!session) {
-    if (!custom && !bearer) reply.clearCookie(config.sessionCookieName, { path: "/" });
+    if (!viaHeader) reply.clearCookie(config.sessionCookieName, { path: "/" });
     return reply.code(401).send({ error: "unauthorized", message: "Session expired" });
   }
   req.auth = {
@@ -47,7 +71,7 @@ export async function requireSession(req: FastifyRequest, reply: FastifyReply) {
     sessionId: session.id,
     deviceId: session.deviceId,
     trustId: session.user.trustId,
-    via: custom || bearer ? "bearer" : "session",
+    via: viaHeader ? "bearer" : "session",
   };
 }
 

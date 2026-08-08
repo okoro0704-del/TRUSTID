@@ -1,4 +1,10 @@
-import { AUDIT_EVENTS, DEFAULT_APP_SCOPES, SCOPES } from "@trustid/shared";
+import {
+  AUDIT_EVENTS,
+  DEFAULT_APP_SCOPES,
+  DEVICE_TRUST_LEVELS,
+  SCOPES,
+  isDeviceCredentialActive,
+} from "@trustid/shared";
 import { prisma } from "../../db/client.js";
 import { config } from "../../lib/config.js";
 import { hashSecret, randomToken, sha256Base64Url } from "../../lib/crypto.js";
@@ -145,20 +151,24 @@ export async function grantAuthorization(input: {
 
   const existing = await prisma.authorization.findFirst({
     where: { userId: input.userId, applicationId: app.id, status: "active" },
+    include: { scopes: true },
   });
   if (existing) {
+    const merged = [
+      ...new Set([...existing.scopes.map((s) => s.scope), ...scopes]),
+    ].filter((s) => allowed.has(s));
     await prisma.authorizationScope.deleteMany({
       where: { authorizationId: existing.id },
     });
     await prisma.authorizationScope.createMany({
-      data: scopes.map((scope) => ({ authorizationId: existing.id, scope })),
+      data: merged.map((scope) => ({ authorizationId: existing.id, scope })),
     });
     await recordAudit({
       type: AUDIT_EVENTS.PERMISSION_GRANTED,
       userId: input.userId,
       actorType: "user",
       actorId: input.userId,
-      metadata: { authorizationId: existing.id, scopes },
+      metadata: { authorizationId: existing.id, scopes: merged },
       ip: input.ip,
       userAgent: input.userAgent,
     });
@@ -389,4 +399,50 @@ export async function resolveAccessToken(token: string) {
 export function parseScopeParam(scope?: string | null): string[] {
   if (!scope) return [...DEFAULT_APP_SCOPES];
   return scope.split(/[\s+]+/).filter(Boolean);
+}
+
+function normalizeRequestedScopes(appAllowedScopesJson: string, scopes: string[]): string[] {
+  const allowed = new Set(parseJsonArray(appAllowedScopesJson));
+  const requested = [...new Set(scopes)].filter((s) => allowed.has(s));
+  if (!requested.includes(SCOPES.OPENID) && allowed.has(SCOPES.OPENID)) {
+    requested.push(SCOPES.OPENID);
+  }
+  return requested;
+}
+
+/**
+ * True when this user already granted the app (scopes covered) and the current
+ * session device is a trusted (non-temporary) device — so the Allow screen can be skipped.
+ */
+export async function canSilentAuthorize(input: {
+  userId: string;
+  deviceId: string | null | undefined;
+  clientId: string;
+  scopes: string[];
+}): Promise<boolean> {
+  if (!input.deviceId) return false;
+
+  const device = await prisma.device.findFirst({
+    where: { id: input.deviceId, userId: input.userId },
+  });
+  if (!device || !isDeviceCredentialActive(device.status)) return false;
+  if (device.trustLevel === DEVICE_TRUST_LEVELS.TEMPORARY) return false;
+  if (device.expiresAt && device.expiresAt.getTime() < Date.now()) return false;
+
+  const app = await prisma.application.findUnique({
+    where: { clientId: input.clientId },
+  });
+  if (!app || app.status !== "active") return false;
+
+  const requested = normalizeRequestedScopes(app.allowedScopes, input.scopes);
+  if (!requested.length) return false;
+
+  const auth = await prisma.authorization.findFirst({
+    where: { userId: input.userId, applicationId: app.id, status: "active" },
+    include: { scopes: true },
+  });
+  if (!auth) return false;
+
+  const granted = new Set(auth.scopes.map((s) => s.scope));
+  return requested.every((s) => granted.has(s));
 }
