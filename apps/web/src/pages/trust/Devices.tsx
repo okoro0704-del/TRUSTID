@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../../lib/api";
 import { reauthenticate, prefetchReauth } from "../../lib/reauth";
@@ -23,6 +23,7 @@ type Enrollment = {
   joinUrl: string;
   expiresAt: string;
   status: string;
+  canEnroll?: boolean;
 };
 
 function trustLabel(level?: string) {
@@ -31,24 +32,32 @@ function trustLabel(level?: string) {
   return "Standard";
 }
 
+function useCountdown(expiresAt: string | null) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!expiresAt) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [expiresAt]);
+  if (!expiresAt) return null;
+  const ms = new Date(expiresAt).getTime() - now;
+  if (ms <= 0) return "Expired";
+  const m = Math.floor(ms / 60000);
+  const s = Math.floor((ms % 60000) / 1000);
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
 export function DevicesPage() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [enrollment, setEnrollment] = useState<Enrollment | null>(null);
-  const [pending, setPending] = useState<
-    { id: string; pairingCode?: string | null; status: string }[]
-  >([]);
+  const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const remaining = useCountdown(enrollment?.expiresAt ?? null);
 
   async function load() {
-    const [d, p] = await Promise.all([
-      api<Device[]>("/devices"),
-      api<{ id: string; pairingCode?: string | null; status: string }[]>(
-        "/devices/pairing-requests",
-      ),
-    ]);
+    const d = await api<Device[]>("/devices");
     setDevices(d.filter((x) => x.trustLevel !== "temporary"));
-    setPending(p.filter((x) => x.status === "pending"));
   }
 
   useEffect(() => {
@@ -108,6 +117,7 @@ export function DevicesPage() {
     e.preventDefault();
     setBusy(true);
     setError(null);
+    setCopied(false);
     try {
       const invite = await api<Enrollment>("/devices/enrollment", {
         method: "POST",
@@ -122,18 +132,72 @@ export function DevicesPage() {
     }
   }
 
-  async function approve(id: string) {
-    await api(`/devices/enrollment/${id}/approve`, { method: "POST" });
-    await load();
+  async function copyCode() {
+    if (!enrollment?.pairingCode) return;
+    try {
+      await navigator.clipboard.writeText(enrollment.pairingCode);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setError("Could not copy code");
+    }
   }
+
+  const spacedCode = useMemo(() => {
+    const c = enrollment?.pairingCode ?? "";
+    if (c.length !== 6) return c;
+    return `${c.slice(0, 3)} ${c.slice(3)}`;
+  }, [enrollment?.pairingCode]);
 
   return (
     <div className="dashboard">
+      <section className="section surface-block">
+        <h2>Sign in on another device</h2>
+        <p className="sub">
+          Generate a one-time code on this trusted device. Enter it on the new
+          device to create a passkey and sign in — no email needed.
+        </p>
+        <form onSubmit={startEnrollment}>
+          <button className="btn btn-primary" disabled={busy} type="submit">
+            {busy ? "Generating…" : enrollment ? "Generate new code" : "Generate sign-in code"}
+          </button>
+        </form>
+        {enrollment && (
+          <div className="enroll-code-card" aria-live="polite">
+            <p className="enroll-code-label">Show this code on the new device</p>
+            <p className="enroll-code-value" data-testid="enrollment-code">
+              {spacedCode}
+            </p>
+            <p className="enroll-code-meta">
+              {remaining === "Expired" ? (
+                <span className="error">Code expired — generate a new one</span>
+              ) : (
+                <span className="muted">Expires in {remaining}</span>
+              )}
+            </p>
+            <div className="inline-actions" style={{ marginTop: "0.75rem" }}>
+              <button className="btn btn-ghost" type="button" onClick={() => void copyCode()}>
+                {copied ? "Copied" : "Copy code"}
+              </button>
+            </div>
+            <ol className="enroll-steps">
+              <li>On the new device, open TrustID</li>
+              <li>
+                Tap <strong>I have a device code</strong> (or open Enroll)
+              </li>
+              <li>Enter this code and create a passkey</li>
+            </ol>
+            <p className="muted break-all" style={{ fontSize: "0.8rem" }}>
+              Or open: {enrollment.joinUrl}
+            </p>
+          </div>
+        )}
+      </section>
+
       <section className="section">
         <h2>Trusted devices</h2>
         <p className="sub">
-          Primary devices approve new sign-ins. Revoking ends sessions and blocks
-          that credential. See also{" "}
+          Primary devices manage trust. See also{" "}
           <Link to="/dashboard/temporary">temporary devices</Link> and{" "}
           <Link to="/dashboard/approvals">approval requests</Link>.
         </p>
@@ -189,47 +253,6 @@ export function DevicesPage() {
             </li>
           ))}
         </ul>
-      </section>
-
-      <section className="section">
-        <h2>Add trusted device</h2>
-        <p className="sub">
-          Generate a one-time code, or have the new device request approval from
-          Continue with TrustID.
-        </p>
-        <form onSubmit={startEnrollment}>
-          <button className="btn btn-primary" disabled={busy} type="submit">
-            {busy ? "Creating…" : "Generate enrollment code"}
-          </button>
-        </form>
-        {enrollment && (
-          <div className="panel" style={{ marginTop: "1rem", width: "100%" }}>
-            <p className="notice">Code: {enrollment.pairingCode}</p>
-            <p className="muted">
-              Expires {new Date(enrollment.expiresAt).toLocaleString()}
-            </p>
-            <p className="muted break-all">{enrollment.joinUrl}</p>
-          </div>
-        )}
-        {pending.length > 0 && (
-          <ul className="list">
-            {pending.map((p) => (
-              <li key={p.id} className="row">
-                <div className="row-main">
-                  <strong>Pending enrollment</strong>
-                  <span className="muted">{p.pairingCode ?? p.id}</span>
-                </div>
-                <button
-                  className="btn btn-primary"
-                  type="button"
-                  onClick={() => approve(p.id)}
-                >
-                  Approve
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
       </section>
       {error && <p className="error">{error}</p>}
     </div>

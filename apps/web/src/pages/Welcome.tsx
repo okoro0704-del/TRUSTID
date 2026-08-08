@@ -44,6 +44,9 @@ export function WelcomePage() {
           <Link className="btn btn-ghost continue-primary" to="/continue">
             Use passkey
           </Link>
+          <Link className="btn btn-ghost continue-primary" to="/enroll">
+            I have a device code
+          </Link>
         </div>
         <p className="splash-foot muted">
           Biometrics stay on your device. TrustID stores cryptographic proof only.

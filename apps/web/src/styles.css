@@ -967,6 +967,59 @@ select {
   font-weight: 700;
 }
 
+.enroll-code-card {
+  margin-top: 1rem;
+  padding: 1.1rem 1rem;
+  border-radius: 16px;
+  background: linear-gradient(
+    160deg,
+    rgba(13, 58, 54, 0.9),
+    rgba(7, 30, 28, 0.95)
+  );
+  border: 1px solid rgba(217, 181, 106, 0.28);
+  text-align: center;
+}
+
+.enroll-code-label {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  color: var(--sand);
+}
+
+.enroll-code-value {
+  margin: 0;
+  font-family: ui-monospace, "Cascadia Code", "SF Mono", Menlo, monospace;
+  font-size: clamp(1.85rem, 7vw, 2.4rem);
+  letter-spacing: 0.28em;
+  font-weight: 700;
+  color: #f7f1e4;
+}
+
+.enroll-code-meta {
+  margin: 0.65rem 0 0;
+}
+
+.enroll-steps {
+  margin: 1rem 0 0.5rem;
+  padding-left: 1.2rem;
+  text-align: left;
+  color: rgba(243, 240, 232, 0.78);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.enroll-code-input {
+  font-family: ui-monospace, "Cascadia Code", "SF Mono", Menlo, monospace !important;
+  font-size: 1.35rem !important;
+  letter-spacing: 0.22em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.break-all {
+  word-break: break-all;
+}
+
 @media (max-width: 640px) {
   .row {
     align-items: flex-start;

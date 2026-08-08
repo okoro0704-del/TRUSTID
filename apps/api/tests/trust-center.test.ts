@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { AUDIT_EVENTS, DEVICE_STATUS } from "@trustid/shared";
 import { prisma } from "../src/db/client.js";
 import { resetTables } from "./helpers/db.js";
-import { createEnrollmentInvite, approveEnrollment, claimEnrollment } from "../src/modules/devices/enrollment.js";
+import { createEnrollmentInvite, claimEnrollment } from "../src/modules/devices/enrollment.js";
 import { listPasskeys, removePasskey, renamePasskey } from "../src/modules/passkeys/service.js";
 import { computeTrustLevel, getTrustCenterSummary } from "../src/modules/trust/service.js";
 import { revokeAuthorization, grantAuthorization } from "../src/modules/authorization/service.js";
@@ -53,9 +53,9 @@ describe("Trust Center services", () => {
     const user = await createUser("enroll@example.com");
     const invite = await createEnrollmentInvite(user.id);
     expect(invite.pairingCode).toHaveLength(6);
-
-    const approved = await approveEnrollment(user.id, invite.id);
-    expect(approved.status).toBe("approved");
+    // Master-generated codes are immediately claimable
+    expect(invite.status).toBe("approved");
+    expect(invite.canEnroll).toBe(true);
 
     const claimed = await claimEnrollment(invite.pairingCode);
     expect(claimed.enrollmentToken).toBeTruthy();

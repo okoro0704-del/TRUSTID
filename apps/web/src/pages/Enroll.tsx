@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { startRegistration } from "@simplewebauthn/browser";
 import { api, setSessionToken } from "../lib/api";
@@ -17,60 +17,113 @@ export function EnrollPage() {
   const navigate = useNavigate();
   const { refresh } = useAuth();
   const initialCode = useMemo(
-    () => (params.get("code") ?? "").toUpperCase(),
+    () => (params.get("code") ?? "").toUpperCase().replace(/[^A-Z0-9]/g, ""),
     [params],
   );
   const [code, setCode] = useState(initialCode);
   const [status, setStatus] = useState<EnrollmentStatus | null>(null);
   const [deviceName, setDeviceName] = useState("");
+  const [phase, setPhase] = useState<
+    "enter" | "ready" | "passkey" | "done"
+  >("enter");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [token, setToken] = useState<string | null>(null);
+  const claiming = useRef(false);
 
-  async function refreshStatus(c: string) {
+  const refreshStatus = useCallback(async (c: string) => {
     const s = await api<EnrollmentStatus>(
       `/devices/enrollment/${encodeURIComponent(c.trim().toUpperCase())}`,
     );
     setStatus(s);
     return s;
-  }
+  }, []);
 
-  useEffect(() => {
-    if (!initialCode) return;
-    refreshStatus(initialCode).catch((err) =>
-      setError(err instanceof Error ? err.message : "Invalid code"),
-    );
-    const t = setInterval(() => {
-      refreshStatus(initialCode).catch(() => undefined);
-    }, 3000);
-    return () => clearInterval(t);
-  }, [initialCode]);
-
-  async function onLookup(e: FormEvent) {
-    e.preventDefault();
-    setError(null);
-    try {
-      await refreshStatus(code);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Lookup failed");
-    }
-  }
-
-  async function claim() {
+  const claim = useCallback(async (c: string) => {
+    if (claiming.current) return;
+    claiming.current = true;
     setBusy(true);
     setError(null);
     try {
       const claimed = await api<{ enrollmentToken: string }>(
-        `/devices/enrollment/${encodeURIComponent(code.trim().toUpperCase())}/claim`,
+        `/devices/enrollment/${encodeURIComponent(c.trim().toUpperCase())}/claim`,
         { method: "POST" },
       );
       setToken(claimed.enrollmentToken);
+      setPhase("passkey");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Claim failed");
+      setError(err instanceof Error ? err.message : "Could not use this code");
+      claiming.current = false;
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!initialCode) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const s = await refreshStatus(initialCode);
+        if (cancelled) return;
+        if (s.canEnroll || s.status === "approved") {
+          setPhase("ready");
+          await claim(initialCode);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Invalid code");
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [initialCode, refreshStatus, claim]);
+
+  async function onSubmitCode(e: FormEvent) {
+    e.preventDefault();
+    const normalized = code.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (normalized.length < 4) {
+      setError("Enter the 6-character code from your other device");
+      return;
+    }
+    setCode(normalized);
+    setError(null);
+    setBusy(true);
+    try {
+      const s = await refreshStatus(normalized);
+      if (s.canEnroll || s.status === "approved") {
+        setPhase("ready");
+        await claim(normalized);
+      } else if (s.status === "pending") {
+        setPhase("ready");
+        setError(null);
+      } else {
+        setError("This code cannot be used right now");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Invalid code");
     } finally {
       setBusy(false);
     }
   }
+
+  // Poll while waiting for pending (legacy invites)
+  useEffect(() => {
+    if (phase !== "ready" || token || status?.status !== "pending") return;
+    const normalized = code.trim().toUpperCase();
+    const t = setInterval(() => {
+      refreshStatus(normalized)
+        .then((s) => {
+          if (s.canEnroll || s.status === "approved") {
+            void claim(normalized);
+          }
+        })
+        .catch(() => undefined);
+    }, 2500);
+    return () => clearInterval(t);
+  }, [phase, token, status?.status, code, refreshStatus, claim]);
 
   async function registerPasskey(e: FormEvent) {
     e.preventDefault();
@@ -78,13 +131,12 @@ export function EnrollPage() {
     setBusy(true);
     setError(null);
     try {
-      const options = await api<Parameters<typeof startRegistration>[0]["optionsJSON"]>(
-        "/devices/enrollment/register/options",
-        {
-          method: "POST",
-          body: JSON.stringify({ enrollmentToken: token }),
-        },
-      );
+      const options = await api<
+        Parameters<typeof startRegistration>[0]["optionsJSON"]
+      >("/devices/enrollment/register/options", {
+        method: "POST",
+        body: JSON.stringify({ enrollmentToken: token }),
+      });
       const response = await startRegistration({ optionsJSON: options });
       const result = await api<{ sessionToken?: string }>(
         "/devices/enrollment/register/verify",
@@ -99,7 +151,8 @@ export function EnrollPage() {
       );
       if (result.sessionToken) setSessionToken(result.sessionToken);
       await refresh();
-      navigate("/secured");
+      setPhase("done");
+      navigate("/secured", { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Registration failed");
     } finally {
@@ -108,57 +161,80 @@ export function EnrollPage() {
   }
 
   return (
-    <AuthChrome title="Enroll device">
+    <AuthChrome title="Device code" backTo="/continue">
       <div className="panel surface-block">
-        <h1>Enroll this device</h1>
+        <h1>Sign in with a device code</h1>
         <p className="lead">
-          Enter the code from your existing trusted device. After approval,
-          create a passkey here.
+          Enter the code shown on your trusted (master) device, then create a
+          passkey on this device.
         </p>
-        <form onSubmit={onLookup}>
-          <div className="field">
-            <label htmlFor="code">Enrollment code</label>
-            <input
-              id="code"
-              value={code}
-              onChange={(e) => setCode(e.target.value.toUpperCase())}
-              required
-            />
-          </div>
-          <button className="btn btn-ghost" type="submit">
-            Check status
-          </button>
-        </form>
-        {status && (
+
+        {phase === "enter" && (
+          <form onSubmit={onSubmitCode}>
+            <div className="field">
+              <label htmlFor="code">6-character code</label>
+              <input
+                id="code"
+                className="enroll-code-input"
+                value={code}
+                onChange={(e) =>
+                  setCode(
+                    e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6),
+                  )
+                }
+                inputMode="text"
+                autoComplete="one-time-code"
+                autoCapitalize="characters"
+                spellCheck={false}
+                placeholder="ABC123"
+                required
+                minLength={4}
+                maxLength={6}
+                autoFocus
+              />
+            </div>
+            <button className="btn btn-primary continue-primary" type="submit" disabled={busy}>
+              {busy ? "Checking…" : "Continue"}
+            </button>
+          </form>
+        )}
+
+        {phase === "ready" && !token && status?.status === "pending" && (
           <p className="notice">
-            Status: {status.status}
-            {status.status === "pending"
-              ? " — approve on your existing device"
-              : ""}
+            Waiting for approval on your trusted device…
           </p>
         )}
-        {status?.status === "approved" && !token && (
-          <button className="btn btn-primary" type="button" disabled={busy} onClick={claim}>
-            Continue enrollment
-          </button>
-        )}
-        {token && (
+
+        {(phase === "passkey" || token) && (
           <form onSubmit={registerPasskey}>
+            <p className="notice">Code accepted. Create a passkey to finish.</p>
             <div className="field">
-              <label htmlFor="deviceName">Device name</label>
+              <label htmlFor="deviceName">Name for this device</label>
               <input
                 id="deviceName"
                 value={deviceName}
                 onChange={(e) => setDeviceName(e.target.value)}
-                placeholder="e.g. iPhone"
+                placeholder="e.g. Work phone"
+                autoFocus
               />
             </div>
-            <button className="btn btn-primary" type="submit" disabled={busy}>
-              {busy ? "Creating passkey…" : "Create passkey"}
+            <button
+              className="btn btn-primary continue-primary"
+              type="submit"
+              disabled={busy}
+            >
+              {busy ? "Waiting for passkey…" : "Create passkey & sign in"}
             </button>
           </form>
         )}
+
         {error && <p className="error">{error}</p>}
+        <p className="muted" style={{ marginTop: "1rem" }}>
+          On your other device: Trust Center → Devices → Generate sign-in code.
+        </p>
+        <p className="muted">
+          Prefer passkey? <Link to="/continue">Use passkey instead</Link>
+        </p>
       </div>
     </AuthChrome>
   );

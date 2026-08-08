@@ -6,6 +6,8 @@ import { hashSecret, randomToken } from "../../lib/crypto.js";
 import { recordAudit } from "../audit/service.js";
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const CODE_TTL_MS = 10 * 60 * 1000;
+const ENROLL_TOKEN_TTL_MS = 10 * 60 * 1000;
 
 function generatePairingCode(length = 6): string {
   let out = "";
@@ -15,10 +17,14 @@ function generatePairingCode(length = 6): string {
   return out;
 }
 
-/** Create an enrollment invite from an authenticated trusted session. */
+/**
+ * Create an enrollment invite from an authenticated trusted session.
+ * Generating the code on the master device IS consent — invite is
+ * immediately claimable on the new device (no second Approve tap).
+ */
 export async function createEnrollmentInvite(
   userId: string,
-  meta?: { ip?: string; userAgent?: string },
+  meta?: { ip?: string; userAgent?: string; deviceId?: string | null },
 ) {
   let pairingCode = generatePairingCode();
   for (let i = 0; i < 5; i++) {
@@ -29,7 +35,8 @@ export async function createEnrollmentInvite(
     pairingCode = generatePairingCode();
   }
 
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+  const expiresAt = new Date(Date.now() + CODE_TTL_MS);
+  const enrollmentToken = randomToken(32);
   const request = await prisma.devicePairingRequest.create({
     data: {
       userId,
@@ -40,7 +47,12 @@ export async function createEnrollmentInvite(
         userAgent: meta?.userAgent ?? null,
         createdAt: new Date().toISOString(),
       }),
-      status: "pending",
+      // Auto-approved: master device generated the code intentionally
+      status: "approved",
+      approvedByDeviceId: meta?.deviceId ?? null,
+      enrollmentTokenHash: hashSecret(enrollmentToken),
+      enrollmentTokenExpires: new Date(Date.now() + ENROLL_TOKEN_TTL_MS),
+      resolvedAt: new Date(),
       expiresAt,
     },
   });
@@ -50,7 +62,16 @@ export async function createEnrollmentInvite(
     userId,
     actorType: "user",
     actorId: userId,
-    metadata: { requestId: request.id, pairingCode },
+    metadata: { requestId: request.id, pairingCode, autoApproved: true },
+    ip: meta?.ip,
+    userAgent: meta?.userAgent,
+  });
+  await recordAudit({
+    type: AUDIT_EVENTS.DEVICE_ENROLLMENT_APPROVED,
+    userId,
+    actorType: "user",
+    actorId: userId,
+    metadata: { requestId: request.id, autoApproved: true },
     ip: meta?.ip,
     userAgent: meta?.userAgent,
   });
@@ -65,6 +86,9 @@ export async function createEnrollmentInvite(
     joinPath,
     joinUrl,
     status: request.status,
+    /** Ready for the new device immediately */
+    canEnroll: true,
+    qr: enrollmentQrPayload(joinUrl),
   };
 }
 
@@ -76,12 +100,24 @@ export async function getEnrollmentByCode(code: string) {
   if (!row) {
     throw Object.assign(new Error("Invalid enrollment code"), { statusCode: 404 });
   }
-  if (row.expiresAt.getTime() < Date.now() && row.status === "pending") {
+  const expired =
+    row.expiresAt.getTime() < Date.now() ||
+    (row.enrollmentTokenExpires != null &&
+      row.enrollmentTokenExpires.getTime() < Date.now() &&
+      row.status === "approved");
+
+  if (expired && row.status !== "completed" && row.status !== "expired") {
     await prisma.devicePairingRequest.update({
       where: { id: row.id },
       data: { status: "expired", resolvedAt: new Date() },
     });
     throw Object.assign(new Error("Enrollment code expired"), { statusCode: 400 });
+  }
+  if (row.status === "expired") {
+    throw Object.assign(new Error("Enrollment code expired"), { statusCode: 400 });
+  }
+  if (row.status === "completed") {
+    throw Object.assign(new Error("This code was already used"), { statusCode: 400 });
   }
   return {
     id: row.id,
@@ -102,6 +138,9 @@ export async function approveEnrollment(
   if (!row) {
     throw Object.assign(new Error("Enrollment not found"), { statusCode: 404 });
   }
+  if (row.status === "approved" && row.enrollmentTokenHash) {
+    return { id: row.id, status: row.status, enrollmentToken: null as string | null };
+  }
   if (row.status !== "pending") {
     throw Object.assign(new Error("Enrollment already resolved"), { statusCode: 400 });
   }
@@ -120,7 +159,7 @@ export async function approveEnrollment(
       status: "approved",
       approvedByDeviceId: approvedByDeviceId ?? null,
       enrollmentTokenHash: hashSecret(enrollmentToken),
-      enrollmentTokenExpires: new Date(Date.now() + 5 * 60 * 1000),
+      enrollmentTokenExpires: new Date(Date.now() + ENROLL_TOKEN_TTL_MS),
       resolvedAt: new Date(),
     },
   });
@@ -136,12 +175,11 @@ export async function approveEnrollment(
   return {
     id: updated.id,
     status: updated.status,
-    /** Returned once to the approving client for optional display; new device claims via code after approval. */
     enrollmentToken,
   };
 }
 
-/** New device claims enrollment token after approval (single use via hash lookup). */
+/** New device claims enrollment token (single use via hash rotation). */
 export async function claimEnrollment(code: string) {
   const status = await getEnrollmentByCode(code);
   if (status.status !== "approved") {
@@ -163,20 +201,19 @@ export async function claimEnrollment(code: string) {
   if (row.enrollmentTokenExpires.getTime() < Date.now()) {
     throw Object.assign(new Error("Enrollment token expired"), { statusCode: 400 });
   }
-  // Issue a fresh one-time claim token bound to this request
   const claimToken = randomToken(24);
   await prisma.devicePairingRequest.update({
     where: { id: row.id },
     data: {
       enrollmentTokenHash: hashSecret(claimToken),
-      enrollmentTokenExpires: new Date(Date.now() + 5 * 60 * 1000),
+      enrollmentTokenExpires: new Date(Date.now() + ENROLL_TOKEN_TTL_MS),
     },
   });
   return {
     enrollmentToken: claimToken,
     userId: row.userId,
     requestId: row.id,
-    expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+    expiresAt: new Date(Date.now() + ENROLL_TOKEN_TTL_MS).toISOString(),
   };
 }
 
@@ -216,6 +253,5 @@ export async function completeEnrollment(requestId: string, userId: string) {
 }
 
 export function enrollmentQrPayload(joinUrl: string) {
-  // Clients may render QR from this URL; server does not embed image bytes.
   return { joinUrl, type: "trustid.device_enrollment" as const };
 }

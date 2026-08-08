@@ -19,7 +19,6 @@ import {
   claimEnrollment,
   completeEnrollment,
   createEnrollmentInvite,
-  enrollmentQrPayload,
   getEnrollmentByCode,
   resolveEnrollmentUser,
 } from "../modules/devices/enrollment.js";
@@ -169,11 +168,11 @@ export async function deviceRoutes(app: FastifyInstance) {
   // --- Enrollment (QR / pairing code) ---
 
   app.post("/devices/enrollment", { preHandler: requireSession }, async (req) => {
-    const invite = await createEnrollmentInvite(req.auth!.userId, clientMeta(req));
-    return {
-      ...invite,
-      qr: enrollmentQrPayload(invite.joinUrl),
-    };
+    const invite = await createEnrollmentInvite(req.auth!.userId, {
+      ...clientMeta(req),
+      deviceId: req.auth!.deviceId,
+    });
+    return invite;
   });
 
   app.get("/devices/enrollment/:code", async (req, reply) => {
