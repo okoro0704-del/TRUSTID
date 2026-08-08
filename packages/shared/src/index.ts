@@ -19,6 +19,9 @@ export const DEFAULT_APP_SCOPES: Scope[] = [
   SCOPES.IDENTITY_BASIC,
   SCOPES.IDENTITY_PROFILE,
   SCOPES.IDENTITY_EMAIL,
+  SCOPES.IDENTITY_VERIFICATION_STATUS,
+  SCOPES.IDENTITY_TRUST_LEVEL,
+  SCOPES.IDENTITY_PORTRAIT,
 ];
 
 export const DEVICE_STATUS = {
@@ -142,12 +145,24 @@ export const TRUST_TIERS = {
 
 export type TrustTier = (typeof TRUST_TIERS)[keyof typeof TRUST_TIERS];
 
+/** Filled stars shown in Trust Center and Life OS — equals trust tier (0–3). */
+export const TRUST_STARS_MAX = TRUST_TIERS.TIER_3;
+
 export const TRUST_TIER_LABELS: Record<number, string> = {
   0: "Account created",
   1: "Trusted device",
   2: "Verified identity",
   3: "High assurance",
 };
+
+/** Life OS / apps: filled star count is always the trust tier. */
+export function trustStarsFromTier(tier: number): {
+  stars: number;
+  maxStars: number;
+} {
+  const stars = Math.max(0, Math.min(TRUST_STARS_MAX, Math.floor(tier)));
+  return { stars, maxStars: TRUST_STARS_MAX };
+}
 
 export const SCOPE_LABELS: Record<string, string> = {
   openid: "Sign-in identity",

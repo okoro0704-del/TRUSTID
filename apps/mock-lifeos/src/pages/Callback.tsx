@@ -29,11 +29,7 @@ export function Callback() {
         const tokens = await exchangeCode(code, state);
         const identity = await fetchUserInfo(tokens.access_token);
         sessionStorage.setItem("lifeos.accessToken", tokens.access_token);
-        upsertLifeOsProfile({
-          trustId: identity.trustId ?? identity.sub,
-          profile: identity.profile,
-          contacts: identity.contacts,
-        });
+        upsertLifeOsProfile(identity);
         navigate("/app", { replace: true });
       } catch (e) {
         setError(e instanceof Error ? e.message : "Callback failed");

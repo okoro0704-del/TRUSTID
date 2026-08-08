@@ -39,6 +39,8 @@ describe("Trust Center services", () => {
     const user = await createUser("tier@example.com");
     let trust = await computeTrustLevel(user.id);
     expect(trust.tier).toBe(0);
+    expect(trust.stars).toBe(0);
+    expect(trust.maxStars).toBe(3);
     expect(trust.governmentVerified).toBe(false);
 
     await prisma.device.create({
@@ -46,6 +48,7 @@ describe("Trust Center services", () => {
     });
     trust = await computeTrustLevel(user.id);
     expect(trust.tier).toBe(1);
+    expect(trust.stars).toBe(1);
     expect(trust.label).toMatch(/Trusted device/i);
   });
 

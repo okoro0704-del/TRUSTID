@@ -14,7 +14,7 @@
   --ok: #7cbc8a;
   --font-display: "Newsreader", Georgia, serif;
   --font-body: "Figtree", "Segoe UI", sans-serif;
-  --topbar-h: 64px;
+  --topbar-h: 72px;
   --tabbar-h: 72px;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -136,6 +136,81 @@ select {
   align-items: center;
   gap: 0.7rem;
   min-width: 0;
+}
+
+.app-topbar-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.app-avatar-link {
+  position: relative;
+  flex-shrink: 0;
+  display: block;
+  border-radius: 50%;
+  text-decoration: none;
+}
+
+.app-avatar {
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+  border: 1.5px solid rgba(217, 181, 106, 0.55);
+  background: rgba(243, 240, 232, 0.08);
+}
+
+.app-avatar-fallback {
+  display: grid;
+  place-items: center;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--foam);
+  background:
+    linear-gradient(145deg, rgba(217, 181, 106, 0.95), rgba(23, 128, 122, 0.9));
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.app-avatar-verified {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 50%;
+  background: var(--ok);
+  border: 2px solid rgba(6, 22, 20, 0.95);
+  box-shadow: 0 0 0 1px rgba(124, 188, 138, 0.35);
+}
+
+.app-topbar-stars {
+  line-height: 1;
+  margin-top: 0.05rem;
+}
+
+.trust-stars {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.08rem;
+  letter-spacing: 0.02em;
+}
+
+.trust-star {
+  color: rgba(243, 240, 232, 0.22);
+  font-size: 0.72rem;
+  line-height: 1;
+}
+
+.trust-star.is-filled {
+  color: #e0c078;
+}
+
+.trust-stars-md .trust-star {
+  font-size: 1.05rem;
 }
 
 .app-mark {

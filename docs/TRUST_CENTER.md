@@ -4,12 +4,14 @@ TrustID is an **Identity & Trust Management Platform** for the ecosystem.
 
 ## Trust levels
 
-| Tier | Meaning |
-|------|---------|
-| 0 | Account created |
-| 1 | At least one trusted device / passkey |
-| 2 | Verified identity (future provider) |
-| 3 | High assurance (future) |
+| Tier | Stars | Meaning |
+|------|-------|---------|
+| 0 | ☆☆☆ | Account created |
+| 1 | ★☆☆ | At least one trusted device / passkey |
+| 2 | ★★☆ | Verified identity |
+| 3 | ★★★ | High assurance (future) |
+
+Filled **stars = trust tier**. Trust Center and Life OS both show this same count via `trustLevel.stars` (`identity.trust_level` scope).
 
 Tier 1 **does not** mean government ID verification.
 

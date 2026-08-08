@@ -23,7 +23,9 @@ function redirectUri(): string {
 }
 
 const CLIENT_ID = "lifeos_mock_public";
-const SCOPES = "openid identity.basic identity.profile identity.email";
+/** Include trust_level + portrait so Life OS shows the same stars / verified photo. */
+const SCOPES =
+  "openid identity.basic identity.profile identity.email identity.verification_status identity.trust_level identity.portrait";
 
 function b64url(bytes: ArrayBuffer | Uint8Array) {
   const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
@@ -91,18 +93,46 @@ export async function exchangeCode(code: string, state: string) {
   return data as { access_token: string; scope: string };
 }
 
+export type TrustIdUserInfo = {
+  sub: string;
+  trustId: string;
+  status?: string;
+  profile?: { firstName: string; lastName: string; name: string };
+  contacts?: { type: string; value: string }[];
+  trustLevel?: {
+    tier: number;
+    stars: number;
+    maxStars: number;
+    label: string;
+  };
+  hasVerifiedIdentityPortrait?: boolean;
+  portraitRef?: string | null;
+  portraitVersion?: number;
+};
+
 export async function fetchUserInfo(accessToken: string) {
   const res = await fetch(`${trustIdApiBase()}/oauth/userinfo`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || "userinfo failed");
-  return data as {
-    sub: string;
-    trustId: string;
-    status?: string;
-    profile?: { firstName: string; lastName: string; name: string };
-    contacts?: { type: string; value: string }[];
+  return data as TrustIdUserInfo;
+}
+
+export async function fetchVerifiedPortrait(accessToken: string) {
+  const res = await fetch(`${trustIdApiBase()}/identity/portrait`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (res.status === 404) return null;
+  const data = await res.json();
+  if (!res.ok) return null;
+  const media = data.mediaAccess as
+    | { path: string; token: string; expiresAt: string }
+    | undefined;
+  if (!media) return null;
+  return {
+    url: `${trustIdApiBase()}${media.path}?token=${encodeURIComponent(media.token)}`,
+    expiresAt: media.expiresAt,
   };
 }
 
@@ -110,26 +140,32 @@ export type LifeOsProfile = {
   trustId: string;
   displayName: string;
   email?: string;
+  stars: number;
+  maxStars: number;
+  trustLabel?: string;
+  hasVerifiedPortrait: boolean;
   createdAt: string;
   lastLoginAt: string;
 };
 
 const PROFILE_KEY = "lifeos.localProfile";
 
-export function upsertLifeOsProfile(identity: {
-  trustId: string;
-  profile?: { name?: string } | null;
-  contacts?: { type: string; value: string }[];
-}): LifeOsProfile {
+export function upsertLifeOsProfile(identity: TrustIdUserInfo): LifeOsProfile {
   const existingRaw = localStorage.getItem(PROFILE_KEY);
   const existing = existingRaw ? (JSON.parse(existingRaw) as LifeOsProfile) : null;
   const email = identity.contacts?.find((c) => c.type === "email")?.value;
+  const stars = identity.trustLevel?.stars ?? identity.trustLevel?.tier ?? 0;
+  const maxStars = identity.trustLevel?.maxStars ?? 3;
   const profile: LifeOsProfile = {
-    trustId: identity.trustId,
-    displayName: identity.profile?.name ?? identity.trustId,
+    trustId: identity.trustId ?? identity.sub,
+    displayName: identity.profile?.name ?? identity.trustId ?? identity.sub,
     email,
+    stars,
+    maxStars,
+    trustLabel: identity.trustLevel?.label,
+    hasVerifiedPortrait: Boolean(identity.hasVerifiedIdentityPortrait),
     createdAt:
-      existing?.trustId === identity.trustId
+      existing?.trustId === (identity.trustId ?? identity.sub)
         ? existing.createdAt
         : new Date().toISOString(),
     lastLoginAt: new Date().toISOString(),
@@ -148,3 +184,5 @@ export function getLifeOsProfile(): LifeOsProfile | null {
 export function clearLifeOsSession() {
   localStorage.removeItem("lifeos.session");
 }
+
+export { trustIdApiBase };

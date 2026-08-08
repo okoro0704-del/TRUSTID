@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../../lib/api";
+import { TrustStars } from "../../components/TrustStars";
 
 type Summary = {
   identity: { trustId: string; status: string; name: string | null };
   trust: {
     tier: number;
+    stars: number;
+    maxStars: number;
     label: string;
     trustedDevices: number;
     identityVerification: { status: string };
@@ -65,6 +68,12 @@ export function OverviewPage() {
           </svg>
           <div className="trust-ring-center">
             <span className="trust-ring-tier">T{summary.trust.tier}</span>
+            <TrustStars
+              stars={summary.trust.stars ?? summary.trust.tier}
+              maxStars={summary.trust.maxStars ?? 3}
+              size="md"
+              label={summary.trust.label}
+            />
             <span className="trust-ring-label">{summary.trust.label}</span>
           </div>
         </div>

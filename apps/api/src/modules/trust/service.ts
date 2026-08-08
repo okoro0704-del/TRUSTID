@@ -4,6 +4,7 @@ import {
   TRUST_TIER_LABELS,
   TRUST_TIERS,
   isDeviceCredentialActive,
+  trustStarsFromTier,
 } from "@trustid/shared";
 import { prisma } from "../../db/client.js";
 import { getIdentityVerificationSummary } from "../identity-verification/service.js";
@@ -26,8 +27,13 @@ export async function computeTrustLevel(userId: string) {
   }
   // Tier 3 reserved for future high-assurance providers
 
+  const { stars, maxStars } = trustStarsFromTier(tier);
+
   return {
     tier,
+    /** Same value Life OS displays as filled stars */
+    stars,
+    maxStars,
     label: TRUST_TIER_LABELS[tier] ?? "Unknown",
     trustedDevices: activeDevices,
     identityVerification: verification,

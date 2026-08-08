@@ -1,5 +1,7 @@
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
+import { useTopbarIdentity } from "../lib/useTopbarIdentity";
+import { TrustStars } from "./TrustStars";
 
 const TABS = [
   {
@@ -111,6 +113,7 @@ function titleFor(pathname: string) {
 
 export function TrustCenterLayout() {
   const { identity, logout } = useAuth();
+  const { portraitUrl, trust } = useTopbarIdentity();
   const navigate = useNavigate();
   const location = useLocation();
   const title = titleFor(location.pathname);
@@ -120,18 +123,56 @@ export function TrustCenterLayout() {
     navigate("/");
   }
 
+  const initials =
+    identity?.profile?.name
+      ?.split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((p) => p[0]?.toUpperCase() ?? "")
+      .join("") || "TI";
+
   return (
     <div className="app-frame">
       <div className="app-ambient" aria-hidden="true" />
       <header className="app-topbar">
         <div className="app-topbar-inner">
           <div className="app-topbar-brand">
-            <span className="app-mark" aria-hidden="true" />
-            <div>
+            <NavLink
+              to="/dashboard/identity"
+              className="app-avatar-link"
+              aria-label="Verified identity portrait"
+            >
+              {portraitUrl ? (
+                <img
+                  className="app-avatar"
+                  src={portraitUrl}
+                  alt=""
+                  width={36}
+                  height={36}
+                />
+              ) : (
+                <span className="app-avatar app-avatar-fallback" aria-hidden="true">
+                  {initials}
+                </span>
+              )}
+              {portraitUrl && (
+                <span className="app-avatar-verified" aria-hidden="true" title="Verified portrait" />
+              )}
+            </NavLink>
+            <div className="app-topbar-copy">
               <div className="app-topbar-title">{title}</div>
               <div className="app-topbar-sub">
                 {identity?.trustId ?? "Identity & trust"}
               </div>
+              {trust && (
+                <div className="app-topbar-stars">
+                  <TrustStars
+                    stars={trust.stars}
+                    maxStars={trust.maxStars}
+                    label={`${trust.label} · ${trust.stars} of ${trust.maxStars} stars (Life OS)`}
+                  />
+                </div>
+              )}
             </div>
           </div>
           <div className="app-topbar-actions">
@@ -187,7 +228,8 @@ export function TrustCenterLayout() {
           <div className="app-trust-strip">
             <span className="app-pulse" aria-hidden="true" />
             <span className="app-trust-strip-text">
-              {identity.profile?.name ?? "Trusted identity"} · session active
+              {identity.profile?.name ?? "Trusted identity"}
+              {trust ? ` · ${trust.label}` : ""} · session active
             </span>
           </div>
         )}
