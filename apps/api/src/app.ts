@@ -24,6 +24,33 @@ export async function buildApp() {
     trustProxy: true,
   });
 
+  // Netlify/proxies sometimes forward Content-Type: application/json with an
+  // empty body on POST. Treat that as {} instead of failing the request.
+  app.removeContentTypeParser("application/json");
+  app.addContentTypeParser(
+    "application/json",
+    { parseAs: "string" },
+    (_req, body, done) => {
+      try {
+        const raw =
+          typeof body === "string"
+            ? body
+            : Buffer.isBuffer(body)
+              ? body.toString("utf8")
+              : "";
+        if (!raw.trim()) {
+          done(null, {});
+          return;
+        }
+        done(null, JSON.parse(raw));
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error("Invalid JSON");
+        (error as { statusCode?: number }).statusCode = 400;
+        done(error, undefined);
+      }
+    },
+  );
+
   await app.register(cors, {
     origin: true,
     credentials: true,

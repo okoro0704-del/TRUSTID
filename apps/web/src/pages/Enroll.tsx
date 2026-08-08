@@ -47,7 +47,7 @@ export function EnrollPage() {
     try {
       const claimed = await api<{ enrollmentToken: string }>(
         `/devices/enrollment/${encodeURIComponent(c.trim().toUpperCase())}/claim`,
-        { method: "POST" },
+        { method: "POST", body: "{}" },
       );
       setToken(claimed.enrollmentToken);
       setPhase("passkey");
