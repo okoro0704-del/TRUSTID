@@ -4,6 +4,9 @@ export const SCOPES = {
   IDENTITY_PROFILE: "identity.profile",
   IDENTITY_EMAIL: "identity.email",
   IDENTITY_PHONE: "identity.phone",
+  IDENTITY_VERIFICATION_STATUS: "identity.verification_status",
+  IDENTITY_TRUST_LEVEL: "identity.trust_level",
+  IDENTITY_PORTRAIT: "identity.portrait",
   OFFLINE_ACCESS: "offline_access",
 } as const;
 
@@ -65,11 +68,69 @@ export const WEBAUTHN_PURPOSES = {
 export type WebAuthnPurpose =
   (typeof WEBAUTHN_PURPOSES)[keyof typeof WEBAUTHN_PURPOSES];
 
+/** High-assurance / government-style identity verification ceremony status */
 export const IDENTITY_VERIFICATION_STATUS = {
   NOT_VERIFIED: "not_verified",
   PENDING: "pending",
   VERIFIED: "verified",
   FAILED: "failed",
+  EXPIRED: "expired",
+  REVOKED: "revoked",
+} as const;
+
+export type IdentityVerificationStatus =
+  (typeof IDENTITY_VERIFICATION_STATUS)[keyof typeof IDENTITY_VERIFICATION_STATUS];
+
+/**
+ * Authoritative TrustID identity presentation status.
+ * Name / email / phone / uploaded photo alone never imply VERIFIED.
+ */
+export const IDENTITY_STATUS = {
+  UNVERIFIED: "unverified",
+  PENDING: "pending",
+  VERIFIED: "verified",
+  REVOKED: "revoked",
+  SUSPENDED: "suspended",
+} as const;
+
+export type IdentityStatus =
+  (typeof IDENTITY_STATUS)[keyof typeof IDENTITY_STATUS];
+
+/** Portrait lifecycle — only VERIFIED is a VERIFIED_IDENTITY_PORTRAIT */
+export const PORTRAIT_STATUS = {
+  NONE: "none",
+  USER_UPLOADED: "user_uploaded",
+  PENDING_VERIFICATION: "pending_verification",
+  VERIFIED: "verified",
+  REJECTED: "rejected",
+  REVOKED: "revoked",
+} as const;
+
+export type PortraitStatus =
+  (typeof PORTRAIT_STATUS)[keyof typeof PORTRAIT_STATUS];
+
+export const VERIFICATION_LEVELS = {
+  NONE: "none",
+  CONTACT: "contact",
+  DEVICE: "device",
+  /** Mock / development only — never claim production identity */
+  MOCK: "mock",
+  DOCUMENT: "document",
+  GOVERNMENT: "government",
+  HIGH_ASSURANCE: "high_assurance",
+} as const;
+
+export const IMPERSONATION_REPORT_TYPES = {
+  IDENTITY_IMPERSONATION: "identity_impersonation_report",
+  PORTRAIT_MISUSE: "portrait_misuse_report",
+  IDENTITY_CONFLICT: "identity_conflict",
+} as const;
+
+export const IMPERSONATION_REPORT_STATUS = {
+  OPEN: "open",
+  UNDER_REVIEW: "under_review",
+  RESOLVED: "resolved",
+  DISMISSED: "dismissed",
 } as const;
 
 export const TRUST_TIERS = {
@@ -94,15 +155,31 @@ export const SCOPE_LABELS: Record<string, string> = {
   "identity.profile": "Basic profile (name)",
   "identity.email": "Email address",
   "identity.phone": "Phone number",
-  offline_access: "Stay signed in (refresh)",
-  "wallet.reference": "Wallet reference (future)",
   "identity.verification_status": "Identity verification status",
   "identity.trust_level": "Trust level",
+  "identity.portrait": "Verified identity portrait reference",
+  offline_access: "Stay signed in (refresh)",
+  "wallet.reference": "Wallet reference (future)",
 };
 
 export const AUDIT_EVENTS = {
   IDENTITY_CREATED: "identity.created",
   IDENTITY_VERIFIED: "identity.verified",
+  IDENTITY_VERIFICATION_STARTED: "identity.verification.started",
+  IDENTITY_VERIFICATION_FAILED: "identity.verification.failed",
+  IDENTITY_VERIFICATION_REVOKED: "identity.verification.revoked",
+  IDENTITY_PROFILE_CHANGED: "identity.profile.changed",
+  IDENTITY_SUSPENSION: "identity.suspension",
+  IDENTITY_RECOVERY: "identity.recovery",
+  IDENTITY_IMPERSONATION_REPORTED: "identity.impersonation.reported",
+  PORTRAIT_UPLOADED: "portrait.uploaded",
+  PORTRAIT_VERIFIED: "portrait.verified",
+  PORTRAIT_REJECTED: "portrait.rejected",
+  PORTRAIT_REVOKED: "portrait.revoked",
+  PORTRAIT_CHANGED: "portrait.changed",
+  ASSERTION_ISSUED: "identity.assertion.issued",
+  ASSERTION_VERIFIED: "identity.assertion.verified",
+  ASSERTION_REJECTED: "identity.assertion.rejected",
   DEVICE_REGISTERED: "device.registered",
   DEVICE_REVOKED: "device.revoked",
   DEVICE_RENAMED: "device.renamed",
@@ -175,4 +252,9 @@ export function maskPhone(phone: string): string {
   const digits = phone.replace(/\D/g, "");
   if (digits.length < 4) return "***";
   return `***${digits.slice(-4)}`;
+}
+
+/** True only when portrait status is VERIFIED — never for uploads alone. */
+export function isVerifiedIdentityPortrait(status: string): boolean {
+  return status === PORTRAIT_STATUS.VERIFIED;
 }

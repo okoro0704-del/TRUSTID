@@ -21,6 +21,7 @@
     "@simplewebauthn/server": "^13.1.1",
     "@trustid/shared": "*",
     "fastify": "^5.2.1",
+    "jose": "^6.2.8",
     "prisma": "^6.5.0",
     "tsx": "^4.19.3",
     "zod": "^3.24.2"

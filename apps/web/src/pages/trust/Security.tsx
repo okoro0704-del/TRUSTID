@@ -25,6 +25,7 @@ type IdentityVerification = {
 };
 
 const HUB = [
+  { to: "/dashboard/identity", title: "Verified identity", blurb: "Portrait & verification" },
   { to: "/dashboard/devices", title: "Trusted devices", blurb: "Primary & standard" },
   { to: "/dashboard/approvals", title: "Device approvals", blurb: "Pending requests" },
   { to: "/dashboard/passkeys", title: "Passkeys", blurb: "Credentials on device" },

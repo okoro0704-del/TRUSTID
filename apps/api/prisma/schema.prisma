@@ -31,6 +31,12 @@ model User {
   accountPreferences      AccountPreferences?
   deviceApprovalRequests  DeviceApprovalRequest[]
   securityNotifications   SecurityNotification[]
+  verifiedIdentityProfile VerifiedIdentityProfile?
+  identityPortraits       IdentityPortrait[]
+  identityMediaObjects    IdentityMediaObject[]
+  impersonationReportsFiled ImpersonationReport[] @relation("ImpersonationReporter")
+  impersonationReportsAbout ImpersonationReport[] @relation("ImpersonationSubject")
+  assertionJtIs           AssertionJti[]
 
   @@map("users")
 }
@@ -402,25 +408,171 @@ model WebAuthnChallenge {
   @@map("webauthn_challenges")
 }
 
-/// Future high-assurance identity verification (e.g. NIBSS/BVN).
-/// No biometric templates. Not created until a provider is actually used.
+/// Future / current high-assurance identity verification ceremonies.
+/// No biometric templates. Status must never be inferred from name/photo alone.
 model IdentityVerification {
   id                   String    @id @default(cuid())
   userId               String    @map("user_id")
   provider             String
   method               String
+  /// pending | verified | failed | expired | revoked | not_verified
   status               String    @default("not_verified")
   providerReference    String?   @map("provider_reference")
   verificationCodeHash String?   @map("verification_code_hash")
   verificationHash     String?   @map("verification_hash")
+  /// Linked portrait under review (optional)
+  portraitId           String?   @map("portrait_id")
+  /// Explicitly false unless a real provider completed verification
+  isMock               Boolean   @default(false) @map("is_mock")
   verifiedAt           DateTime? @map("verified_at")
+  expiresAt            DateTime? @map("expires_at")
+  revokedAt            DateTime? @map("revoked_at")
   metadata             String    @default("{}")
   createdAt            DateTime  @default(now()) @map("created_at")
   updatedAt            DateTime  @updatedAt @map("updated_at")
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  portrait IdentityPortrait? @relation(fields: [portraitId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([provider, status])
   @@map("identity_verifications")
+}
+
+/**
+ * Authoritative TrustID verified identity presentation profile.
+ * Owned by TrustID — applications consume assertions; they do not redefine this.
+ */
+model VerifiedIdentityProfile {
+  id                 String    @id @default(cuid())
+  userId             String    @unique @map("user_id")
+  trustId            String    @unique @map("trust_id")
+  displayName        String    @map("display_name")
+  /// unverified | pending | verified | revoked | suspended
+  identityStatus     String    @default("unverified") @map("identity_status")
+  /// none | contact | device | mock | document | government | high_assurance
+  verificationLevel  String    @default("none") @map("verification_level")
+  verificationMethod String?   @map("verification_method")
+  identityPortraitId String?   @map("identity_portrait_id")
+  portraitVersion    Int       @default(0) @map("portrait_version")
+  profileVersion     Int       @default(1) @map("profile_version")
+  /// active | revoked | suspended
+  status             String    @default("active")
+  issuedAt           DateTime? @map("issued_at")
+  revokedAt          DateTime? @map("revoked_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  identityPortrait IdentityPortrait? @relation("CurrentVerifiedPortrait", fields: [identityPortraitId], references: [id], onDelete: SetNull)
+
+  @@map("verified_identity_profiles")
+}
+
+/**
+ * Identity portrait lifecycle. Only status=verified is a VERIFIED_IDENTITY_PORTRAIT.
+ * User uploads are never automatically verified.
+ */
+model IdentityPortrait {
+  id              String    @id @default(cuid())
+  userId          String    @map("user_id")
+  mediaObjectId   String    @map("media_object_id")
+  /// none | user_uploaded | pending_verification | verified | rejected | revoked
+  status          String    @default("user_uploaded")
+  version         Int       @default(1)
+  /// SHA-256 of bytes — used for misuse detection, NEVER as identity proof
+  contentHash     String    @map("content_hash")
+  mimeType        String    @map("mime_type")
+  byteSize        Int       @map("byte_size")
+  rejectionReason String?   @map("rejection_reason")
+  verifiedAt      DateTime? @map("verified_at")
+  revokedAt       DateTime? @map("revoked_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  user          User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mediaObject   IdentityMediaObject    @relation(fields: [mediaObjectId], references: [id], onDelete: Restrict)
+  verifications IdentityVerification[]
+  currentFor    VerifiedIdentityProfile[] @relation("CurrentVerifiedPortrait")
+
+  @@index([userId, status])
+  @@index([contentHash])
+  @@map("identity_portraits")
+}
+
+/** Private media metadata — bytes live in access-controlled storage, not public buckets. */
+model IdentityMediaObject {
+  id          String    @id @default(cuid())
+  userId      String    @map("user_id")
+  storageKey  String    @unique @map("storage_key")
+  mimeType    String    @map("mime_type")
+  byteSize    Int       @map("byte_size")
+  contentHash String    @map("content_hash")
+  purpose     String    @default("identity_portrait")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  deletedAt   DateTime? @map("deleted_at")
+
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  portraits IdentityPortrait[]
+
+  @@index([userId])
+  @@map("identity_media_objects")
+}
+
+/** Suspected impersonation / portrait misuse — never auto-merges accounts. */
+model ImpersonationReport {
+  id              String    @id @default(cuid())
+  reporterUserId  String    @map("reporter_user_id")
+  subjectUserId   String?   @map("subject_user_id")
+  subjectTrustId  String?   @map("subject_trust_id")
+  /// identity_impersonation_report | portrait_misuse_report | identity_conflict
+  type            String
+  /// open | under_review | resolved | dismissed
+  status          String    @default("open")
+  reason          String
+  evidenceNote    String?   @map("evidence_note")
+  metadata        String    @default("{}")
+  resolvedAt      DateTime? @map("resolved_at")
+  resolutionNote  String?   @map("resolution_note")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  reporter User  @relation("ImpersonationReporter", fields: [reporterUserId], references: [id], onDelete: Cascade)
+  subject  User? @relation("ImpersonationSubject", fields: [subjectUserId], references: [id], onDelete: SetNull)
+
+  @@index([reporterUserId])
+  @@index([subjectUserId])
+  @@index([status])
+  @@map("impersonation_reports")
+}
+
+/** Replay protection for signed identity assertions (jti single-use / tracked). */
+model AssertionJti {
+  id        String    @id @default(cuid())
+  jti       String    @unique
+  userId    String    @map("user_id")
+  audience  String
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("assertion_jtis")
+}
+
+/** JWKS signing keys for identity assertions (rotate by adding active keys). */
+model AssertionSigningKey {
+  id        String    @id @default(cuid())
+  kid       String    @unique
+  /// JWK JSON (private key material — never expose via userinfo)
+  privateJwk String   @map("private_jwk")
+  publicJwk String    @map("public_jwk")
+  algorithm String    @default("EdDSA")
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now()) @map("created_at")
+  retiredAt DateTime? @map("retired_at")
+
+  @@map("assertion_signing_keys")
 }

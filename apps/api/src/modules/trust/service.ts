@@ -31,9 +31,10 @@ export async function computeTrustLevel(userId: string) {
     label: TRUST_TIER_LABELS[tier] ?? "Unknown",
     trustedDevices: activeDevices,
     identityVerification: verification,
-    /** True only when a real verification provider marked the account verified */
+    /** True only for non-mock verified ceremonies */
     governmentVerified:
-      verification.status === IDENTITY_VERIFICATION_STATUS.VERIFIED,
+      verification.status === IDENTITY_VERIFICATION_STATUS.VERIFIED &&
+      !verification.isMock,
   };
 }
 

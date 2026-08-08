@@ -4,19 +4,24 @@ export type IdentityVerificationStatus =
   (typeof IDENTITY_VERIFICATION_STATUS)[keyof typeof IDENTITY_VERIFICATION_STATUS];
 
 /**
- * Abstraction for future high-assurance identity verification providers
- * (e.g. NIBSS/BVN). Device authentication MUST NOT depend on this.
+ * Abstraction for high-assurance identity verification providers
+ * (document, government ID, selfie/liveness via trusted vendor, manual review).
  *
- * Implementations must never accept or return biometric templates,
- * fingerprints, face images, or Secure Enclave private keys.
+ * Device passkey authentication MUST NOT depend on this.
+ *
+ * Implementations must NEVER expose to consuming applications:
+ *   - face embeddings
+ *   - biometric templates
+ *   - raw biometric comparison data
+ *   - biometric hashes
+ *   - liveness signals
+ *
+ * Portrait image bytes stay inside TrustID private media; apps receive
+ * signed assertions + access-controlled portrait references only.
  */
 export interface IdentityVerificationProvider {
   readonly name: string;
 
-  /**
-   * Start a verification ceremony for a TrustID user.
-   * V1 providers may throw "not implemented".
-   */
   beginVerification(input: {
     userId: string;
     trustId: string;
@@ -28,9 +33,6 @@ export interface IdentityVerificationProvider {
     providerReference?: string;
   }>;
 
-  /**
-   * Complete or poll a verification. Must not fabricate success.
-   */
   completeVerification(input: {
     userId: string;
     verificationId: string;

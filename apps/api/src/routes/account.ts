@@ -95,16 +95,23 @@ export async function accountRoutes(app: FastifyInstance) {
     const { getIdentityVerificationSummary } = await import(
       "../modules/identity-verification/service.js"
     );
+    const { getVerifiedIdentityProfileView } = await import(
+      "../modules/verified-identity/profile.js"
+    );
     const summary = await getIdentityVerificationSummary(req.auth!.userId);
+    const vip = await getVerifiedIdentityProfileView(req.auth!.userId);
     return {
-      status: summary.status === "verified" ? "Verified" : "Not Verified",
+      status: vip.isVerifiedIdentity ? "Verified" : "Not Verified",
       statusCode: summary.status,
-      verificationLevel: "Tier 1",
-      futureProvider: "Coming Soon",
+      identityStatus: vip.identityStatus,
+      verificationLevel: vip.verificationLevel,
+      hasVerifiedIdentityPortrait: vip.hasVerifiedIdentityPortrait,
+      isMock: summary.isMock,
+      futureProvider: summary.isMock ? "Mock (dev only)" : "Provider configurable",
       provider: summary.provider,
       method: summary.method,
       verifiedAt: summary.verifiedAt,
-      note: "Government identity verification is not enabled. Passkeys prove device control only.",
+      note: vip.disclaimer,
     };
   });
 }

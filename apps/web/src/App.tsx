@@ -21,6 +21,7 @@ import { SessionsPage } from "./pages/trust/Sessions";
 import { PasskeysPage } from "./pages/trust/Passkeys";
 import { SecurityPage } from "./pages/trust/Security";
 import { AccountPage } from "./pages/trust/Account";
+import { IdentityPage } from "./pages/trust/Identity";
 
 function Guard({ children }: { children: React.ReactNode }) {
   const { loading, identity } = useAuth();
@@ -66,6 +67,7 @@ export function App() {
         <Route path="sessions" element={<SessionsPage />} />
         <Route path="passkeys" element={<PasskeysPage />} />
         <Route path="security" element={<SecurityPage />} />
+        <Route path="identity" element={<IdentityPage />} />
         <Route path="account" element={<AccountPage />} />
       </Route>
     </Routes>

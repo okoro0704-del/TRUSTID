@@ -7,6 +7,7 @@ export type AuthUser = {
   userId: string;
   sessionId?: string;
   deviceId?: string | null;
+  applicationId?: string;
   trustId?: string;
   scopes?: string[];
   via: "session" | "bearer";
@@ -85,6 +86,7 @@ export async function requireAuth(req: FastifyRequest, reply: FastifyReply) {
     }
     req.auth = {
       userId: access.userId,
+      applicationId: access.applicationId,
       trustId: access.trustId,
       scopes: access.scopes,
       via: "bearer",

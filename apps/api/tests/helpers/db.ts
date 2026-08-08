@@ -19,9 +19,16 @@ export function setupTestDatabase() {
   process.env.WEBAUTHN_RP_ID = "localhost";
   process.env.WEBAUTHN_RP_NAME = "TrustID";
   process.env.WEBAUTHN_ORIGIN = "http://localhost:5173";
+  process.env.IDENTITY_VERIFICATION_MODE = "mock";
+  process.env.ASSERTION_ISSUER = "http://localhost:5173";
+  process.env.TRUSTID_MEDIA_ROOT = path.join(apiRoot, "data", "test-media");
 
   for (const p of [testDbPath, `${testDbPath}-journal`, `${testDbPath}-wal`, `${testDbPath}-shm`]) {
-    if (fs.existsSync(p)) fs.unlinkSync(p);
+    try {
+      if (fs.existsSync(p)) fs.unlinkSync(p);
+    } catch {
+      // Windows may briefly lock the file between vitest workers; db push recreates.
+    }
   }
 
   const repoRoot = path.resolve(apiRoot, "../..");
@@ -45,6 +52,13 @@ export function setupTestDatabase() {
 export async function resetTables(prisma: PrismaClient) {
   await prisma.auditEvent.deleteMany();
   await prisma.securityNotification.deleteMany();
+  await prisma.assertionJti.deleteMany();
+  await prisma.assertionSigningKey.deleteMany();
+  await prisma.impersonationReport.deleteMany();
+  await prisma.identityVerification.deleteMany();
+  await prisma.verifiedIdentityProfile.deleteMany();
+  await prisma.identityPortrait.deleteMany();
+  await prisma.identityMediaObject.deleteMany();
   await prisma.webAuthnChallenge.deleteMany();
   await prisma.oAuthAccessToken.deleteMany();
   await prisma.oAuthRefreshToken.deleteMany();
@@ -56,7 +70,6 @@ export async function resetTables(prisma: PrismaClient) {
   await prisma.deviceApprovalRequest.deleteMany();
   await prisma.devicePairingRequest.deleteMany();
   await prisma.device.deleteMany();
-  await prisma.identityVerification.deleteMany();
   await prisma.accountPreferences.deleteMany();
   await prisma.verificationChallenge.deleteMany();
   await prisma.recoveryMethod.deleteMany();

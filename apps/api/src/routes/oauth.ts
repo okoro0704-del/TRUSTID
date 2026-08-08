@@ -85,8 +85,12 @@ export async function oauthRoutes(app: FastifyInstance) {
         "identity.profile",
         "identity.email",
         "identity.phone",
+        "identity.verification_status",
+        "identity.trust_level",
+        "identity.portrait",
         "offline_access",
       ],
+      jwks_uri: `${issuer}/.well-known/jwks.json`,
       token_endpoint_auth_methods_supported: ["none", "client_secret_post"],
     };
   });

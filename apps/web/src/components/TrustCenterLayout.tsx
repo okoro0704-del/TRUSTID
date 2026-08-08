@@ -100,6 +100,7 @@ const TITLES: Record<string, string> = {
   "/dashboard/passkeys": "Passkeys",
   "/dashboard/notifications": "Alerts",
   "/dashboard/security": "Security",
+  "/dashboard/identity": "Identity",
   "/dashboard/account": "Account",
 };
 

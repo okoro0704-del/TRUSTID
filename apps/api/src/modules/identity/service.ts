@@ -1,6 +1,7 @@
-import { maskEmail, maskPhone, SCOPES } from "@trustid/shared";
+import { maskEmail, maskPhone, PORTRAIT_STATUS, SCOPES } from "@trustid/shared";
 import { prisma } from "../../db/client.js";
 import { getIdentityVerificationSummary } from "../identity-verification/service.js";
+import { getVerifiedIdentityProfileView } from "../verified-identity/profile.js";
 
 export async function getIdentityForUser(
   userId: string,
@@ -56,6 +57,33 @@ export async function getIdentityForUser(
     if (contacts.length) result.contacts = contacts;
   }
 
+  if (allow(SCOPES.IDENTITY_VERIFICATION_STATUS) || !scopes) {
+    const vip = await getVerifiedIdentityProfileView(userId);
+    result.identityStatus = vip.identityStatus;
+    result.verificationLevel = vip.verificationLevel;
+    result.isVerifiedIdentity = vip.isVerifiedIdentity;
+    result.profileVersion = vip.profileVersion;
+  }
+
+  if (allow(SCOPES.IDENTITY_TRUST_LEVEL) || !scopes) {
+    const { computeTrustLevel } = await import("../trust/service.js");
+    result.trustLevel = await computeTrustLevel(userId);
+  }
+
+  if (allow(SCOPES.IDENTITY_PORTRAIT) || !scopes) {
+    const vip = await getVerifiedIdentityProfileView(userId);
+    result.portraitRef = vip.hasVerifiedIdentityPortrait
+      ? vip.identityPortraitRef
+      : null;
+    result.portraitVersion = vip.hasVerifiedIdentityPortrait
+      ? vip.portraitVersion
+      : 0;
+    result.hasVerifiedIdentityPortrait = vip.hasVerifiedIdentityPortrait;
+    result.portraitStatus = vip.hasVerifiedIdentityPortrait
+      ? PORTRAIT_STATUS.VERIFIED
+      : PORTRAIT_STATUS.NONE;
+  }
+
   return result;
 }
 
@@ -69,6 +97,7 @@ export async function getDashboardIdentity(userId: string) {
   });
   if (!user) return null;
   const identityVerification = await getIdentityVerificationSummary(userId);
+  const verifiedIdentity = await getVerifiedIdentityProfileView(userId);
   return {
     trustId: user.trustId,
     status: user.status,
@@ -85,8 +114,8 @@ export async function getDashboardIdentity(userId: string) {
       verified: Boolean(c.verifiedAt),
       primary: c.isPrimary,
     })),
-    /** Separate from device credential trust — not BVN/NIBSS verified. */
     identityVerification,
+    verifiedIdentity,
     createdAt: user.createdAt.toISOString(),
   };
 }

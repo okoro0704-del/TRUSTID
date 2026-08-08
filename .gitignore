@@ -17,4 +17,5 @@ apps/api/prisma/template.db-shm
 *.log
 .vite
 dev-dist
-*.tsbuildinfo
+apps/api/data/
+apps/api/prisma/media/
