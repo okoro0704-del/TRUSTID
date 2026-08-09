@@ -54,9 +54,35 @@ async function main() {
     },
   });
 
+  const lidiosClientId = "TOKEN_NETWORK";
+  const lidiosRedirects = [
+    "http://localhost:4100/auth/trustid/return",
+    "http://localhost:4100/wallet/trustid-return.html",
+  ];
+  await prisma.application.upsert({
+    where: { clientId: lidiosClientId },
+    update: {
+      name: "LIDIOS TOKEN",
+      redirectUris: JSON.stringify(lidiosRedirects),
+      allowedScopes: JSON.stringify(DEFAULT_APP_SCOPES),
+      status: "active",
+      type: "public",
+    },
+    create: {
+      name: "LIDIOS TOKEN",
+      clientId: lidiosClientId,
+      type: "public",
+      redirectUris: JSON.stringify(lidiosRedirects),
+      allowedScopes: JSON.stringify(DEFAULT_APP_SCOPES),
+      status: "active",
+    },
+  });
+
   console.log("Seeded applications:");
   console.log("  LifeOS client_id:", lifeosClientId);
   console.log("  Digiconomy client_id:", digiconomyClientId, "(placeholder — not connected in V1)");
+  console.log("  LIDIOS TOKEN client_id:", lidiosClientId);
+  console.log("  LIDIOS redirect URIs:", lidiosRedirects.join(", "));
   console.log("  (dev secret helper unused)", hash(randomBytes(8).toString("hex")).slice(0, 8));
 }
 
