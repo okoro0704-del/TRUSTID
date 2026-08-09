@@ -58,8 +58,10 @@ async function main() {
   const lidiosRedirects = [
     "http://localhost:4100/auth/trustid/return",
     "http://localhost:4100/wallet/trustid-return.html",
+    // Production LIDIOS API (Railway)
+    "https://token-network-production.up.railway.app/auth/trustid/return",
   ];
-  // Production LIDIOS API (Railway) — set on Trust ID Railway service
+  // Extra redirects from Trust ID Railway env (optional)
   const lidiosProd =
     process.env.LIDIOS_OAUTH_REDIRECT_URI?.trim() ||
     process.env.LIDIOS_API_PUBLIC_URL?.trim();
