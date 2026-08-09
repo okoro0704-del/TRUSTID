@@ -59,6 +59,21 @@ async function main() {
     "http://localhost:4100/auth/trustid/return",
     "http://localhost:4100/wallet/trustid-return.html",
   ];
+  // Production LIDIOS API (Railway) — set on Trust ID Railway service
+  const lidiosProd =
+    process.env.LIDIOS_OAUTH_REDIRECT_URI?.trim() ||
+    process.env.LIDIOS_API_PUBLIC_URL?.trim();
+  if (lidiosProd) {
+    const base = lidiosProd.replace(/\/$/, "");
+    const returnUri = base.endsWith("/auth/trustid/return")
+      ? base
+      : `${base}/auth/trustid/return`;
+    if (!lidiosRedirects.includes(returnUri)) lidiosRedirects.push(returnUri);
+  }
+  for (const part of (process.env.LIDIOS_OAUTH_REDIRECT_URIS ?? "").split(",")) {
+    const u = part.trim();
+    if (u && !lidiosRedirects.includes(u)) lidiosRedirects.push(u);
+  }
   await prisma.application.upsert({
     where: { clientId: lidiosClientId },
     update: {
