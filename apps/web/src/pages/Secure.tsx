@@ -4,6 +4,7 @@ import { startRegistration } from "@simplewebauthn/browser";
 import { api, setSessionToken } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { saveRememberedAccount } from "../lib/rememberedAccount";
+import { getOrCreateInstallId, markLocalOccupancy } from "../lib/deviceInstall";
 import { AuthChrome } from "../components/AuthChrome";
 
 type Onboarding = {
@@ -14,6 +15,7 @@ type Onboarding = {
   lastName?: string;
   email?: string;
   phone?: string;
+  installId?: string;
 };
 
 type PublicKeyCredentialCreationOptionsJSON = Parameters<
@@ -85,6 +87,8 @@ export function SecurePage() {
       const response = await startRegistration({ optionsJSON: options });
       optionsRef.current = null;
       setStatus("Verifying…");
+      const installId =
+        onboarding!.installId?.trim() || (await getOrCreateInstallId());
       const verifyResult = await api<{
         sessionToken?: string;
         identity?: import("../lib/auth").Identity;
@@ -93,6 +97,7 @@ export function SecurePage() {
         body: JSON.stringify({
           userId: onboarding!.userId,
           deviceName: deviceName || undefined,
+          installId,
           response,
           presentation: {
             firstName: onboarding!.firstName,
@@ -105,11 +110,13 @@ export function SecurePage() {
       if (verifyResult.sessionToken) setSessionToken(verifyResult.sessionToken);
       if (verifyResult.identity) setIdentity(verifyResult.identity);
 
+      const trustId = onboarding!.trustId || verifyResult.identity?.trustId || "";
       saveRememberedAccount({
-        trustId: onboarding!.trustId || verifyResult.identity?.trustId || "",
-        displayName: onboarding!.trustId || verifyResult.identity?.trustId,
+        trustId,
+        displayName: trustId,
         deviceName: deviceName.trim() || undefined,
       });
+      if (trustId) markLocalOccupancy(trustId);
 
       sessionStorage.removeItem("trustid.onboarding");
       navigate("/secured", {

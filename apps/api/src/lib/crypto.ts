@@ -92,6 +92,15 @@ export function contactLookupHash(type: string, value: string): string {
     .digest("hex");
 }
 
+/** Peppered hash of a client-generated device install UUID (one TrustID per phone). */
+export function installLookupHash(installId: string): string {
+  const id = installId.trim();
+  if (!id) throw new Error("installId required");
+  return createHmac("sha256", pepperKey("device-install"))
+    .update(id)
+    .digest("hex");
+}
+
 /** Blind commitment for ZK uniqueness proofs. */
 export function commitContact(type: string, value: string, salt?: string): {
   lookupHash: string;

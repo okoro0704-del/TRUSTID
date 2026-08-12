@@ -112,6 +112,7 @@ describe("Trusted device credential flows", () => {
     } as never);
 
     const result = await verifyRegistration({
+      installId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
       userId: user.id,
       deviceName: "iPhone",
       response: {
@@ -152,6 +153,7 @@ describe("Trusted device credential flows", () => {
     const user = await createUser("badchal@example.com");
     await expect(
       verifyRegistration({
+        installId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         userId: user.id,
         response: {
           id: "x",
@@ -178,6 +180,7 @@ describe("Trusted device credential flows", () => {
     });
     await expect(
       verifyRegistration({
+        installId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         userId: user.id,
         response: {
           id: "x",
@@ -206,6 +209,7 @@ describe("Trusted device credential flows", () => {
     );
     await expect(
       verifyRegistration({
+        installId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         userId: user.id,
         response: {
           id: "x",
@@ -262,6 +266,7 @@ describe("Trusted device credential flows", () => {
 
     await expect(
       verifyRegistration({
+        installId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
         userId: userB.id,
         response: {
           id: "shared-cred",
@@ -451,6 +456,7 @@ describe("Trusted device credential flows", () => {
       },
     } as never);
     const reg = await verifyRegistration({
+      installId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
       userId: user.id,
       deviceName: "Android",
       response: {

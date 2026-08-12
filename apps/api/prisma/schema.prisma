@@ -41,6 +41,7 @@ model User {
   syncEnvelopes           DeviceSyncEnvelope[]
   guardianCircles         RecoveryGuardianCircle[]
   recoverySessions        RecoverySession[]
+  deviceInstalls          DeviceInstall[]
 
   @@map("users")
 }
@@ -727,4 +728,19 @@ model RecoverySession {
   @@index([userId])
   @@index([expiresAt])
   @@map("recovery_sessions")
+}
+
+/// One TrustID occupancy per browser/app install (client UUID, hashed at rest).
+model DeviceInstall {
+  id          String   @id @default(cuid())
+  /// Peppered HMAC of client installId
+  installHash String   @unique @map("install_hash")
+  userId      String   @map("user_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("device_installs")
 }

@@ -26,6 +26,10 @@ import {
   storeWebAuthnChallenge,
 } from "./challenges.js";
 import { evaluateSignatureCounter } from "./counter.js";
+import {
+  assertInstallAvailableForNewTrustId,
+  bindInstallToUser,
+} from "./device-install.js";
 
 function parseTransports(raw: string): AuthenticatorTransportFuture[] | undefined {
   try {
@@ -195,6 +199,8 @@ export async function verifyRegistration(input: {
   userId: string;
   response: RegistrationResponseJSON;
   deviceName?: string;
+  /** Client install UUID — required for first TrustID registration (one per phone). */
+  installId?: string;
   ip?: string;
   userAgent?: string;
   /** When true, skip creating a new TrustID session (already authenticated add-device). */
@@ -210,6 +216,14 @@ export async function verifyRegistration(input: {
   };
 }) {
   const purpose = input.purpose ?? WEBAUTHN_PURPOSES.REGISTRATION;
+  if (purpose === WEBAUTHN_PURPOSES.REGISTRATION) {
+    if (!input.installId?.trim()) {
+      throw Object.assign(new Error("A valid device install id is required"), {
+        statusCode: 400,
+      });
+    }
+    await assertInstallAvailableForNewTrustId(input.installId);
+  }
   const clientChallenge = extractClientChallenge(input.response.response.clientDataJSON);
   if (!clientChallenge) {
     await failRegistration(input.userId, "missing_client_challenge", input);
@@ -386,6 +400,10 @@ export async function verifyRegistration(input: {
     where: { id: input.userId },
     data: { status: "active" },
   });
+
+  if (input.installId?.trim()) {
+    await bindInstallToUser(input.installId, input.userId);
+  }
 
   await recordAudit({
     type: AUDIT_EVENTS.DEVICE_REGISTRATION_COMPLETED,

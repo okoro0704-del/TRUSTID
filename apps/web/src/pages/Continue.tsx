@@ -11,6 +11,11 @@ import {
   type RememberedAccount,
 } from "../lib/rememberedAccount";
 import {
+  clearLocalOccupancy,
+  markLocalOccupancy,
+  resetPhoneTrustBinding,
+} from "../lib/deviceInstall";
+import {
   createLoginOptionsCache,
   runPasskeyLogin,
 } from "../lib/passkeyAuth";
@@ -117,12 +122,14 @@ export function ContinuePage() {
             result.identity,
             deviceName.trim() || getRememberedAccount()?.deviceName,
           );
+          markLocalOccupancy(result.identity.trustId);
         } else if (hints.trustId) {
           saveRememberedAccount({
             trustId: hints.trustId,
             displayName: hints.trustId,
             deviceName: deviceName.trim() || getRememberedAccount()?.deviceName,
           });
+          markLocalOccupancy(hints.trustId);
         }
         navigate(consumeReturnTo() ?? "/dashboard", { replace: true });
       } catch (err) {
@@ -136,12 +143,14 @@ export function ContinuePage() {
         const unknownCred = /unknown credential/i.test(message);
         if (unknownCred) {
           // Server wipe / rotated RP: device still has a passkey TrustID no longer knows.
+          resetPhoneTrustBinding();
           clearRememberedAccount();
+          clearLocalOccupancy();
           optionsCache.current.invalidate();
           setRemembered(null);
           setSwitchAccount(true);
           setError(
-            "This passkey is no longer registered on TrustID. Create a new TrustID, then sign in again. You can delete the old passkey in your device settings.",
+            "This phone’s old passkey is gone from TrustID. Create TrustID again on this phone. You can delete the old passkey for trustedid.netlify.app in your device settings.",
           );
           return;
         }
@@ -188,7 +197,12 @@ export function ContinuePage() {
     });
   }
 
-  function onSwitchAccount() {
+  function onResetPhoneBinding() {
+    const ok = window.confirm(
+      "Reset this phone’s TrustID binding?\n\nThis unlocks Create TrustID on this phone after a server wipe. If your account still exists, sign in with your passkey instead.\n\nAlso delete the old trustedid.netlify.app passkey in your device settings if Face ID keeps offering it.",
+    );
+    if (!ok) return;
+    resetPhoneTrustBinding();
     clearRememberedAccount();
     optionsCache.current.invalidate();
     setRemembered(null);
@@ -196,7 +210,9 @@ export function ContinuePage() {
     setEmail("");
     setPhone("");
     setDeviceName("");
-    setError(null);
+    setError(
+      "Phone binding cleared. If TrustID still has your account, use your passkey below. Otherwise Create TrustID.",
+    );
   }
 
   async function onRequestApproval(e?: FormEvent) {
@@ -300,12 +316,16 @@ export function ContinuePage() {
           <button
             className="btn btn-ghost continue-switch"
             type="button"
-            onClick={onSwitchAccount}
+            onClick={onResetPhoneBinding}
             style={{ width: "100%", marginTop: "0.65rem" }}
           >
-            Log into another Account
+            Reset this phone’s TrustID binding
           </button>
           <p className="muted" style={{ marginTop: "0.85rem", textAlign: "center" }}>
+            <Link to="/register" style={{ color: "inherit" }}>
+              Create TrustID
+            </Link>
+            {" · "}
             <Link to="/enroll" style={{ color: "inherit" }}>
               I have a device code
             </Link>
@@ -368,9 +388,9 @@ export function ContinuePage() {
               className="btn btn-ghost continue-switch"
               type="button"
               disabled={busy}
-              onClick={onSwitchAccount}
+              onClick={onResetPhoneBinding}
             >
-              Log into another Account
+              Reset this phone’s TrustID binding
             </button>
             <button
               className="btn btn-ghost"

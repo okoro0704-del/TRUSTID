@@ -14,6 +14,10 @@ import {
   verifyLogin,
   verifyRegistration,
 } from "../modules/authentication/webauthn.js";
+import {
+  assertInstallAvailableForNewTrustId,
+  getInstallOccupancy,
+} from "../modules/authentication/device-install.js";
 import { getDashboardIdentity } from "../modules/identity/service.js";
 import { resolveSession, revokeSession } from "../modules/sessions/service.js";
 
@@ -34,6 +38,16 @@ function sessionBody(token: string | undefined) {
 }
 
 export async function authRoutes(app: FastifyInstance) {
+  app.post("/auth/install-status", async (req, reply) => {
+    const body = z.object({ installId: z.string().min(1).max(80) }).parse(req.body);
+    try {
+      const occ = await getInstallOccupancy(body.installId);
+      return { occupied: occ.occupied };
+    } catch (err) {
+      return httpError(err, reply);
+    }
+  });
+
   app.post("/auth/register", async (req, reply) => {
     const body = z
       .object({
@@ -41,9 +55,13 @@ export async function authRoutes(app: FastifyInstance) {
         lastName: z.string().min(1).max(100),
         email: z.string().email().optional(),
         phone: z.string().min(7).max(32).optional(),
+        installId: z.string().min(1).max(80).optional(),
       })
       .parse(req.body);
     try {
+      if (body.installId) {
+        await assertInstallAvailableForNewTrustId(body.installId);
+      }
       const result = await registerIdentity({ ...body, ...clientMeta(req) });
       // Strip internal ephemeral from wire unless needed by client for session seal later
       const { _ephemeral, ...publicResult } = result;
@@ -85,6 +103,7 @@ export async function authRoutes(app: FastifyInstance) {
       .object({
         userId: z.string().min(1),
         deviceName: z.string().max(100).optional(),
+        installId: z.string().min(1).max(80),
         response: z.any(),
         presentation: z
           .object({
@@ -101,6 +120,7 @@ export async function authRoutes(app: FastifyInstance) {
         userId: body.userId,
         response: body.response,
         deviceName: body.deviceName,
+        installId: body.installId,
         presentation: body.presentation
           ? {
               ...body.presentation,

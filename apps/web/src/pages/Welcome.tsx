@@ -3,11 +3,13 @@ import { useRef } from "react";
 import { useAuth } from "../lib/auth";
 import { consumeReturnTo, peekReturnTo } from "../lib/returnTo";
 import { getRememberedAccount } from "../lib/rememberedAccount";
+import { getLocalOccupancy } from "../lib/deviceInstall";
 
 export function WelcomePage() {
   const { loading, identity } = useAuth();
   const resumeTo = useRef<string | null>(null);
   const remembered = getRememberedAccount();
+  const occupied = Boolean(getLocalOccupancy()?.trustId || remembered?.trustId);
 
   if (!loading && identity) {
     if (resumeTo.current === null) {
@@ -16,7 +18,7 @@ export function WelcomePage() {
     return <Navigate to={resumeTo.current} replace />;
   }
 
-  if (!loading && !identity && remembered) {
+  if (!loading && !identity && occupied) {
     return <Navigate to="/continue" replace />;
   }
 
@@ -32,7 +34,7 @@ export function WelcomePage() {
         <h1 className="hero-brand splash-brand">TrustID</h1>
         <p className="hero-tag splash-tag">
           The identity layer for LifeOS and your ecosystem — passkeys, devices,
-          and trust decisions in one place.
+          and trust decisions in one place. One TrustID per phone.
         </p>
         {peekReturnTo() && (
           <p className="notice">Sign in to continue authorizing the application.</p>

@@ -1,12 +1,32 @@
-import { FormEvent, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { FormEvent, useEffect, useState } from "react";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { AuthChrome } from "../components/AuthChrome";
+import { gateCreateTrustId } from "../lib/deviceGate";
+import { getOrCreateInstallId } from "../lib/deviceInstall";
 
 export function RegisterPage() {
   const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [gate, setGate] = useState<"checking" | "allow" | "blocked">("checking");
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const result = await gateCreateTrustId();
+      if (cancelled) return;
+      if (result.action === "continue") {
+        setGate("blocked");
+        navigate("/continue", { replace: true });
+        return;
+      }
+      setGate("allow");
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [navigate]);
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -21,6 +41,7 @@ export function RegisterPage() {
       return;
     }
     try {
+      const installId = await getOrCreateInstallId();
       const result = await api<{
         userId: string;
         trustId: string;
@@ -34,6 +55,7 @@ export function RegisterPage() {
           lastName: String(fd.get("lastName") || "").trim(),
           email: email || undefined,
           phone: phone || undefined,
+          installId,
         }),
       });
       sessionStorage.setItem(
@@ -48,21 +70,39 @@ export function RegisterPage() {
           lastName: String(fd.get("lastName") || "").trim(),
           email: email || undefined,
           phone: phone || undefined,
+          installId,
         }),
       );
       navigate("/verify");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Registration failed");
+      const message = err instanceof Error ? err.message : "Registration failed";
+      if (/already has a TrustID/i.test(message)) {
+        navigate("/continue", { replace: true });
+        return;
+      }
+      setError(message);
     } finally {
       setBusy(false);
     }
+  }
+
+  if (gate === "checking") {
+    return (
+      <AuthChrome title="Create">
+        <p className="muted">Checking this device…</p>
+      </AuthChrome>
+    );
+  }
+
+  if (gate === "blocked") {
+    return <Navigate to="/continue" replace />;
   }
 
   return (
     <AuthChrome title="Create" backTo="/">
       <form className="panel surface-block" onSubmit={onSubmit}>
         <h1>Create TrustID</h1>
-        <p className="lead">Minimum details. One identity for the ecosystem.</p>
+        <p className="lead">Minimum details. One identity for this phone.</p>
         <div className="field">
           <label htmlFor="firstName">First name</label>
           <input id="firstName" name="firstName" required autoComplete="given-name" />
