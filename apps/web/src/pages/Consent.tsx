@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Navigate, useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
@@ -11,6 +11,29 @@ function forceConsentUi(prompt?: string | null): boolean {
     .split(/[\s+]+/)
     .map((p) => p.trim().toLowerCase())
     .includes("consent");
+}
+
+function SilentShell({ children }: { children?: ReactNode }) {
+  return (
+    <div
+      style={{
+        minHeight: "100dvh",
+        background: "#0b1210",
+        margin: 0,
+        display: children ? "grid" : undefined,
+        placeItems: children ? "center" : undefined,
+        padding: children ? "1.5rem" : undefined,
+        color: "#f4f7f6",
+      }}
+      aria-busy={!children}
+    >
+      {children ?? (
+        <span className="sr-only" aria-live="polite">
+          Returning to LifeOS Business
+        </span>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -36,9 +59,11 @@ export function ConsentPage() {
       code_challenge_method: "S256" as const,
       app_name: params.get("app_name") ?? "Application",
       prompt: params.get("prompt") ?? "",
+      ui_mode: params.get("ui_mode") ?? "",
     }),
     [params],
   );
+  const silent = consent.ui_mode === "silent";
 
   useEffect(() => {
     if (loading || !identity) return;
@@ -95,6 +120,7 @@ export function ConsentPage() {
   }, [loading, identity, consent]);
 
   if (loading || (identity && needsConsent === null && !error)) {
+    if (silent) return <SilentShell />;
     return (
       <AuthChrome title="Connecting">
         <p className="muted">Returning to {consent.app_name}…</p>
@@ -107,6 +133,7 @@ export function ConsentPage() {
     return <Navigate to="/continue" replace />;
   }
   if (needsConsent === false) {
+    if (silent) return <SilentShell />;
     return (
       <AuthChrome title="Connecting">
         <p className="muted">Returning to {consent.app_name}…</p>

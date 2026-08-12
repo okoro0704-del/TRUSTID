@@ -136,7 +136,7 @@ export function ContinuePage() {
         setError(
           cancelled
             ? silent
-              ? "Passkey was dismissed or timed out. Tap Enter LifeOS to try again."
+              ? "Passkey was dismissed or timed out. Tap Enter LifeOS Business to try again."
               : "Passkey prompt was dismissed or timed out. Tap Use passkey to try again."
             : message,
         );
@@ -231,6 +231,78 @@ export function ContinuePage() {
 
   const contactLine = remembered?.trustId ?? "";
 
+  // Completely blank while LifeOS silent enter runs — only the OS passkey sheet should appear.
+  if (silent && showQuick && !error) {
+    return (
+      <div
+        className="silent-passkey-shell"
+        style={{
+          minHeight: "100dvh",
+          background: "#0b1210",
+          margin: 0,
+        }}
+        aria-busy="true"
+        aria-live="polite"
+      >
+        <span className="sr-only">Confirm with Face ID or fingerprint</span>
+        <form
+          onSubmit={onPasskey}
+          style={{ position: "absolute", width: 1, height: 1, overflow: "hidden" }}
+        >
+          <button type="submit" autoFocus tabIndex={-1} aria-hidden>
+            Enter
+          </button>
+        </form>
+      </div>
+    );
+  }
+
+  if (silent && error) {
+    return (
+      <div
+        style={{
+          minHeight: "100dvh",
+          display: "grid",
+          placeItems: "center",
+          padding: "1.5rem",
+          background: "#0b1210",
+          color: "#f4f7f6",
+        }}
+      >
+        <div style={{ width: "min(360px, 100%)", textAlign: "center" }}>
+          <p className="error" style={{ color: "#ffb4a8" }}>
+            {error}
+          </p>
+          <form onSubmit={onPasskey}>
+            <button
+              className="btn btn-primary continue-primary"
+              type="submit"
+              autoFocus
+              onPointerDown={warmOptions}
+              onTouchStart={warmOptions}
+              style={{ width: "100%", marginTop: "1rem" }}
+            >
+              Enter LifeOS Business
+            </button>
+          </form>
+          <button
+            className="btn btn-ghost continue-switch"
+            type="button"
+            onClick={onSwitchAccount}
+            style={{ width: "100%", marginTop: "0.65rem" }}
+          >
+            Log into another Account
+          </button>
+          <p className="muted" style={{ marginTop: "0.85rem", textAlign: "center" }}>
+            <Link to="/enroll" style={{ color: "inherit" }}>
+              I have a device code
+            </Link>
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <AuthChrome title="Sign in">
       <div className="panel continue-panel surface-block">
@@ -240,48 +312,44 @@ export function ContinuePage() {
             <h1 className="continue-name">
               {remembered.displayName || remembered.trustId}
             </h1>
-            {!silent ? (
-              <p className="lead continue-lead">
-                Unlock with your passkey on this device.
-              </p>
-            ) : null}
-            {!silent ? (
-              <div className="continue-meta" aria-live="polite">
-                {contactLine && (
-                  <div className="continue-meta-row">
-                    <span className="muted">Account</span>
-                    <span className="continue-meta-value">{contactLine}</span>
-                  </div>
-                )}
-                {remembered.deviceName && (
-                  <div className="continue-meta-row">
-                    <span className="muted">Device</span>
-                    <span className="continue-meta-value">{remembered.deviceName}</span>
-                  </div>
-                )}
-                {remembered.trustId && (
-                  <div className="continue-meta-row">
-                    <span className="muted">TrustID</span>
-                    <span className="continue-meta-value tid">{remembered.trustId}</span>
-                  </div>
-                )}
-              </div>
-            ) : null}
-            {peekReturnTo() && !silent ? (
+            <p className="lead continue-lead">
+              Unlock with your passkey on this device.
+            </p>
+            <div className="continue-meta" aria-live="polite">
+              {contactLine && (
+                <div className="continue-meta-row">
+                  <span className="muted">Account</span>
+                  <span className="continue-meta-value">{contactLine}</span>
+                </div>
+              )}
+              {remembered.deviceName && (
+                <div className="continue-meta-row">
+                  <span className="muted">Device</span>
+                  <span className="continue-meta-value">{remembered.deviceName}</span>
+                </div>
+              )}
+              {remembered.trustId && (
+                <div className="continue-meta-row">
+                  <span className="muted">TrustID</span>
+                  <span className="continue-meta-value tid">{remembered.trustId}</span>
+                </div>
+              )}
+            </div>
+            {peekReturnTo() ? (
               <p className="notice">You will return to authorize the application.</p>
             ) : null}
             <form onSubmit={onPasskey}>
               {error && <p className="error">{error}</p>}
-              {!silent && status ? <p className="muted">{status}</p> : null}
+              {status ? <p className="muted">{status}</p> : null}
               <button
                 className="btn btn-primary continue-primary"
                 type="submit"
-                disabled={busy && !silent}
+                disabled={busy}
                 autoFocus
                 onPointerDown={warmOptions}
                 onTouchStart={warmOptions}
               >
-                {silent ? "Enter LifeOS" : busy ? status || "Authenticating…" : "Use passkey"}
+                {busy ? status || "Authenticating…" : "Use passkey"}
               </button>
             </form>
             <button
@@ -292,21 +360,17 @@ export function ContinuePage() {
             >
               Log into another Account
             </button>
-            {!silent ? (
-              <button
-                className="btn btn-ghost"
-                type="button"
-                disabled={busy}
-                onClick={() => void onRequestApproval()}
-                style={{ width: "100%", marginTop: "0.35rem" }}
-              >
-                Request approval on trusted device
-              </button>
-            ) : null}
+            <button
+              className="btn btn-ghost"
+              type="button"
+              disabled={busy}
+              onClick={() => void onRequestApproval()}
+              style={{ width: "100%", marginTop: "0.35rem" }}
+            >
+              Request approval on trusted device
+            </button>
             <p className="muted" style={{ marginTop: "0.85rem", textAlign: "center" }}>
-              <Link to="/enroll">
-                I have a device code for logging into a secondary device
-              </Link>
+              <Link to="/enroll">I have a device code</Link>
             </p>
           </>
         ) : (
@@ -373,9 +437,7 @@ export function ContinuePage() {
               </button>
             </form>
             <p className="muted" style={{ marginTop: "0.85rem", textAlign: "center" }}>
-              <Link to="/enroll">
-                I have a device code for logging into a secondary device
-              </Link>
+              <Link to="/enroll">I have a device code</Link>
             </p>
             <p className="muted" style={{ marginTop: "1rem" }}>
               New here? <Link to="/register">Create TrustID</Link>
