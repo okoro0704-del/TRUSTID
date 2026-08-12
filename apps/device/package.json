@@ -1,0 +1,20 @@
+{
+  "name": "@trustid/device",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "TrustID Device � Capacitor shell for Tier 1 biometric vault and app locker",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "sync": "echo \"Copy native/ into a Capacitor android/ios project after npx cap add. See README.md\"",
+    "cap:sync": "npm run build && npx cap sync"
+  },
+  "dependencies": {
+    "@capacitor/core": "^6.2.0",
+    "@trustid/device-security": "*"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.2.0",
+    "typescript": "^5.8.2"
+  }
+}

@@ -25,6 +25,8 @@ type IdentityVerification = {
 };
 
 const HUB = [
+  { to: "/dashboard/vault", title: "Media vault", blurb: "Encrypted photos & videos" },
+  { to: "/dashboard/app-locker", title: "App locker", blurb: "Biometric process shield" },
   { to: "/dashboard/identity", title: "Verified identity", blurb: "Portrait & verification" },
   { to: "/dashboard/devices", title: "Trusted devices", blurb: "Primary & standard" },
   { to: "/dashboard/approvals", title: "Device approvals", blurb: "Pending requests" },
@@ -67,7 +69,8 @@ export function SecurityPage() {
       <section className="section surface-block">
         <h2>Security hub</h2>
         <p className="sub">
-          Every trust decision is made here — devices, sessions, and assurance.
+          Device privacy controls and identity trust — media vault, app locker,
+          passkeys, sessions, and assurance.
         </p>
         <div className="hub-grid">
           {HUB.map((item) => (

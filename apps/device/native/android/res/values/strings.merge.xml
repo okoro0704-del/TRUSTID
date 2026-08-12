@@ -1,0 +1,4 @@
+<!-- Merge into android/app/src/main/res/values/strings.xml -->
+<resources>
+  <string name="trustid_app_lock_a11y_description">TrustID App Lock watches when protected apps open and asks for your biometric before they can be used.</string>
+</resources>

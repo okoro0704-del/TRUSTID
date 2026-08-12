@@ -20,6 +20,8 @@ import { ApplicationsPage } from "./pages/trust/Applications";
 import { SessionsPage } from "./pages/trust/Sessions";
 import { PasskeysPage } from "./pages/trust/Passkeys";
 import { SecurityPage } from "./pages/trust/Security";
+import { MediaVaultPage } from "./pages/trust/MediaVault";
+import { AppLockerPage } from "./pages/trust/AppLocker";
 import { AccountPage } from "./pages/trust/Account";
 import { IdentityPage } from "./pages/trust/Identity";
 
@@ -67,6 +69,8 @@ export function App() {
         <Route path="sessions" element={<SessionsPage />} />
         <Route path="passkeys" element={<PasskeysPage />} />
         <Route path="security" element={<SecurityPage />} />
+        <Route path="vault" element={<MediaVaultPage />} />
+        <Route path="app-locker" element={<AppLockerPage />} />
         <Route path="identity" element={<IdentityPage />} />
         <Route path="account" element={<AccountPage />} />
       </Route>

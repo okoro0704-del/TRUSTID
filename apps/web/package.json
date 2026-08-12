@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@simplewebauthn/browser": "^13.1.0",
+    "@trustid/device-security": "*",
     "@trustid/shared": "*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
