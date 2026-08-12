@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import { api, setSessionToken } from "../lib/api";
 import { useAuth, type Identity } from "../lib/auth";
@@ -16,6 +16,19 @@ import {
 } from "../lib/passkeyAuth";
 import { AuthChrome } from "../components/AuthChrome";
 
+/** LifeOS Enter LifeOS — suppress gateway status chrome and prefer native passkey only. */
+function isSilentLifeOsReturn(): boolean {
+  const next = peekReturnTo();
+  if (!next) return false;
+  try {
+    const q = new URL(next, window.location.origin).searchParams;
+    if (q.get("ui_mode") === "silent") return true;
+    return q.get("auth_mode") === "passkey" && q.get("lifeos_returning") === "1";
+  } catch {
+    return /[?&]ui_mode=silent\b/.test(next);
+  }
+}
+
 export function ContinuePage() {
   const navigate = useNavigate();
   const { identity, setIdentity } = useAuth();
@@ -32,7 +45,9 @@ export function ContinuePage() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const inFlight = useRef(false);
+  const silentAttempted = useRef(false);
   const optionsCache = useRef(createLoginOptionsCache());
+  const silent = useMemo(() => isSilentLifeOsReturn(), []);
 
   const showQuick =
     Boolean(remembered) &&
@@ -82,12 +97,12 @@ export function ContinuePage() {
       };
 
       try {
-        setStatus("Preparing passkey…");
+        if (!silent) setStatus("Preparing passkey…");
         const optionsJSON = await optionsCache.current.take(hints);
-        setStatus("Waiting for passkey…");
+        if (!silent) setStatus("Waiting for passkey…");
         // Ceremony must start ASAP after the gesture — options already ready.
         const response = await runPasskeyLogin(optionsJSON);
-        setStatus("Verifying…");
+        if (!silent) setStatus("Verifying…");
         const result = await api<{ sessionToken?: string; identity?: Identity }>(
           "/auth/webauthn/login/verify",
           {
@@ -120,7 +135,9 @@ export function ContinuePage() {
           (err as { name?: string })?.name === "NotAllowedError";
         setError(
           cancelled
-            ? "Passkey prompt was dismissed or timed out. Tap Use passkey to try again."
+            ? silent
+              ? "Passkey was dismissed or timed out. Tap Enter LifeOS to try again."
+              : "Passkey prompt was dismissed or timed out. Tap Use passkey to try again."
             : message,
         );
       } finally {
@@ -129,8 +146,16 @@ export function ContinuePage() {
         setStatus(null);
       }
     },
-    [deviceName, navigate, setIdentity],
+    [deviceName, navigate, setIdentity, silent],
   );
+
+  // Silent LifeOS enter: invoke native credentials.get immediately with no status chrome.
+  useEffect(() => {
+    if (!silent || !showQuick || !remembered?.trustId) return;
+    if (silentAttempted.current || identity) return;
+    silentAttempted.current = true;
+    void authenticate({ trustId: remembered.trustId });
+  }, [silent, showQuick, remembered?.trustId, identity, authenticate]);
 
   if (identity && !busy) {
     const next = peekReturnTo() ? consumeReturnTo()! : null;
@@ -204,7 +229,6 @@ export function ContinuePage() {
     }
   }
 
-  const firstName = remembered?.displayName || remembered?.trustId || "you";
   const contactLine = remembered?.trustId ?? "";
 
   return (
@@ -216,44 +240,48 @@ export function ContinuePage() {
             <h1 className="continue-name">
               {remembered.displayName || remembered.trustId}
             </h1>
-            <p className="lead continue-lead">
-              Unlock with your passkey on this device.
-            </p>
-            <div className="continue-meta" aria-live="polite">
-              {contactLine && (
-                <div className="continue-meta-row">
-                  <span className="muted">Account</span>
-                  <span className="continue-meta-value">{contactLine}</span>
-                </div>
-              )}
-              {remembered.deviceName && (
-                <div className="continue-meta-row">
-                  <span className="muted">Device</span>
-                  <span className="continue-meta-value">{remembered.deviceName}</span>
-                </div>
-              )}
-              {remembered.trustId && (
-                <div className="continue-meta-row">
-                  <span className="muted">TrustID</span>
-                  <span className="continue-meta-value tid">{remembered.trustId}</span>
-                </div>
-              )}
-            </div>
-            {peekReturnTo() && (
+            {!silent ? (
+              <p className="lead continue-lead">
+                Unlock with your passkey on this device.
+              </p>
+            ) : null}
+            {!silent ? (
+              <div className="continue-meta" aria-live="polite">
+                {contactLine && (
+                  <div className="continue-meta-row">
+                    <span className="muted">Account</span>
+                    <span className="continue-meta-value">{contactLine}</span>
+                  </div>
+                )}
+                {remembered.deviceName && (
+                  <div className="continue-meta-row">
+                    <span className="muted">Device</span>
+                    <span className="continue-meta-value">{remembered.deviceName}</span>
+                  </div>
+                )}
+                {remembered.trustId && (
+                  <div className="continue-meta-row">
+                    <span className="muted">TrustID</span>
+                    <span className="continue-meta-value tid">{remembered.trustId}</span>
+                  </div>
+                )}
+              </div>
+            ) : null}
+            {peekReturnTo() && !silent ? (
               <p className="notice">You will return to authorize the application.</p>
-            )}
+            ) : null}
             <form onSubmit={onPasskey}>
               {error && <p className="error">{error}</p>}
-              {status && <p className="muted">{status}</p>}
+              {!silent && status ? <p className="muted">{status}</p> : null}
               <button
                 className="btn btn-primary continue-primary"
                 type="submit"
-                disabled={busy}
+                disabled={busy && !silent}
                 autoFocus
                 onPointerDown={warmOptions}
                 onTouchStart={warmOptions}
               >
-                {busy ? status || "Authenticating…" : "Use passkey"}
+                {silent ? "Enter LifeOS" : busy ? status || "Authenticating…" : "Use passkey"}
               </button>
             </form>
             <button
@@ -262,19 +290,23 @@ export function ContinuePage() {
               disabled={busy}
               onClick={onSwitchAccount}
             >
-              Not {firstName}? Sign in to another account
+              Log into another Account
             </button>
-            <button
-              className="btn btn-ghost"
-              type="button"
-              disabled={busy}
-              onClick={() => void onRequestApproval()}
-              style={{ width: "100%", marginTop: "0.35rem" }}
-            >
-              Request approval on trusted device
-            </button>
+            {!silent ? (
+              <button
+                className="btn btn-ghost"
+                type="button"
+                disabled={busy}
+                onClick={() => void onRequestApproval()}
+                style={{ width: "100%", marginTop: "0.35rem" }}
+              >
+                Request approval on trusted device
+              </button>
+            ) : null}
             <p className="muted" style={{ marginTop: "0.85rem", textAlign: "center" }}>
-              <Link to="/enroll">I have a device code</Link>
+              <Link to="/enroll">
+                I have a device code for logging into a secondary device
+              </Link>
             </p>
           </>
         ) : (
@@ -341,7 +373,9 @@ export function ContinuePage() {
               </button>
             </form>
             <p className="muted" style={{ marginTop: "0.85rem", textAlign: "center" }}>
-              <Link to="/enroll">I have a device code</Link>
+              <Link to="/enroll">
+                I have a device code for logging into a secondary device
+              </Link>
             </p>
             <p className="muted" style={{ marginTop: "1rem" }}>
               New here? <Link to="/register">Create TrustID</Link>

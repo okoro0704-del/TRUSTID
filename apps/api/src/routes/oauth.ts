@@ -26,6 +26,8 @@ const authorizeQuerySchema = z.object({
   lifeos_returning: z.string().optional(),
   phone_hint: z.string().optional(),
   device_name: z.string().optional(),
+  /** LifeOS silent enter — Continue suppresses status chrome and auto-starts passkey. */
+  ui_mode: z.string().optional(),
 });
 
 function forceConsentUi(prompt?: string | null): boolean {
@@ -143,6 +145,7 @@ export async function oauthRoutes(app: FastifyInstance) {
     if (query.lifeos_returning) params.set("lifeos_returning", query.lifeos_returning);
     if (query.phone_hint) params.set("phone_hint", query.phone_hint);
     if (query.device_name) params.set("device_name", query.device_name);
+    if (query.ui_mode) params.set("ui_mode", query.ui_mode);
 
     const consentUrl = `${config.webauthn.origin}/oauth/consent?${params.toString()}`;
     return reply.redirect(consentUrl);
