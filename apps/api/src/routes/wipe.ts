@@ -20,7 +20,14 @@ export async function wipeRoutes(app: FastifyInstance) {
     void req.body;
 
     const deleted = await prisma.user.deleteMany({});
-    return { ok: true, deletedUsers: deleted.count };
+    const leftoverDevices = await prisma.device.deleteMany({});
+    const leftoverCreds = await prisma.credential.deleteMany({});
+    return {
+      ok: true,
+      deletedUsers: deleted.count,
+      deletedDevices: leftoverDevices.count,
+      deletedCredentials: leftoverCreds.count,
+    };
   });
 
   app.get("/dev/wipe-users", async (req, reply) => {
@@ -36,6 +43,13 @@ export async function wipeRoutes(app: FastifyInstance) {
       return reply.code(401).send({ error: "unauthorized" });
     }
     const deleted = await prisma.user.deleteMany({});
-    return { ok: true, deletedUsers: deleted.count };
+    const leftoverDevices = await prisma.device.deleteMany({});
+    const leftoverCreds = await prisma.credential.deleteMany({});
+    return {
+      ok: true,
+      deletedUsers: deleted.count,
+      deletedDevices: leftoverDevices.count,
+      deletedCredentials: leftoverCreds.count,
+    };
   });
 }
