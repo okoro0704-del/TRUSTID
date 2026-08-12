@@ -22,6 +22,8 @@ import { PasskeysPage } from "./pages/trust/Passkeys";
 import { SecurityPage } from "./pages/trust/Security";
 import { MediaVaultPage } from "./pages/trust/MediaVault";
 import { AppLockerPage } from "./pages/trust/AppLocker";
+import { DeviceSyncPage } from "./pages/trust/DeviceSync";
+import { GuardiansPage } from "./pages/trust/GuardiansPage";
 import { AccountPage } from "./pages/trust/Account";
 import { IdentityPage } from "./pages/trust/Identity";
 
@@ -71,6 +73,8 @@ export function App() {
         <Route path="security" element={<SecurityPage />} />
         <Route path="vault" element={<MediaVaultPage />} />
         <Route path="app-locker" element={<AppLockerPage />} />
+        <Route path="device-sync" element={<DeviceSyncPage />} />
+        <Route path="guardians" element={<GuardiansPage />} />
         <Route path="identity" element={<IdentityPage />} />
         <Route path="account" element={<AccountPage />} />
       </Route>

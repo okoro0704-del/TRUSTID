@@ -230,6 +230,15 @@ export const AUDIT_EVENTS = {
   DEVICE_APPROVAL_EXPIRED: "device.approval.expired",
   DEVICE_PROMOTED: "device.promoted",
   DEVICE_PRIMARY_CHANGED: "device.primary_changed",
+  DEVICE_SYNC_PREKEYS_PUBLISHED: "device.sync.prekeys_published",
+  DEVICE_SYNC_ENVELOPE_QUEUED: "device.sync.envelope_queued",
+  DEVICE_SYNC_ENVELOPE_CONSUMED: "device.sync.envelope_consumed",
+  RECOVERY_GUARDIAN_CIRCLE_CREATED: "recovery.guardian_circle.created",
+  RECOVERY_GUARDIAN_SHARE_CLAIMED: "recovery.guardian_share.claimed",
+  RECOVERY_GUARDIAN_THRESHOLD_MET: "recovery.guardian_threshold.met",
+  DEVICE_ATTESTATION_ACCEPTED: "device.attestation.accepted",
+  DEVICE_ATTESTATION_REJECTED: "device.attestation.rejected",
+  DEVICE_ATTESTATION_SOFT_FAIL: "device.attestation.soft_fail",
 } as const;
 
 export type AuditEventType = (typeof AUDIT_EVENTS)[keyof typeof AUDIT_EVENTS];

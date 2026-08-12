@@ -37,6 +37,10 @@ model User {
   impersonationReportsFiled ImpersonationReport[] @relation("ImpersonationReporter")
   impersonationReportsAbout ImpersonationReport[] @relation("ImpersonationSubject")
   assertionJtIs           AssertionJti[]
+  syncPrekeyBundles       DeviceSyncPrekeyBundle[]
+  syncEnvelopes           DeviceSyncEnvelope[]
+  guardianCircles         RecoveryGuardianCircle[]
+  recoverySessions        RecoverySession[]
 
   @@map("users")
 }
@@ -117,6 +121,9 @@ model Device {
   approvedPairingRequests DevicePairingRequest[]   @relation("ApprovedByDevice")
   approvedApprovals       DeviceApprovalRequest[]  @relation("ApprovedByDevice")
   resultingApprovals      DeviceApprovalRequest[]  @relation("ResultingDevice")
+  syncPrekeyBundles       DeviceSyncPrekeyBundle[]
+  syncEnvelopesSent       DeviceSyncEnvelope[] @relation("SyncEnvSenderDevice")
+  syncEnvelopesRecv       DeviceSyncEnvelope[] @relation("SyncEnvRecipientDevice")
 
   @@index([userId])
   @@index([userId, trustLevel])
@@ -140,6 +147,12 @@ model Credential {
   /// User-facing passkey label
   displayName             String?   @map("display_name")
   status                  String    @default("active")
+  /// none | packed | tpm | android-key | apple | fido-u2f | …
+  attestationFormat       String?   @map("attestation_format")
+  /// unknown | software | tee | secure_hardware (from MDS / policy)
+  attestationSecurityLevel String?  @map("attestation_security_level")
+  /// accepted | soft_fail | rejected
+  attestationStatus       String?   @map("attestation_status")
   lastUsedAt              DateTime? @map("last_used_at")
   revokedAt               DateTime? @map("revoked_at")
   createdAt               DateTime  @default(now()) @map("created_at")
@@ -596,4 +609,122 @@ model AssertionSigningKey {
   retiredAt DateTime? @map("retired_at")
 
   @@map("assertion_signing_keys")
+}
+
+/**
+ * Public X3DH prekey bundle for a device — private keys never stored server-side.
+ * Server is a blind relay for sync / secondary-device authorization.
+ */
+model DeviceSyncPrekeyBundle {
+  id                 String   @id @default(cuid())
+  userId             String   @map("user_id")
+  deviceId           String   @map("device_id")
+  identityKey        String   @map("identity_key")
+  identitySigningKey String   @map("identity_signing_key")
+  signedPreKeyId     Int      @map("signed_prekey_id")
+  signedPreKey       String   @map("signed_prekey")
+  signedPreKeySig    String   @map("signed_prekey_sig")
+  /// JSON array of { id, publicKey } — one-time prekeys (public only)
+  oneTimePreKeysJson String   @default("[]") @map("one_time_prekeys_json")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@unique([deviceId])
+  @@index([userId])
+  @@map("device_sync_prekey_bundles")
+}
+
+/** Opaque E2E ciphertext — server cannot decrypt (blind relay). */
+model DeviceSyncEnvelope {
+  id                String    @id @default(cuid())
+  userId            String    @map("user_id")
+  senderDeviceId    String    @map("sender_device_id")
+  recipientDeviceId String    @map("recipient_device_id")
+  /// vault_meta | device_auth | generic
+  envelopeType      String    @map("envelope_type")
+  /// Opaque X3DH header JSON (public material only)
+  headerJson        String    @map("header_json")
+  nonce             String
+  ciphertext        String
+  expiresAt         DateTime  @map("expires_at")
+  consumedAt        DateTime? @map("consumed_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+
+  user            User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  senderDevice    Device @relation("SyncEnvSenderDevice", fields: [senderDeviceId], references: [id], onDelete: Cascade)
+  recipientDevice Device @relation("SyncEnvRecipientDevice", fields: [recipientDeviceId], references: [id], onDelete: Cascade)
+
+  @@index([userId, recipientDeviceId, consumedAt])
+  @@index([expiresAt])
+  @@map("device_sync_envelopes")
+}
+
+/** Shamir guardian circle — secret never stored; only commitment + sealed shares. */
+model RecoveryGuardianCircle {
+  id               String   @id @default(cuid())
+  userId           String   @map("user_id")
+  threshold        Int
+  shareCount       Int      @map("share_count")
+  /// SHA-256 commitment of recovery master secret (base64url)
+  secretCommitment String   @map("secret_commitment")
+  /// active | recovering | revoked
+  status           String   @default("active")
+  createdAt        DateTime @default(now()) @map("created_at")
+  revokedAt        DateTime? @map("revoked_at")
+
+  user    User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  shares  RecoveryGuardianShare[]
+  sessions RecoverySession[]
+
+  @@index([userId])
+  @@map("recovery_guardian_circles")
+}
+
+model RecoveryGuardianShare {
+  id              String    @id @default(cuid())
+  circleId        String    @map("circle_id")
+  /// Shamir x-coordinate (1..n)
+  shareIndex      Int       @map("share_index")
+  /// Client-sealed share ciphertext (server-blind) OR invite-held until claimed
+  shareCiphertext String    @map("share_ciphertext")
+  /// Non-PII label (e.g. "Hardware token A", "Guardian 2")
+  guardianLabel   String    @map("guardian_label")
+  /// Optional TrustID of guardian identity (public id only)
+  guardianTrustId String?   @map("guardian_trust_id")
+  inviteCodeHash  String?   @map("invite_code_hash")
+  /// pending | distributed | claimed
+  status          String    @default("pending")
+  claimedAt       DateTime? @map("claimed_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  circle RecoveryGuardianCircle @relation(fields: [circleId], references: [id], onDelete: Cascade)
+
+  @@unique([circleId, shareIndex])
+  @@index([inviteCodeHash])
+  @@map("recovery_guardian_shares")
+}
+
+model RecoverySession {
+  id                       String    @id @default(cuid())
+  userId                   String    @map("user_id")
+  circleId                 String    @map("circle_id")
+  /// pending | collecting | completed | expired
+  status                   String    @default("pending")
+  /// JSON array of submitted share indexes (values stay client-side until threshold UI)
+  collectedShareIndexesJson String   @default("[]") @map("collected_share_indexes_json")
+  /// Opaque client-held reconstruction material commitment after threshold
+  reconstructionCommitment String?   @map("reconstruction_commitment")
+  expiresAt                DateTime  @map("expires_at")
+  completedAt              DateTime? @map("completed_at")
+  createdAt                DateTime  @default(now()) @map("created_at")
+
+  circle RecoveryGuardianCircle @relation(fields: [circleId], references: [id], onDelete: Cascade)
+  user   User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("recovery_sessions")
 }

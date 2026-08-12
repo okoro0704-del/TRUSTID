@@ -55,11 +55,13 @@ OTP proves control of a contact channel at a point in time. It does **not** prov
 
 Security-relevant actions emit `audit_events` retained server-side independently of user-visible activity feed.
 
-## Consumer device security (Tier 1)
+## Consumer device security (Tier 1 + Tier 2)
 
 Local vault and app-locker controls live on-device only (`docs/TIER1_DEVICE_SECURITY.md`). Vault DEKs and lock policy never leave the device. The IdP API does not receive vault plaintext.
 
 - **Gate:** Android BiometricPrompt (Class 3) / iOS LocalAuthentication; web fallback is WebAuthn UV.
 - **Vault:** AES-256-GCM; Android Keystore CryptoObject; iOS Keychain biometryCurrentSet.
 - **App lock:** Android AccessibilityService overlay; not available as cross-app interception on iOS.
+
+Cross-device sync, Shamir guardians, and authenticator MDS policy: `docs/TIER2_SOVEREIGN_SECURITY.md`.
 

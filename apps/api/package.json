@@ -20,6 +20,7 @@
     "@prisma/client": "^6.5.0",
     "@simplewebauthn/server": "^13.1.1",
     "@trustid/shared": "*",
+    "@trustid/sovereign-crypto": "*",
     "@trustid/zk": "*",
     "fastify": "^5.2.1",
     "jose": "^6.2.8",

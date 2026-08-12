@@ -30,7 +30,6 @@ import {
   verifyRegistration,
 } from "../modules/authentication/webauthn.js";
 import { getDashboardIdentity } from "../modules/identity/service.js";
-import { getRecoveryArchitectureNotes } from "../modules/recovery/types.js";
 
 function httpError(err: unknown, reply: import("fastify").FastifyReply) {
   const e = err as { statusCode?: number; message?: string };
@@ -230,10 +229,6 @@ export async function deviceApprovalRoutes(app: FastifyInstance) {
     } catch (err) {
       return httpError(err, reply);
     }
-  });
-
-  app.get("/recovery/status", { preHandler: requireSession }, async () => {
-    return getRecoveryArchitectureNotes();
   });
 }
 

@@ -107,6 +107,21 @@ export const config = {
   },
   get webauthn() {
     const origins = derivedOrigins();
+    const attestationTypeRaw = process.env.WEBAUTHN_ATTESTATION ?? "none";
+    const attestationType =
+      attestationTypeRaw === "direct" ||
+      attestationTypeRaw === "enterprise" ||
+      attestationTypeRaw === "none"
+        ? attestationTypeRaw
+        : attestationTypeRaw === "indirect"
+          ? "direct"
+          : "none";
+    const mode = (process.env.WEBAUTHN_ATTESTATION_MODE ?? "soft") as
+      | "off"
+      | "soft"
+      | "strict";
+    const minSecurityLevel = (process.env.WEBAUTHN_MIN_SECURITY_LEVEL ??
+      "tee") as "software" | "tee" | "secure_hardware";
     return {
       rpID: derivedRpId(),
       rpName: required("WEBAUTHN_RP_NAME", "TrustID"),
@@ -114,6 +129,17 @@ export const config = {
       origin: origins[0]!,
       /** All accepted browser origins for assertion/attestation verify. */
       origins,
+      attestationType: attestationType as "none" | "direct" | "enterprise",
+      attestationPolicy: {
+        mode: process.env.WEBAUTHN_ATTESTATION_MODE
+          ? mode
+          : attestationType === "none"
+            ? "off"
+            : mode,
+        attestationType: attestationType as "none" | "direct" | "enterprise",
+        minSecurityLevel,
+        requireKnownAaguid: process.env.WEBAUTHN_REQUIRE_KNOWN_AAGUID === "true",
+      },
     };
   },
   get corsOrigins() {

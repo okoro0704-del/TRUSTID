@@ -1,18 +1,14 @@
 /**
- * Future account recovery extension points.
- * Do NOT implement recovery flows here yet.
- *
- * Planned providers may include:
- * - Government identity verification (e.g. NIBSS/BVN)
- * - Recovery codes
- * - Trusted contacts
- * - Manual review / support escalation
+ * Account recovery extension points.
+ * Shamir guardian circles are implemented in service.ts.
+ * Additional providers (gov ID, recovery codes) remain pluggable.
  */
 
 export type RecoveryMethodKind =
   | "government_identity"
   | "recovery_codes"
   | "trusted_contact"
+  | "shamir_guardians"
   | "manual_review";
 
 export interface RecoveryProvider {
@@ -23,7 +19,7 @@ export interface RecoveryProvider {
   completeRecovery?(challengeId: string, proof: unknown): Promise<{ ok: boolean }>;
 }
 
-/** Reserved registry — empty until a provider is enabled. */
+/** Registry — providers register at module load. */
 const providers: RecoveryProvider[] = [];
 
 export function registerRecoveryProvider(provider: RecoveryProvider) {
@@ -36,13 +32,14 @@ export function listRecoveryProviders() {
 
 export function getRecoveryArchitectureNotes() {
   return {
-    status: "not_implemented",
+    status: "partial",
     extensionPoints: [
       "government_identity",
       "recovery_codes",
       "trusted_contact",
+      "shamir_guardians",
       "manual_review",
-    ],
+    ] as RecoveryMethodKind[],
     note: "Device approval and primary-device policy are independent of recovery. Recovery must never bypass primary-device controls without a verified high-assurance path.",
   };
 }

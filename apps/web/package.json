@@ -12,6 +12,7 @@
     "@simplewebauthn/browser": "^13.1.0",
     "@trustid/device-security": "*",
     "@trustid/shared": "*",
+    "@trustid/sovereign-crypto": "*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.4.0"

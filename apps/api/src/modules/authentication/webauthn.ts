@@ -18,6 +18,7 @@ import { prisma } from "../../db/client.js";
 import { config } from "../../lib/config.js";
 import { recordAudit } from "../audit/service.js";
 import { createSession } from "../sessions/service.js";
+import { evaluateAttestation } from "../attestation/mds.js";
 import { chooseInitialTrustLevel } from "../devices/trust.js";
 import {
   consumeWebAuthnChallenge,
@@ -165,7 +166,7 @@ export async function registrationOptions(
     userName: user.trustId,
     userDisplayName: user.trustId,
     userID: new TextEncoder().encode(user.id),
-    attestationType: "none",
+    attestationType: config.webauthn.attestationType,
     excludeCredentials: user.credentials
       .filter((c) => c.status !== DEVICE_STATUS.REVOKED)
       .map((c) => allowCredentialDescriptor(c.credentialId, c.transports)),
@@ -257,6 +258,69 @@ export async function verifyRegistration(input: {
   const { credential, credentialDeviceType, credentialBackedUp } =
     verification.registrationInfo;
 
+  const aaguid = verification.registrationInfo.aaguid ?? null;
+  const fmt = (verification.registrationInfo as { fmt?: string }).fmt;
+  const attestationFormat = fmt ?? null;
+  const attestationEval = evaluateAttestation({
+    aaguid,
+    attestationFormat,
+    policy: config.webauthn.attestationPolicy,
+  });
+
+  if (attestationEval.status === "rejected") {
+    await recordAudit({
+      type: AUDIT_EVENTS.DEVICE_ATTESTATION_REJECTED,
+      userId: input.userId,
+      actorType: "user",
+      actorId: input.userId,
+      metadata: {
+        reason: attestationEval.reason,
+        aaguid,
+        securityLevel: attestationEval.securityLevel,
+      },
+      ip: input.ip,
+      userAgent: input.userAgent,
+    });
+    await failRegistration(input.userId, `attestation_${attestationEval.reason}`, input);
+    throw Object.assign(
+      new Error(
+        "Authenticator does not meet TrustID hardware attestation policy. Use a platform passkey on a certified secure module.",
+      ),
+      { statusCode: 403 },
+    );
+  }
+
+  if (attestationEval.status === "soft_fail") {
+    await recordAudit({
+      type: AUDIT_EVENTS.DEVICE_ATTESTATION_SOFT_FAIL,
+      userId: input.userId,
+      actorType: "user",
+      actorId: input.userId,
+      metadata: {
+        reason: attestationEval.reason,
+        aaguid,
+        securityLevel: attestationEval.securityLevel,
+      },
+      ip: input.ip,
+      userAgent: input.userAgent,
+    });
+  } else if (config.webauthn.attestationPolicy.mode !== "off") {
+    await recordAudit({
+      type: AUDIT_EVENTS.DEVICE_ATTESTATION_ACCEPTED,
+      userId: input.userId,
+      actorType: "user",
+      actorId: input.userId,
+      metadata: {
+        reason: attestationEval.reason,
+        aaguid,
+        securityLevel: attestationEval.securityLevel,
+        description: attestationEval.mdsDescription,
+      },
+      ip: input.ip,
+      userAgent: input.userAgent,
+    });
+  }
+
   const existing = await prisma.credential.findUnique({
     where: { credentialId: credential.id },
   });
@@ -294,12 +358,18 @@ export async function verifyRegistration(input: {
         publicKey: Buffer.from(credential.publicKey),
         counter: BigInt(credential.counter),
         transports: JSON.stringify(input.response.response.transports ?? []),
-        aaguid: verification.registrationInfo.aaguid ?? null,
+        aaguid,
         authenticatorAttachment: "platform",
         credentialDeviceType,
         backedUp: credentialBackedUp,
         displayName: input.deviceName?.trim() || guessDeviceName(input.userAgent),
         status: DEVICE_STATUS.ACTIVE,
+        attestationFormat,
+        attestationSecurityLevel:
+          attestationEval.securityLevel === "unknown"
+            ? null
+            : attestationEval.securityLevel,
+        attestationStatus: attestationEval.status,
         lastUsedAt: new Date(),
       },
     });

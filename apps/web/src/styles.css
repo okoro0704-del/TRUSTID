@@ -1103,6 +1103,17 @@ select {
   background: rgba(0, 0, 0, 0.35);
 }
 
+.code-block {
+  margin: 0;
+  padding: 0.85rem;
+  overflow: auto;
+  max-height: 280px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.35);
+  font-size: 0.75rem;
+  color: var(--mist);
+}
+
 .check-row {
   display: flex;
   align-items: flex-start;

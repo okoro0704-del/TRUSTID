@@ -104,6 +104,8 @@ const TITLES: Record<string, string> = {
   "/dashboard/security": "Security",
   "/dashboard/vault": "Media Vault",
   "/dashboard/app-locker": "App Locker",
+  "/dashboard/device-sync": "Device Sync",
+  "/dashboard/guardians": "Guardians",
   "/dashboard/identity": "Identity",
   "/dashboard/account": "Account",
 };

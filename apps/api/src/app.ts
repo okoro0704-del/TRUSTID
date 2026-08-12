@@ -18,6 +18,8 @@ import {
   reauthRoutes,
 } from "./routes/device-approvals.js";
 import { zkRoutes } from "./routes/zk.js";
+import { deviceSyncRoutes } from "./routes/device-sync.js";
+import { recoveryRoutes } from "./routes/recovery.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -99,6 +101,8 @@ export async function buildApp() {
   await app.register(deviceApprovalRoutes);
   await app.register(reauthRoutes);
   await app.register(zkRoutes);
+  await app.register(deviceSyncRoutes);
+  await app.register(recoveryRoutes);
   await app.register(wipeRoutes);
 
   return app;

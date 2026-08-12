@@ -27,6 +27,8 @@ type IdentityVerification = {
 const HUB = [
   { to: "/dashboard/vault", title: "Media vault", blurb: "Encrypted photos & videos" },
   { to: "/dashboard/app-locker", title: "App locker", blurb: "Biometric process shield" },
+  { to: "/dashboard/device-sync", title: "Device sync", blurb: "E2E blind relay (X3DH)" },
+  { to: "/dashboard/guardians", title: "Recovery guardians", blurb: "Shamir threshold shares" },
   { to: "/dashboard/identity", title: "Verified identity", blurb: "Portrait & verification" },
   { to: "/dashboard/devices", title: "Trusted devices", blurb: "Primary & standard" },
   { to: "/dashboard/approvals", title: "Device approvals", blurb: "Pending requests" },
