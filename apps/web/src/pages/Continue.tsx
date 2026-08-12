@@ -133,6 +133,18 @@ export function ContinuePage() {
         const cancelled =
           /not allowed|abort|cancel|timed out|timeout/i.test(message) ||
           (err as { name?: string })?.name === "NotAllowedError";
+        const unknownCred = /unknown credential/i.test(message);
+        if (unknownCred) {
+          // Server wipe / rotated RP: device still has a passkey TrustID no longer knows.
+          clearRememberedAccount();
+          optionsCache.current.invalidate();
+          setRemembered(null);
+          setSwitchAccount(true);
+          setError(
+            "This passkey is no longer registered on TrustID. Create a new TrustID, then sign in again. You can delete the old passkey in your device settings.",
+          );
+          return;
+        }
         setError(
           cancelled
             ? silent
