@@ -22,14 +22,14 @@ async function main() {
   await prisma.application.upsert({
     where: { clientId: lifeosClientId },
     update: {
-      name: "LifeOS",
+      name: "LifeOS Business",
       redirectUris: JSON.stringify(lifeosRedirects),
       allowedScopes: JSON.stringify(DEFAULT_APP_SCOPES),
       status: "active",
       type: "public",
     },
     create: {
-      name: "LifeOS",
+      name: "LifeOS Business",
       clientId: lifeosClientId,
       type: "public",
       redirectUris: JSON.stringify(lifeosRedirects),
