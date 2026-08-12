@@ -402,6 +402,8 @@ export function ContinuePage() {
               Request approval on trusted device
             </button>
             <p className="muted" style={{ marginTop: "0.85rem", textAlign: "center" }}>
+              <Link to="/register">Create TrustID</Link>
+              {" · "}
               <Link to="/enroll">I have a device code</Link>
             </p>
           </>
