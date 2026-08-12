@@ -37,7 +37,7 @@ export function ContinuePage() {
   const showQuick =
     Boolean(remembered) &&
     !switchAccount &&
-    Boolean(remembered?.email || remembered?.phone || remembered?.trustId);
+    Boolean(remembered?.trustId);
 
   const contactHints = useCallback(() => {
     if (showQuick && remembered) {
@@ -102,15 +102,11 @@ export function ContinuePage() {
             result.identity,
             deviceName.trim() || getRememberedAccount()?.deviceName,
           );
-        } else if (hints.email || hints.phone || hints.trustId) {
-          const prev = getRememberedAccount();
+        } else if (hints.trustId) {
           saveRememberedAccount({
-            firstName: prev?.firstName ?? "",
-            lastName: prev?.lastName,
-            email: hints.email,
-            phone: hints.phone,
-            deviceName: deviceName.trim() || prev?.deviceName,
-            trustId: hints.trustId || prev?.trustId,
+            trustId: hints.trustId,
+            displayName: hints.trustId,
+            deviceName: deviceName.trim() || getRememberedAccount()?.deviceName,
           });
         }
         navigate(consumeReturnTo() ?? "/dashboard", { replace: true });
@@ -168,10 +164,11 @@ export function ContinuePage() {
 
   async function onRequestApproval(e?: FormEvent) {
     e?.preventDefault();
-    const emailVal = (showQuick ? remembered?.email : email)?.trim();
-    const phoneVal = (showQuick ? remembered?.phone : phone)?.trim();
+    const emailVal = email.trim() || undefined;
+    const phoneVal = phone.trim() || undefined;
+    const trustIdVal = showQuick ? remembered?.trustId : undefined;
     const deviceVal = (deviceName || remembered?.deviceName || "").trim();
-    if (!emailVal && !phoneVal) {
+    if (!emailVal && !phoneVal && !trustIdVal) {
       setError("Enter email or phone to request approval");
       return;
     }
@@ -186,6 +183,7 @@ export function ContinuePage() {
         body: JSON.stringify({
           email: emailVal || undefined,
           phone: phoneVal || undefined,
+          trustId: trustIdVal || undefined,
           deviceName: deviceVal || undefined,
           clientId: clientIdMatch
             ? decodeURIComponent(clientIdMatch[1]!)
@@ -206,10 +204,8 @@ export function ContinuePage() {
     }
   }
 
-  const contactLine = remembered
-    ? [remembered.email, remembered.phone].filter(Boolean).join(" · ")
-    : "";
-  const firstName = remembered?.firstName || remembered?.displayName || "you";
+  const firstName = remembered?.displayName || remembered?.trustId || "you";
+  const contactLine = remembered?.trustId ?? "";
 
   return (
     <AuthChrome title="Sign in">
@@ -218,7 +214,7 @@ export function ContinuePage() {
           <>
             <p className="continue-eyebrow">Welcome back</p>
             <h1 className="continue-name">
-              {remembered.displayName || remembered.firstName}
+              {remembered.displayName || remembered.trustId}
             </h1>
             <p className="lead continue-lead">
               Unlock with your passkey on this device.

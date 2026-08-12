@@ -7,6 +7,8 @@ export const SCOPES = {
   IDENTITY_VERIFICATION_STATUS: "identity.verification_status",
   IDENTITY_TRUST_LEVEL: "identity.trust_level",
   IDENTITY_PORTRAIT: "identity.portrait",
+  /** Zero-knowledge claim proofs (no raw PII) */
+  IDENTITY_ZK_CLAIMS: "identity.zk_claims",
   OFFLINE_ACCESS: "offline_access",
 } as const;
 
@@ -17,11 +19,9 @@ export const ALL_SCOPES: Scope[] = Object.values(SCOPES);
 export const DEFAULT_APP_SCOPES: Scope[] = [
   SCOPES.OPENID,
   SCOPES.IDENTITY_BASIC,
-  SCOPES.IDENTITY_PROFILE,
-  SCOPES.IDENTITY_EMAIL,
-  SCOPES.IDENTITY_VERIFICATION_STATUS,
+  SCOPES.IDENTITY_ZK_CLAIMS,
   SCOPES.IDENTITY_TRUST_LEVEL,
-  SCOPES.IDENTITY_PORTRAIT,
+  SCOPES.IDENTITY_VERIFICATION_STATUS,
 ];
 
 export const DEVICE_STATUS = {
@@ -172,6 +172,7 @@ export const SCOPE_LABELS: Record<string, string> = {
   "identity.phone": "Phone number",
   "identity.verification_status": "Identity verification status",
   "identity.trust_level": "Trust level",
+  "identity.zk_claims": "Zero-knowledge trust claims (no raw PII)",
   "identity.portrait": "Verified identity portrait reference",
   offline_access: "Stay signed in (refresh)",
   "wallet.reference": "Wallet reference (future)",

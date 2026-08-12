@@ -7,23 +7,10 @@ import { listPasskeys, removePasskey, renamePasskey } from "../src/modules/passk
 import { computeTrustLevel, getTrustCenterSummary } from "../src/modules/trust/service.js";
 import { revokeAuthorization, grantAuthorization } from "../src/modules/authorization/service.js";
 import { createSession, revokeSession } from "../src/modules/sessions/service.js";
+import { createZeroPiiUser } from "./helpers/zero-pii-user.js";
 
 async function createUser(email: string) {
-  return prisma.user.create({
-    data: {
-      trustId: `TD-${Math.random().toString(36).slice(2, 10).toUpperCase()}`,
-      status: "active",
-      profile: { create: { firstName: "A", lastName: "User" } },
-      contactMethods: {
-        create: {
-          type: "email",
-          value: email,
-          verifiedAt: new Date(),
-          isPrimary: true,
-        },
-      },
-    },
-  });
+  return createZeroPiiUser(email);
 }
 
 describe("Trust Center services", () => {

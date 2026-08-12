@@ -24,15 +24,11 @@ export async function ensureVerifiedIdentityProfile(userId: string) {
     });
   }
 
-  const displayName = user.profile
-    ? `${user.profile.firstName} ${user.profile.lastName}`.trim()
-    : user.trustId;
-
   const created = await prisma.verifiedIdentityProfile.create({
     data: {
       userId: user.id,
       trustId: user.trustId,
-      displayName,
+      displayCommitment: user.profile?.nameCommitment ?? null,
       identityStatus: IDENTITY_STATUS.UNVERIFIED,
       verificationLevel: VERIFICATION_LEVELS.NONE,
       profileVersion: 1,
@@ -56,7 +52,7 @@ export async function bumpProfileVersion(
   userId: string,
   patch: {
     identityStatus?: string;
-    displayName?: string;
+    displayCommitment?: string | null;
     verificationLevel?: string;
     verificationMethod?: string | null;
   } = {},
@@ -76,9 +72,10 @@ export async function syncDisplayNameFromProfile(userId: string) {
     where: { id: userId },
     include: { profile: true },
   });
-  if (!user?.profile) return;
-  const displayName = `${user.profile.firstName} ${user.profile.lastName}`.trim();
-  await bumpProfileVersion(userId, { displayName });
+  if (!user?.profile?.nameCommitment) return;
+  await bumpProfileVersion(userId, {
+    displayCommitment: user.profile.nameCommitment,
+  });
 }
 
 export async function getVerifiedIdentityProfileView(userId: string) {
@@ -96,7 +93,8 @@ export async function getVerifiedIdentityProfileView(userId: string) {
 
   return {
     trustId: profile.trustId,
-    displayName: profile.displayName,
+    displayName: null as string | null,
+    displayCommitment: profile.displayCommitment,
     identityStatus: profile.identityStatus,
     verificationLevel: profile.verificationLevel,
     verificationMethod: profile.verificationMethod,
@@ -108,7 +106,6 @@ export async function getVerifiedIdentityProfileView(userId: string) {
     issuedAt: profile.issuedAt?.toISOString() ?? null,
     updatedAt: profile.updatedAt.toISOString(),
     revokedAt: profile.revokedAt?.toISOString() ?? null,
-    /** Owner-only hint: latest upload may be unverified */
     latestPortraitStatus: latestPortrait?.status ?? PORTRAIT_STATUS.NONE,
     isVerifiedIdentity:
       profile.identityStatus === IDENTITY_STATUS.VERIFIED &&
@@ -117,6 +114,6 @@ export async function getVerifiedIdentityProfileView(userId: string) {
       portrait?.status === PORTRAIT_STATUS.VERIFIED &&
       profile.identityStatus === IDENTITY_STATUS.VERIFIED,
     disclaimer:
-      "A user-uploaded photograph is not a verified identity portrait until TrustID verification succeeds. Name, email, phone, and photos alone do not prove identity.",
+      "A user-uploaded photograph is not a verified identity portrait until TrustID verification succeeds. Name, email, phone, and photos alone do not prove identity. TrustID stores commitments only — not plaintext PII.",
   };
 }

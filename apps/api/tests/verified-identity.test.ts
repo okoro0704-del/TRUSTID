@@ -34,6 +34,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createZeroPiiUser } from "./helpers/zero-pii-user.js";
 
 const prisma = new PrismaClient();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -45,16 +46,9 @@ function fakeJpeg(seed: string) {
 }
 
 async function createUser(email: string, name = "John Smith") {
-  const [firstName, lastName] = name.split(" ");
-  return prisma.user.create({
-    data: {
-      trustId: `TD-${createHash("sha256").update(email).digest("hex").slice(0, 8).toUpperCase()}`,
-      status: "active",
-      profile: { create: { firstName: firstName || "John", lastName: lastName || "Smith" } },
-      contactMethods: {
-        create: [{ type: "email", value: email, isPrimary: true, verifiedAt: new Date() }],
-      },
-    },
+  return createZeroPiiUser(email, {
+    name,
+    trustId: `TD-${createHash("sha256").update(email).digest("hex").slice(0, 8).toUpperCase()}`,
   });
 }
 
@@ -311,8 +305,9 @@ describe("Verified identity portrait & anti-impersonation", () => {
       SCOPES.IDENTITY_PORTRAIT,
       SCOPES.IDENTITY_VERIFICATION_STATUS,
     ]);
-    expect(scoped?.hasVerifiedIdentityPortrait).toBe(false);
-    expect(scoped?.portraitRef).toBeNull();
+    // Zero-PII default: portrait attributes omitted unless ALLOW_LEGACY_PII_SCOPES
+    expect(scoped?.hasVerifiedIdentityPortrait ?? false).toBe(false);
+    expect(scoped?.portraitRef ?? null).toBeNull();
   });
 
   it("records impersonation reports without merging", async () => {

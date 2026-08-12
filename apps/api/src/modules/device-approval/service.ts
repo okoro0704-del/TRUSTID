@@ -67,6 +67,7 @@ async function markExpiredIfNeeded(row: {
 export async function createDeviceApprovalRequest(input: {
   email?: string;
   phone?: string;
+  trustId?: string;
   deviceName?: string;
   clientId?: string;
   applicationName?: string;
@@ -74,7 +75,13 @@ export async function createDeviceApprovalRequest(input: {
   ip?: string;
   userAgent?: string;
 }) {
-  const user = await findUserByContact(input.email, input.phone);
+  const user =
+    (await findUserByContact(input.email, input.phone)) ||
+    (input.trustId
+      ? await (await import("../authentication/service.js")).findUserByTrustId(
+          input.trustId,
+        )
+      : null);
   if (!user) {
     throw Object.assign(new Error("No account found for that contact"), {
       statusCode: 404,
@@ -254,23 +261,43 @@ export async function claimApprovalResult(pollToken: string) {
   }
 
   if (row.status === DEVICE_APPROVAL_STATUS.TEMPORARY) {
-    const sessionToken = row.oneTimeSessionToken;
-    if (!sessionToken) {
-      throw Object.assign(new Error("Temporary session missing"), {
+    if (!row.resultingDeviceId) {
+      throw Object.assign(new Error("Temporary device missing"), {
         statusCode: 400,
       });
     }
+    const device = await prisma.device.findUnique({
+      where: { id: row.resultingDeviceId },
+    });
+    if (!device || device.status === "revoked") {
+      throw Object.assign(new Error("Temporary device unavailable"), {
+        statusCode: 400,
+      });
+    }
+    const expiresAt =
+      device.expiresAt ??
+      new Date(Date.now() + config.temporarySessionHours * 60 * 60 * 1000);
+    const { session, token } = await createSession({
+      userId: row.userId,
+      deviceId: device.id,
+      applicationId: row.applicationId,
+      kind: SESSION_KINDS.TEMPORARY,
+      expiresAt,
+      ip: row.ip,
+      userAgent: row.userAgent,
+    });
     await prisma.deviceApprovalRequest.update({
       where: { id: row.id },
       data: {
-        oneTimeSessionToken: null,
+        oneTimeSessionTokenHash: hashSecret(token),
         claimConsumedAt: new Date(),
       },
     });
     return {
       status: DEVICE_APPROVAL_STATUS.TEMPORARY,
       mode: "temporary" as const,
-      sessionToken,
+      sessionToken: token,
+      sessionId: session.id,
       requestId: row.id,
       userId: row.userId,
       deviceId: row.resultingDeviceId,
@@ -468,23 +495,14 @@ export async function approveTemporaryAccess(input: {
     },
   });
 
-  const { session, token } = await createSession({
-    userId: input.userId,
-    deviceId: tempDevice.id,
-    applicationId: row.applicationId,
-    kind: SESSION_KINDS.TEMPORARY,
-    expiresAt,
-    ip: row.ip,
-    userAgent: row.userAgent,
-  });
-
   const updated = await prisma.deviceApprovalRequest.update({
     where: { id: row.id },
     data: {
       status: DEVICE_APPROVAL_STATUS.TEMPORARY,
       approvedByDeviceId: input.deviceId ?? null,
       resultingDeviceId: tempDevice.id,
-      oneTimeSessionToken: token,
+      // Session is created only at claim time — never persist plaintext tokens
+      oneTimeSessionTokenHash: null,
       resolvedAt: new Date(),
     },
   });
@@ -497,7 +515,6 @@ export async function approveTemporaryAccess(input: {
     metadata: {
       requestId: row.id,
       deviceId: tempDevice.id,
-      sessionId: session.id,
       expiresAt: expiresAt.toISOString(),
     },
     ip: input.ip,

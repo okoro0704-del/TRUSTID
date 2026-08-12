@@ -1,8 +1,14 @@
 import { AUDIT_EVENTS } from "@trustid/shared";
+import { createHash } from "node:crypto";
 import { prisma } from "../../db/client.js";
 import { config } from "../../lib/config.js";
 import { hashSecret, randomToken } from "../../lib/crypto.js";
 import { recordAudit } from "../audit/service.js";
+import {
+  clearSessionPresentation,
+  sealSessionPresentation,
+  type PresentationPayload,
+} from "./presentation.js";
 
 export async function createSession(input: {
   userId: string;
@@ -12,6 +18,7 @@ export async function createSession(input: {
   expiresAt?: Date;
   ip?: string | null;
   userAgent?: string | null;
+  presentation?: PresentationPayload | null;
 }) {
   const token = randomToken(32);
   const expiresAt =
@@ -29,6 +36,9 @@ export async function createSession(input: {
       userAgent: input.userAgent ?? null,
     },
   });
+  if (input.presentation) {
+    await sealSessionPresentation(session.id, input.presentation, expiresAt);
+  }
   await recordAudit({
     type: AUDIT_EVENTS.SESSION_CREATED,
     userId: input.userId,
@@ -47,13 +57,22 @@ export async function createSession(input: {
 
 export async function resolveSession(token: string) {
   const tokenHash = hashSecret(token);
-  const session = await prisma.session.findUnique({
-    where: { tokenHash },
-    include: {
-      user: { include: { profile: true } },
-      device: true,
-    },
-  });
+  const legacyHash = createHash("sha256").update(token).digest("hex");
+  const session =
+    (await prisma.session.findUnique({
+      where: { tokenHash },
+      include: {
+        user: { include: { profile: true } },
+        device: true,
+      },
+    })) ??
+    (await prisma.session.findUnique({
+      where: { tokenHash: legacyHash },
+      include: {
+        user: { include: { profile: true } },
+        device: true,
+      },
+    }));
   if (!session) return null;
   if (session.revokedAt) return null;
   if (session.expiresAt.getTime() < Date.now()) return null;
@@ -87,6 +106,7 @@ export async function revokeSession(
     where: { id: sessionId, userId },
   });
   if (!session || session.revokedAt) return false;
+  await clearSessionPresentation(sessionId);
   await prisma.session.update({
     where: { id: sessionId },
     data: { revokedAt: new Date() },
@@ -115,6 +135,9 @@ export async function revokeAllSessions(
       ...(exceptSessionId ? { id: { not: exceptSessionId } } : {}),
     },
   });
+  for (const s of sessions) {
+    await clearSessionPresentation(s.id);
+  }
   await prisma.session.updateMany({
     where: {
       userId,

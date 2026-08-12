@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "../../lib/config.js";
+import { decryptBytes, encryptBytes } from "../../lib/crypto.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_ROOT = path.resolve(__dirname, "../../../data/private-media");
@@ -41,7 +42,7 @@ export async function storePrivateBytes(input: {
   const storageKey = `${input.purpose}/${input.userId}/${id}`;
   const absolutePath = path.join(mediaRoot(), storageKey);
   await mkdir(path.dirname(absolutePath), { recursive: true });
-  await writeFile(absolutePath, input.bytes);
+  await writeFile(absolutePath, encryptBytes(input.bytes));
   return {
     storageKey,
     absolutePath,
@@ -66,7 +67,8 @@ export async function readPrivateBytes(storageKey: string): Promise<Buffer> {
     throw Object.assign(new Error("not_found"), { statusCode: 404, code: "not_found" });
   }
   try {
-    return await readFile(resolved);
+    const raw = await readFile(resolved);
+    return decryptBytes(raw);
   } catch {
     throw Object.assign(new Error("not_found"), { statusCode: 404, code: "not_found" });
   }

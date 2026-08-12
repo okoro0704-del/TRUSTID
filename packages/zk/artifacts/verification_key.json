@@ -1,0 +1,6 @@
+{
+  "protocol": "groth16-hybrid-v1",
+  "circuit": "trust_tier_gte",
+  "nPublic": 4,
+  "note": "Runtime verification key is derived from SEAL_KEY via GET /zk/verification-key"
+}

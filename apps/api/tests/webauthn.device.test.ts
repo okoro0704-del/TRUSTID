@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { AUDIT_EVENTS, DEVICE_STATUS, WEBAUTHN_PURPOSES } from "@trustid/shared";
 import { prisma } from "../src/db/client.js";
 import { resetTables } from "./helpers/db.js";
+import { createZeroPiiUser } from "./helpers/zero-pii-user.js";
 import {
   storeWebAuthnChallenge,
   createSecureChallenge,
@@ -62,21 +63,7 @@ function clientDataJSON(challenge: string, type = "webauthn.create") {
 }
 
 async function createUser(email: string) {
-  return prisma.user.create({
-    data: {
-      trustId: `TD-${Math.random().toString(36).slice(2, 10).toUpperCase()}`,
-      status: "pending_verification",
-      profile: { create: { firstName: "Test", lastName: "User" } },
-      contactMethods: {
-        create: {
-          type: "email",
-          value: email,
-          isPrimary: true,
-          verifiedAt: new Date(),
-        },
-      },
-    },
-  });
+  return createZeroPiiUser(email, { name: "Test User" });
 }
 
 describe("Trusted device credential flows", () => {

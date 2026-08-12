@@ -1,19 +1,21 @@
 # TrustID V1 — Authentication & Authorization Flows
 
+TrustID is a **Zero-PII IdP**: plaintext contacts/names are not stored at rest; sessions are HttpOnly cookies; LifeOS consumes ZK claims (see [ZK_IDENTITY.md](./ZK_IDENTITY.md)).
+
 ## A. Create TrustID
 
 ```text
 1. PWA → POST /auth/register { firstName, lastName, phone?, email? }
-2. API creates user (status: pending_verification), profile, contact_method(s)
-3. API creates verification_challenge, sends OTP (dev: returned/logged)
+2. API stores nameCommitment + contact lookupHash/commitment (no plaintext PII)
+3. API creates verification_challenge; OTP delivery uses contact in-memory only
 4. Audit: identity.created
 5. Client → POST /auth/verify { challengeId, code }
 6. Contact marked verified; audit: identity.verified
 7. Client → WebAuthn registration ceremony
    - POST /auth/webauthn/register/options
-   - POST /auth/webauthn/register/verify
-8. Credential + trusted device created; TrustID issued if not already
-9. Session created; user status → active
+   - POST /auth/webauthn/register/verify (+ optional presentation hint for sealed session UX)
+8. Credential + trusted device created
+9. Session created (HttpOnly cookie); SessionPresentation sealed for Trust Center UX
 10. Audit: device.registered, session.created
 ```
 
@@ -22,11 +24,11 @@ Public TrustID (`TD-…`) is generated at user creation and shown after verifica
 ## B. Continue with TrustID (sign-in)
 
 ```text
-1. User enters identifier hint (email or phone) OR discovers via passkey
-2. POST /auth/webauthn/login/options
+1. User enters identifier hint (email or phone) OR trustId / discoverable passkey
+2. POST /auth/webauthn/login/options (lookup via contact lookupHash)
 3. Authenticator assertion
 4. POST /auth/webauthn/login/verify
-5. Session created; device last_active updated
+5. Session cookie set; device last_active updated
 6. Audit: session.created
 ```
 

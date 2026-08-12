@@ -3,7 +3,12 @@ import { z } from "zod";
 import { AUDIT_EVENTS } from "@trustid/shared";
 import { clientMeta, requireSession } from "../lib/auth-context.js";
 import { prisma } from "../db/client.js";
+import { commitName } from "../lib/crypto.js";
 import { recordAudit } from "../modules/audit/service.js";
+import {
+  openSessionPresentation,
+  sealSessionPresentation,
+} from "../modules/sessions/presentation.js";
 
 export async function accountRoutes(app: FastifyInstance) {
   app.get("/account/preferences", { preHandler: requireSession }, async (req) => {
@@ -12,17 +17,21 @@ export async function accountRoutes(app: FastifyInstance) {
       create: { userId: req.auth!.userId },
       update: {},
     });
-    const profile = await prisma.profile.findUnique({
-      where: { userId: req.auth!.userId },
-    });
+    const presentation = req.auth!.sessionId
+      ? await openSessionPresentation(req.auth!.sessionId)
+      : null;
     return {
-      profile: profile
-        ? { firstName: profile.firstName, lastName: profile.lastName }
+      profile: presentation
+        ? {
+            firstName: presentation.firstName ?? "",
+            lastName: presentation.lastName ?? "",
+          }
         : null,
       theme: prefs.theme,
       notificationsEnabled: prefs.notificationsEnabled,
       privacyShareAnalytics: prefs.privacyShareAnalytics,
       language: prefs.language,
+      zeroPii: true,
     };
   });
 
@@ -38,18 +47,37 @@ export async function accountRoutes(app: FastifyInstance) {
       })
       .parse(req.body);
 
-    if (body.firstName || body.lastName) {
-      const existing = await prisma.profile.findUnique({
+    if ((body.firstName || body.lastName) && req.auth!.sessionId) {
+      const existing = await openSessionPresentation(req.auth!.sessionId);
+      const firstName = body.firstName?.trim() ?? existing?.firstName ?? "";
+      const lastName = body.lastName?.trim() ?? existing?.lastName ?? "";
+      const nameCommit = commitName(firstName, lastName);
+      await prisma.profile.upsert({
         where: { userId: req.auth!.userId },
+        create: {
+          userId: req.auth!.userId,
+          nameCommitment: nameCommit.nameCommitment,
+          nameSalt: nameCommit.nameSalt,
+        },
+        update: {
+          nameCommitment: nameCommit.nameCommitment,
+          nameSalt: nameCommit.nameSalt,
+        },
       });
-      if (existing) {
-        await prisma.profile.update({
-          where: { userId: req.auth!.userId },
-          data: {
-            ...(body.firstName ? { firstName: body.firstName.trim() } : {}),
-            ...(body.lastName ? { lastName: body.lastName.trim() } : {}),
+      const session = await prisma.session.findUnique({
+        where: { id: req.auth!.sessionId },
+      });
+      if (session) {
+        await sealSessionPresentation(
+          session.id,
+          {
+            ...existing,
+            firstName,
+            lastName,
+            name: `${firstName} ${lastName}`.trim(),
           },
-        });
+          session.expiresAt,
+        );
       }
     }
 

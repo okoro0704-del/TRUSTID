@@ -1,13 +1,10 @@
 const KEY = "trustid.rememberedAccount";
 
+/** Local device hint only — TrustID + optional device label. No email/name PII. */
 export type RememberedAccount = {
-  firstName: string;
-  lastName?: string;
+  trustId: string;
   displayName: string;
-  email?: string;
-  phone?: string;
   deviceName?: string;
-  trustId?: string;
   updatedAt: string;
 };
 
@@ -15,58 +12,41 @@ export function getRememberedAccount(): RememberedAccount | null {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as RememberedAccount;
-    if (!parsed?.displayName && !parsed?.firstName) return null;
-    const email =
-      typeof parsed.email === "string" && parsed.email.trim()
-        ? parsed.email.trim()
-        : undefined;
-    const phone =
-      typeof parsed.phone === "string" && parsed.phone.trim()
-        ? parsed.phone.trim()
-        : undefined;
+    const parsed = JSON.parse(raw) as RememberedAccount & {
+      email?: string;
+      phone?: string;
+      firstName?: string;
+    };
     const trustId =
       typeof parsed.trustId === "string" && parsed.trustId.trim()
         ? parsed.trustId.trim()
         : undefined;
-    if (!email && !phone && !trustId) return null;
+    if (!trustId) return null;
     return {
-      ...parsed,
-      email,
-      phone,
       trustId,
+      displayName: parsed.displayName || trustId,
       deviceName:
         typeof parsed.deviceName === "string" && parsed.deviceName.trim()
           ? parsed.deviceName.trim()
           : undefined,
+      updatedAt: parsed.updatedAt || new Date().toISOString(),
     };
   } catch {
     return null;
   }
 }
 
-export function saveRememberedAccount(
-  partial: Omit<RememberedAccount, "updatedAt" | "displayName"> & {
-    displayName?: string;
-  },
-) {
+export function saveRememberedAccount(partial: {
+  trustId: string;
+  displayName?: string;
+  deviceName?: string;
+}) {
   try {
     const prev = getRememberedAccount();
-    const firstName = partial.firstName || prev?.firstName || "";
-    const lastName = partial.lastName ?? prev?.lastName;
-    const displayName =
-      partial.displayName ||
-      [firstName, lastName].filter(Boolean).join(" ").trim() ||
-      prev?.displayName ||
-      "Trusted user";
     const next: RememberedAccount = {
-      firstName,
-      lastName,
-      displayName,
-      email: partial.email ?? prev?.email,
-      phone: partial.phone ?? prev?.phone,
+      trustId: partial.trustId,
+      displayName: partial.displayName || partial.trustId || prev?.displayName || "TrustID",
       deviceName: partial.deviceName ?? prev?.deviceName,
-      trustId: partial.trustId ?? prev?.trustId,
       updatedAt: new Date().toISOString(),
     };
     localStorage.setItem(KEY, JSON.stringify(next));
@@ -84,7 +64,7 @@ export function clearRememberedAccount() {
   }
 }
 
-/** Persist from a signed-in identity payload. */
+/** Persist from a signed-in identity payload — trustId only. */
 export function rememberFromIdentity(
   identity: {
     trustId: string;
@@ -93,15 +73,9 @@ export function rememberFromIdentity(
   },
   deviceName?: string,
 ) {
-  const email = identity.contacts.find((c) => c.type === "email")?.value;
-  const phone = identity.contacts.find((c) => c.type === "phone")?.value;
   return saveRememberedAccount({
-    firstName: identity.profile?.firstName ?? "",
-    lastName: identity.profile?.lastName,
-    displayName: identity.profile?.name,
-    email,
-    phone,
     trustId: identity.trustId,
+    displayName: identity.trustId,
     deviceName,
   });
 }

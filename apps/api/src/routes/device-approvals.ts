@@ -6,6 +6,7 @@ import {
   requireSession,
   setSessionCookie,
 } from "../lib/auth-context.js";
+import { config } from "../lib/config.js";
 import {
   approveTemporaryAccess,
   approveTrustDevice,
@@ -47,13 +48,14 @@ export async function deviceApprovalRoutes(app: FastifyInstance) {
       .object({
         email: z.string().email().optional(),
         phone: z.string().min(7).max(32).optional(),
+        trustId: z.string().min(4).optional(),
         deviceName: z.string().max(100).optional(),
         clientId: z.string().optional(),
         applicationName: z.string().max(100).optional(),
         location: z.string().max(200).optional(),
       })
-      .refine((b) => b.email || b.phone, {
-        message: "email or phone required",
+      .refine((b) => b.email || b.phone || b.trustId, {
+        message: "email, phone, or trustId required",
       })
       .parse(req.body);
     try {
@@ -81,8 +83,16 @@ export async function deviceApprovalRoutes(app: FastifyInstance) {
       const result = await claimApprovalResult(body.pollToken);
       if (result.mode === "temporary" && result.sessionToken) {
         setSessionCookie(reply, result.sessionToken);
-        const identity = await getDashboardIdentity(result.userId);
-        return { ...result, identity };
+        const identity = await getDashboardIdentity(
+          result.userId,
+          result.sessionId,
+        );
+        const { sessionToken, ...rest } = result;
+        return {
+          ...rest,
+          identity,
+          ...(config.exposeSessionTokenInBody ? { sessionToken } : {}),
+        };
       }
       return result;
     } catch (err) {
@@ -119,11 +129,15 @@ export async function deviceApprovalRoutes(app: FastifyInstance) {
       });
       await completeApprovalEnrollment(row.id, row.userId, result.device.id);
       if (result.sessionToken) setSessionCookie(reply, result.sessionToken);
-      const identity = await getDashboardIdentity(row.userId);
+      const identity = await getDashboardIdentity(row.userId, result.sessionId);
       return {
-        ...result,
+        device: result.device,
+        trustId: result.trustId,
+        sessionId: result.sessionId,
         identity,
-        sessionToken: result.sessionToken,
+        ...(config.exposeSessionTokenInBody && result.sessionToken
+          ? { sessionToken: result.sessionToken }
+          : {}),
       };
     } catch (err) {
       return httpError(err, reply);

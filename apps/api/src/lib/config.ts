@@ -137,4 +137,30 @@ export const config = {
     );
   },
   sessionCookieName: "trustid_session",
+  /** Pepper for contact lookup hashes (never log). */
+  get piiPepper() {
+    const v = process.env.PII_PEPPER;
+    if (v) return v;
+    if (!this.isDev && process.env.NODE_ENV === "production") {
+      throw new Error("Missing env PII_PEPPER");
+    }
+    return "dev-pii-pepper-change-in-production";
+  },
+  /** AES-GCM key material (64 hex chars or any passphrase). */
+  get sealKey() {
+    const v = process.env.SEAL_KEY;
+    if (v) return v;
+    if (!this.isDev && process.env.NODE_ENV === "production") {
+      throw new Error("Missing env SEAL_KEY");
+    }
+    return "dev-seal-key-change-in-production-please-32b";
+  },
+  /** Break-glass: allow legacy PII OAuth scopes (email/profile/phone/portrait). */
+  get allowLegacyPiiScopes() {
+    return process.env.ALLOW_LEGACY_PII_SCOPES === "true";
+  },
+  /** When false, auth JSON responses omit sessionToken (cookie only). */
+  get exposeSessionTokenInBody() {
+    return process.env.EXPOSE_SESSION_TOKEN_IN_BODY === "true";
+  },
 };

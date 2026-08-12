@@ -97,8 +97,8 @@ export async function getTrustCenterSummary(userId: string, currentSessionId?: s
       trustId: user.trustId,
       status: user.status,
       name: user.profile
-        ? `${user.profile.firstName} ${user.profile.lastName}`
-        : null,
+      ? `${user.profile?.nameCommitment ? "Sealed identity" : user.trustId}`
+      : null,
     },
     trust,
     counts: {

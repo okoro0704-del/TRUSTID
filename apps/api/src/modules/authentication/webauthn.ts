@@ -163,9 +163,7 @@ export async function registrationOptions(
     rpName: config.webauthn.rpName,
     rpID: config.webauthn.rpID,
     userName: user.trustId,
-    userDisplayName: user.profile
-      ? `${user.profile.firstName} ${user.profile.lastName}`
-      : user.trustId,
+    userDisplayName: user.trustId,
     userID: new TextEncoder().encode(user.id),
     attestationType: "none",
     excludeCredentials: user.credentials
@@ -201,6 +199,14 @@ export async function verifyRegistration(input: {
   /** When true, skip creating a new TrustID session (already authenticated add-device). */
   skipSession?: boolean;
   purpose?: typeof WEBAUTHN_PURPOSES.REGISTRATION | typeof WEBAUTHN_PURPOSES.DEVICE_ADDITION;
+  /** Ephemeral UX fields sealed into SessionPresentation only */
+  presentation?: {
+    firstName?: string;
+    lastName?: string;
+    name?: string;
+    contactType?: string;
+    contactValue?: string;
+  };
 }) {
   const purpose = input.purpose ?? WEBAUTHN_PURPOSES.REGISTRATION;
   const clientChallenge = extractClientChallenge(input.response.response.clientDataJSON);
@@ -348,6 +354,7 @@ export async function verifyRegistration(input: {
       deviceId: device.id,
       ip: input.ip,
       userAgent: input.userAgent,
+      presentation: input.presentation ?? null,
     });
     sessionToken = created.token;
     sessionId = created.session.id;
@@ -369,7 +376,7 @@ export async function verifyRegistration(input: {
       lastUsedAt: device.lastActiveAt?.toISOString() ?? null,
     },
     trustId: user.trustId,
-    profile: user.profile,
+    profile: null,
   };
 }
 
@@ -587,7 +594,7 @@ export async function verifyLogin(input: {
     sessionToken: token,
     sessionId: session.id,
     trustId: cred.user.trustId,
-    profile: cred.user.profile,
+    profile: null,
     device: {
       id: cred.device.id,
       name: cred.device.name,

@@ -1,7 +1,5 @@
 /** Same-origin `/api` via Netlify proxy in production; Vite proxy locally. */
 const API_BASE = import.meta.env.VITE_API_URL ?? "/api";
-const SESSION_KEY = "trustid.sessionToken";
-const SESSION_COOKIE = "trustid_session";
 
 export class ApiError extends Error {
   status: number;
@@ -11,36 +9,14 @@ export class ApiError extends Error {
   }
 }
 
+/** @deprecated Sessions are HttpOnly cookies only — always null. */
 export function getSessionToken(): string | null {
-  try {
-    return sessionStorage.getItem(SESSION_KEY);
-  } catch {
-    return null;
-  }
+  return null;
 }
 
-function writeSessionCookie(token: string | null) {
-  try {
-    if (token) {
-      // First-party cookie on the TrustID Netlify host so /api proxy forwards it to Railway
-      const maxAge = 60 * 60 * 24 * 7;
-      document.cookie = `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; Secure; SameSite=Lax; Max-Age=${maxAge}`;
-    } else {
-      document.cookie = `${SESSION_COOKIE}=; Path=/; Secure; SameSite=Lax; Max-Age=0`;
-    }
-  } catch {
-    /* ignore */
-  }
-}
-
-export function setSessionToken(token: string | null) {
-  try {
-    if (token) sessionStorage.setItem(SESSION_KEY, token);
-    else sessionStorage.removeItem(SESSION_KEY);
-  } catch {
-    /* ignore */
-  }
-  writeSessionCookie(token);
+/** @deprecated No-op — session is HttpOnly cookie set by the API. */
+export function setSessionToken(_token: string | null) {
+  /* cookie-only sessions */
 }
 
 function networkErrorMessage(): string {
@@ -56,7 +32,6 @@ export async function api<T>(
 ): Promise<T> {
   const method = (options.method ?? "GET").toUpperCase();
   const hasBody = options.body != null && options.body !== "";
-  // Fastify rejects Content-Type: application/json with an empty body.
   const body =
     hasBody
       ? options.body
@@ -71,51 +46,26 @@ export async function api<T>(
     headers["Content-Type"] = headers["Content-Type"] ?? "application/json";
   }
 
-  const token = getSessionToken();
-  if (token && !headers.Authorization && !headers["X-TrustID-Session"]) {
-    // Netlify proxies often strip Authorization — send custom header + rely on Cookie
-    headers["X-TrustID-Session"] = token;
-    headers.Authorization = `Bearer ${token}`;
-  }
-
   let res: Response;
   try {
     res = await fetch(`${API_BASE}${path}`, {
       ...options,
       method,
+      headers,
       body,
       credentials: "include",
-      headers,
     });
   } catch {
     throw new ApiError(0, networkErrorMessage());
   }
 
-  const text = await res.text();
-  let data: Record<string, unknown> = {};
-  if (text) {
-    try {
-      data = JSON.parse(text) as Record<string, unknown>;
-    } catch {
-      if (!res.ok) {
-        throw new ApiError(
-          res.status,
-          res.status >= 500
-            ? "TrustID is temporarily unavailable. Please try again in a moment."
-            : `Something went wrong (${res.status}). Please try again.`,
-        );
-      }
-      throw new ApiError(
-        res.status,
-        "Unexpected response from TrustID. Please try again.",
-      );
-    }
-  }
-
+  const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new ApiError(
       res.status,
-      String(data.message || data.error || `Request failed (${res.status})`),
+      (data as { message?: string }).message ||
+        (data as { error?: string }).error ||
+        res.statusText,
     );
   }
   return data as T;

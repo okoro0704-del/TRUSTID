@@ -3,7 +3,9 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   exchangeCode,
   fetchUserInfo,
+  proveTrustTier,
   upsertLifeOsProfile,
+  verifyZkProof,
 } from "../lib/oauth";
 
 export function Callback() {
@@ -27,9 +29,19 @@ export function Callback() {
     (async () => {
       try {
         const tokens = await exchangeCode(code, state);
-        const identity = await fetchUserInfo(tokens.access_token);
         sessionStorage.setItem("lifeos.accessToken", tokens.access_token);
-        upsertLifeOsProfile(identity);
+        const identity = await fetchUserInfo(tokens.access_token);
+        const proof = await proveTrustTier(tokens.access_token, 1);
+        const valid = await verifyZkProof(proof);
+        if (!valid) throw new Error("ZK proof verification failed");
+        upsertLifeOsProfile({
+          nullifier: proof.trustIdNullifier,
+          trustIdHint: identity.trustId ?? identity.sub,
+          stars: proof.stars,
+          maxStars: proof.maxStars,
+          trustLabel: proof.label,
+          claimSatisfied: proof.claim.satisfied,
+        });
         navigate("/app", { replace: true });
       } catch (e) {
         setError(e instanceof Error ? e.message : "Callback failed");
@@ -40,7 +52,11 @@ export function Callback() {
   return (
     <div className="wrap">
       <h1>Connecting…</h1>
-      {error ? <p className="error">{error}</p> : <p>Exchanging TrustID authorization…</p>}
+      {error ? (
+        <p className="error">{error}</p>
+      ) : (
+        <p>Exchanging authorization and verifying ZK trust claim…</p>
+      )}
     </div>
   );
 }

@@ -8,6 +8,7 @@ import {
 } from "@trustid/shared";
 import { prisma } from "../../db/client.js";
 import { config } from "../../lib/config.js";
+import { openJson, sealJson } from "../../lib/crypto.js";
 import { recordAudit } from "../audit/service.js";
 import { ensureVerifiedIdentityProfile } from "./profile.js";
 
@@ -41,12 +42,20 @@ async function ensureSigningKey() {
   return prisma.assertionSigningKey.create({
     data: {
       kid,
-      privateJwk: JSON.stringify(privateJwk),
+      privateJwkSealed: sealJson(privateJwk),
       publicJwk: JSON.stringify(publicJwk),
       algorithm: "EdDSA",
       active: true,
     },
   });
+}
+
+async function loadPrivateKey(keyRow: {
+  privateJwkSealed: string;
+  algorithm: string;
+}) {
+  const jwk = openJson<jose.JWK>(keyRow.privateJwkSealed);
+  return jose.importJWK(jwk, keyRow.algorithm);
 }
 
 export async function getJwks() {
@@ -88,10 +97,7 @@ export async function issueIdentityAssertion(input: {
   }
 
   const keyRow = await ensureSigningKey();
-  const privateKey = await jose.importJWK(
-    JSON.parse(keyRow.privateJwk) as jose.JWK,
-    keyRow.algorithm,
-  );
+  const privateKey = await loadPrivateKey(keyRow);
 
   const jti = randomUUID();
   const ttl = input.ttlSeconds ?? 300;
@@ -116,7 +122,6 @@ export async function issueIdentityAssertion(input: {
 
   const claims: Record<string, unknown> = {
     trustId: profile.trustId,
-    displayName: profile.displayName,
     identityStatus: profile.identityStatus,
     verificationLevel: profile.verificationLevel,
     profileVersion: profile.profileVersion,
@@ -288,7 +293,6 @@ export async function verifyIdentityAssertion(input: {
 
   return {
     trustId: payload.trustId,
-    displayName: payload.displayName,
     identityStatus: payload.identityStatus,
     verificationLevel: payload.verificationLevel,
     portraitRef: payload.portraitRef ?? null,

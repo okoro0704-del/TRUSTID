@@ -94,23 +94,21 @@ export function SecurePage() {
           userId: onboarding!.userId,
           deviceName: deviceName || undefined,
           response,
+          presentation: {
+            firstName: onboarding!.firstName,
+            lastName: onboarding!.lastName,
+            contactType: onboarding!.email ? "email" : onboarding!.phone ? "phone" : undefined,
+            contactValue: onboarding!.email || onboarding!.phone,
+          },
         }),
       });
       if (verifyResult.sessionToken) setSessionToken(verifyResult.sessionToken);
       if (verifyResult.identity) setIdentity(verifyResult.identity);
 
       saveRememberedAccount({
-        firstName:
-          onboarding!.firstName ||
-          verifyResult.identity?.profile?.firstName ||
-          "",
-        lastName:
-          onboarding!.lastName || verifyResult.identity?.profile?.lastName,
-        displayName: verifyResult.identity?.profile?.name,
-        email: onboarding!.email,
-        phone: onboarding!.phone,
+        trustId: onboarding!.trustId || verifyResult.identity?.trustId || "",
+        displayName: onboarding!.trustId || verifyResult.identity?.trustId,
         deviceName: deviceName.trim() || undefined,
-        trustId: onboarding!.trustId || verifyResult.identity?.trustId,
       });
 
       sessionStorage.removeItem("trustid.onboarding");

@@ -9,7 +9,6 @@ function trustIdApiBase(): string {
   ) {
     return "http://localhost:8787";
   }
-  // Production LifeOS must set VITE_TRUSTID_API to the TrustID site /api URL
   throw new Error(
     "Set VITE_TRUSTID_API to your TrustID API base (e.g. https://your-trustid.netlify.app/api)",
   );
@@ -23,9 +22,9 @@ function redirectUri(): string {
 }
 
 const CLIENT_ID = "lifeos_mock_public";
-/** Include trust_level + portrait so Life OS shows the same stars / verified photo. */
+/** Zero-PII: ZK claims + trust level only — no email/profile/portrait. */
 const SCOPES =
-  "openid identity.basic identity.profile identity.email identity.verification_status identity.trust_level identity.portrait";
+  "openid identity.basic identity.zk_claims identity.trust_level identity.verification_status";
 
 function b64url(bytes: ArrayBuffer | Uint8Array) {
   const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
@@ -95,19 +94,17 @@ export async function exchangeCode(code: string, state: string) {
 
 export type TrustIdUserInfo = {
   sub: string;
-  trustId: string;
+  trustId?: string;
   status?: string;
-  profile?: { firstName: string; lastName: string; name: string };
-  contacts?: { type: string; value: string }[];
+  zk?: { available: boolean; provePath?: string };
   trustLevel?: {
     tier: number;
     stars: number;
     maxStars: number;
     label: string;
   };
-  hasVerifiedIdentityPortrait?: boolean;
-  portraitRef?: string | null;
-  portraitVersion?: number;
+  identityStatus?: string;
+  isVerifiedIdentity?: boolean;
 };
 
 export async function fetchUserInfo(accessToken: string) {
@@ -119,53 +116,87 @@ export async function fetchUserInfo(accessToken: string) {
   return data as TrustIdUserInfo;
 }
 
-export async function fetchVerifiedPortrait(accessToken: string) {
-  const res = await fetch(`${trustIdApiBase()}/identity/portrait`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-  if (res.status === 404) return null;
-  const data = await res.json();
-  if (!res.ok) return null;
-  const media = data.mediaAccess as
-    | { path: string; token: string; expiresAt: string }
-    | undefined;
-  if (!media) return null;
-  return {
-    url: `${trustIdApiBase()}${media.path}?token=${encodeURIComponent(media.token)}`,
-    expiresAt: media.expiresAt,
+export type ZkProofResult = {
+  protocol: string;
+  circuit: string;
+  publicSignals: string[];
+  proof: { attestation?: string; [k: string]: unknown };
+  claim: {
+    type: string;
+    minTier: number;
+    satisfied: boolean;
+    nullifier: string;
   };
+  trustIdNullifier: string;
+  stars: number;
+  maxStars: number;
+  label: string;
+};
+
+/** Request a ZK trust-tier proof — no email/name/portrait. */
+export async function proveTrustTier(
+  accessToken: string,
+  minTier = 1,
+): Promise<ZkProofResult> {
+  const res = await fetch(`${trustIdApiBase()}/zk/prove`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ claim: "trust_tier_gte", minTier }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || data.error || "zk prove failed");
+  return data as ZkProofResult;
+}
+
+export async function verifyZkProof(proof: ZkProofResult): Promise<boolean> {
+  const res = await fetch(`${trustIdApiBase()}/zk/verify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      proof: proof.proof,
+      publicSignals: proof.publicSignals,
+    }),
+  });
+  const data = await res.json();
+  return Boolean(data.valid);
 }
 
 export type LifeOsProfile = {
-  trustId: string;
-  displayName: string;
-  email?: string;
+  /** Pseudonymous nullifier for this RP — not the raw TrustID when ZK used */
+  nullifier: string;
+  trustIdHint?: string;
   stars: number;
   maxStars: number;
   trustLabel?: string;
-  hasVerifiedPortrait: boolean;
+  claimSatisfied: boolean;
   createdAt: string;
   lastLoginAt: string;
 };
 
 const PROFILE_KEY = "lifeos.localProfile";
 
-export function upsertLifeOsProfile(identity: TrustIdUserInfo): LifeOsProfile {
+export function upsertLifeOsProfile(input: {
+  nullifier: string;
+  trustIdHint?: string;
+  stars: number;
+  maxStars: number;
+  trustLabel?: string;
+  claimSatisfied: boolean;
+}): LifeOsProfile {
   const existingRaw = localStorage.getItem(PROFILE_KEY);
   const existing = existingRaw ? (JSON.parse(existingRaw) as LifeOsProfile) : null;
-  const email = identity.contacts?.find((c) => c.type === "email")?.value;
-  const stars = identity.trustLevel?.stars ?? identity.trustLevel?.tier ?? 0;
-  const maxStars = identity.trustLevel?.maxStars ?? 3;
   const profile: LifeOsProfile = {
-    trustId: identity.trustId ?? identity.sub,
-    displayName: identity.profile?.name ?? identity.trustId ?? identity.sub,
-    email,
-    stars,
-    maxStars,
-    trustLabel: identity.trustLevel?.label,
-    hasVerifiedPortrait: Boolean(identity.hasVerifiedIdentityPortrait),
+    nullifier: input.nullifier,
+    trustIdHint: input.trustIdHint,
+    stars: input.stars,
+    maxStars: input.maxStars,
+    trustLabel: input.trustLabel,
+    claimSatisfied: input.claimSatisfied,
     createdAt:
-      existing?.trustId === (identity.trustId ?? identity.sub)
+      existing?.nullifier === input.nullifier
         ? existing.createdAt
         : new Date().toISOString(),
     lastLoginAt: new Date().toISOString(),

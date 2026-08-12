@@ -294,14 +294,8 @@ export async function claimEnrollment(
       trustLevel: device.trustLevel,
       expiresAt: expiresAt.toISOString(),
     },
-    profile: row.user.profile
-      ? {
-          firstName: row.user.profile.firstName,
-          lastName: row.user.profile.lastName,
-          name: `${row.user.profile.firstName} ${row.user.profile.lastName}`,
-        }
-      : null,
-    note: "Signed in with a master-device code. No new passkey was created on this device.",
+    profile: null,
+    note: "Signed in with a master-device code. No new passkey was created. Profile plaintext is session-scoped only.",
   };
 }
 

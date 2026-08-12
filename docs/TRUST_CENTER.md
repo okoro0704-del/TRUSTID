@@ -11,9 +11,11 @@ TrustID is an **Identity & Trust Management Platform** for the ecosystem.
 | 2 | ★★☆ | Verified identity |
 | 3 | ★★★ | High assurance (future) |
 
-Filled **stars = trust tier**. Trust Center and Life OS both show this same count via `trustLevel.stars` (`identity.trust_level` scope).
+Filled **stars = trust tier**. Trust Center and LifeOS both show this same count via `trustLevel.stars` / ZK prove public signals (`identity.trust_level` / `identity.zk_claims`).
 
 Tier 1 **does not** mean government ID verification.
+
+LifeOS should prefer `POST /zk/prove` over raw userinfo attributes (see [ZK_IDENTITY.md](./ZK_IDENTITY.md)).
 
 ## Device enrollment
 

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { config } from "../lib/config.js";
 import {
   clearSessionCookie,
   clientMeta,
@@ -25,6 +26,13 @@ function httpError(err: unknown, reply: import("fastify").FastifyReply) {
   });
 }
 
+function sessionBody(token: string | undefined) {
+  if (config.exposeSessionTokenInBody && token) {
+    return { sessionToken: token };
+  }
+  return {};
+}
+
 export async function authRoutes(app: FastifyInstance) {
   app.post("/auth/register", async (req, reply) => {
     const body = z
@@ -37,7 +45,13 @@ export async function authRoutes(app: FastifyInstance) {
       .parse(req.body);
     try {
       const result = await registerIdentity({ ...body, ...clientMeta(req) });
-      return result;
+      // Strip internal ephemeral from wire unless needed by client for session seal later
+      const { _ephemeral, ...publicResult } = result;
+      return {
+        ...publicResult,
+        // Client holds ephemerally until passkey verify seals into SessionPresentation
+        presentationHint: _ephemeral,
+      };
     } catch (err) {
       return httpError(err, reply);
     }
@@ -72,6 +86,14 @@ export async function authRoutes(app: FastifyInstance) {
         userId: z.string().min(1),
         deviceName: z.string().max(100).optional(),
         response: z.any(),
+        presentation: z
+          .object({
+            firstName: z.string().optional(),
+            lastName: z.string().optional(),
+            contactType: z.string().optional(),
+            contactValue: z.string().optional(),
+          })
+          .optional(),
       })
       .parse(req.body);
     try {
@@ -79,20 +101,26 @@ export async function authRoutes(app: FastifyInstance) {
         userId: body.userId,
         response: body.response,
         deviceName: body.deviceName,
+        presentation: body.presentation
+          ? {
+              ...body.presentation,
+              name: `${body.presentation.firstName ?? ""} ${body.presentation.lastName ?? ""}`.trim(),
+            }
+          : undefined,
         ...clientMeta(req),
       });
       if (!result.sessionToken) {
         throw Object.assign(new Error("Session was not created"), { statusCode: 500 });
       }
       setSessionCookie(reply, result.sessionToken);
-      const identity = await getDashboardIdentity(body.userId);
+      const identity = await getDashboardIdentity(body.userId, result.sessionId);
       return {
         trustId: result.trustId,
-        profile: result.profile,
+        profile: identity?.profile ?? null,
         device: result.device,
         sessionId: result.sessionId,
-        sessionToken: result.sessionToken,
         identity,
+        ...sessionBody(result.sessionToken),
       };
     } catch (err) {
       return httpError(err, reply);
@@ -135,14 +163,14 @@ export async function authRoutes(app: FastifyInstance) {
       if (!session) {
         throw Object.assign(new Error("Session was not created"), { statusCode: 500 });
       }
-      const identity = await getDashboardIdentity(session.userId);
+      const identity = await getDashboardIdentity(session.userId, session.id);
       return {
         trustId: result.trustId,
-        profile: result.profile,
+        profile: identity?.profile ?? null,
         device: result.device,
         sessionId: result.sessionId,
-        sessionToken: result.sessionToken,
         identity,
+        ...sessionBody(result.sessionToken),
       };
     } catch (err) {
       return httpError(err, reply);
@@ -150,7 +178,10 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   app.post("/auth/session", { preHandler: requireSession }, async (req) => {
-    const identity = await getDashboardIdentity(req.auth!.userId);
+    const identity = await getDashboardIdentity(
+      req.auth!.userId,
+      req.auth!.sessionId,
+    );
     return { authenticated: true, identity, sessionId: req.auth!.sessionId };
   });
 

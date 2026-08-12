@@ -29,6 +29,7 @@ import {
   verifyRegistration,
 } from "../modules/authentication/webauthn.js";
 import { setSessionCookie } from "../lib/auth-context.js";
+import { config } from "../lib/config.js";
 
 function httpError(err: unknown, reply: import("fastify").FastifyReply) {
   const e = err as { statusCode?: number; message?: string };
@@ -212,7 +213,13 @@ export async function deviceRoutes(app: FastifyInstance) {
         deviceName: body.deviceName,
       });
       if (result.sessionToken) setSessionCookie(reply, result.sessionToken);
-      return result;
+      const { sessionToken, ...publicResult } = result;
+      return {
+        ...publicResult,
+        ...(config.exposeSessionTokenInBody && sessionToken
+          ? { sessionToken }
+          : {}),
+      };
     } catch (err) {
       return httpError(err, reply);
     }
@@ -251,7 +258,9 @@ export async function deviceRoutes(app: FastifyInstance) {
         device: result.device,
         trustId: result.trustId,
         sessionId: result.sessionId,
-        sessionToken: result.sessionToken,
+        ...(config.exposeSessionTokenInBody && result.sessionToken
+          ? { sessionToken: result.sessionToken }
+          : {}),
       };
     } catch (err) {
       return httpError(err, reply);
