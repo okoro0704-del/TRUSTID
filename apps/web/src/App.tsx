@@ -19,7 +19,6 @@ import { NotificationsPage } from "./pages/trust/Notifications";
 import { ApplicationsPage } from "./pages/trust/Applications";
 import { SessionsPage } from "./pages/trust/Sessions";
 import { PasskeysPage } from "./pages/trust/Passkeys";
-import { SecurityPage } from "./pages/trust/Security";
 import { MediaVaultPage } from "./pages/trust/MediaVault";
 import { VaultDashboardPage } from "./pages/trust/VaultDashboard";
 import { AppLockerPage } from "./pages/trust/AppLocker";
@@ -64,6 +63,13 @@ export function App() {
         }
       >
         <Route index element={<OverviewPage />} />
+        {/* Primary consumer tabs */}
+        <Route path="apps" element={<AppLockerPage />} />
+        <Route path="media" element={<MediaVaultPage />} />
+        <Route path="app-locker" element={<Navigate to="/dashboard/apps" replace />} />
+        <Route path="media-vault" element={<Navigate to="/dashboard/media" replace />} />
+        <Route path="security" element={<Navigate to="/dashboard/media" replace />} />
+        {/* Secondary / account tools */}
         <Route path="devices" element={<DevicesPage />} />
         <Route path="devices/:id" element={<DeviceDetailPage />} />
         <Route path="approvals" element={<ApprovalsPage />} />
@@ -72,10 +78,7 @@ export function App() {
         <Route path="applications" element={<ApplicationsPage />} />
         <Route path="sessions" element={<SessionsPage />} />
         <Route path="passkeys" element={<PasskeysPage />} />
-        <Route path="security" element={<SecurityPage />} />
         <Route path="vault" element={<VaultDashboardPage />} />
-        <Route path="media-vault" element={<MediaVaultPage />} />
-        <Route path="app-locker" element={<AppLockerPage />} />
         <Route path="device-sync" element={<DeviceSyncPage />} />
         <Route path="guardians" element={<GuardiansPage />} />
         <Route path="identity" element={<IdentityPage />} />

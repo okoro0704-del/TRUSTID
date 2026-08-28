@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../../lib/api";
 
 type Prefs = {
@@ -141,6 +142,28 @@ export function AccountPage() {
           {message && <p className="notice">{message}</p>}
           {error && <p className="error">{error}</p>}
         </form>
+      </section>
+
+      <section className="section surface-block">
+        <h2>More</h2>
+        <p className="sub">Identity tools and connected services.</p>
+        <div className="action-rail">
+          <Link className="action-chip" to="/dashboard/devices">
+            Devices
+          </Link>
+          <Link className="action-chip" to="/dashboard/passkeys">
+            Passkeys
+          </Link>
+          <Link className="action-chip" to="/dashboard/applications">
+            Connected apps
+          </Link>
+          <Link className="action-chip" to="/dashboard/approvals">
+            Approvals
+          </Link>
+          <Link className="action-chip" to="/dashboard/identity">
+            Identity
+          </Link>
+        </div>
       </section>
     </div>
   );

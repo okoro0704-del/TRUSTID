@@ -21,49 +21,7 @@ const TABS = [
     ),
   },
   {
-    to: "/dashboard/devices",
-    label: "Devices",
-    icon: (
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <rect
-          x="7"
-          y="3.5"
-          width="10"
-          height="17"
-          rx="2"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.6"
-        />
-        <path d="M11 18.5h2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-      </svg>
-    ),
-  },
-  {
-    to: "/dashboard/security",
-    label: "Security",
-    icon: (
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path
-          d="M12 3.5 19 6.5v5.2c0 4.2-2.7 7.9-7 9.3-4.3-1.4-7-5.1-7-9.3V6.5L12 3.5Z"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.6"
-          strokeLinejoin="round"
-        />
-        <path
-          d="m9.2 12.1 1.9 1.9 3.7-3.8"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.6"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    ),
-  },
-  {
-    to: "/dashboard/applications",
+    to: "/dashboard/apps",
     label: "Apps",
     icon: (
       <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -71,6 +29,22 @@ const TABS = [
         <rect x="13" y="4" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.6" />
         <rect x="4" y="13" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.6" />
         <rect x="13" y="13" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.6" />
+      </svg>
+    ),
+  },
+  {
+    to: "/dashboard/media",
+    label: "Media",
+    icon: (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          d="M5 7.5A2.5 2.5 0 0 1 7.5 5h3l1.2 1.5H16.5A2.5 2.5 0 0 1 19 9v8a2.5 2.5 0 0 1-2.5 2.5h-9A2.5 2.5 0 0 1 5 17V7.5Z"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinejoin="round"
+        />
+        <circle cx="12" cy="13" r="2.6" fill="none" stroke="currentColor" strokeWidth="1.6" />
       </svg>
     ),
   },
@@ -93,18 +67,20 @@ const TABS = [
 ];
 
 const TITLES: Record<string, string> = {
-  "/dashboard": "Trust Center",
+  "/dashboard": "TrustID",
+  "/dashboard/apps": "App Locker",
+  "/dashboard/app-locker": "App Locker",
+  "/dashboard/media": "Media",
+  "/dashboard/media-vault": "Media",
+  "/dashboard/security": "Media",
   "/dashboard/devices": "Devices",
   "/dashboard/approvals": "Approvals",
   "/dashboard/temporary": "Temporary",
-  "/dashboard/applications": "Apps",
+  "/dashboard/applications": "Connected apps",
   "/dashboard/sessions": "Sessions",
   "/dashboard/passkeys": "Passkeys",
   "/dashboard/notifications": "Alerts",
-  "/dashboard/security": "Security",
-  "/dashboard/vault": "Sovereign Vault",
-  "/dashboard/media-vault": "Media Vault",
-  "/dashboard/app-locker": "App Locker",
+  "/dashboard/vault": "Vault",
   "/dashboard/device-sync": "Device Sync",
   "/dashboard/guardians": "Guardians",
   "/dashboard/identity": "Identity",
@@ -167,7 +143,7 @@ export function TrustCenterLayout() {
             <div className="app-topbar-copy">
               <div className="app-topbar-title">{title}</div>
               <div className="app-topbar-sub">
-                {identity?.trustId ?? "Identity & trust"}
+                {identity?.trustId ?? "Private & locked"}
               </div>
               {trust && (
                 <div className="app-topbar-stars">
@@ -184,7 +160,7 @@ export function TrustCenterLayout() {
             <NavLink
               to="/dashboard/notifications"
               className="app-icon-btn"
-              aria-label="Security alerts"
+              aria-label="Alerts"
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path
@@ -229,15 +205,6 @@ export function TrustCenterLayout() {
             </button>
           </div>
         </div>
-        {identity && (
-          <div className="app-trust-strip">
-            <span className="app-pulse" aria-hidden="true" />
-            <span className="app-trust-strip-text">
-              {identity.profile?.name ?? "Trusted identity"}
-              {trust ? ` · ${trust.label}` : ""} · session active
-            </span>
-          </div>
-        )}
       </header>
 
       <main className="app-content">

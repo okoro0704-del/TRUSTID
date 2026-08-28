@@ -115,6 +115,22 @@ export class MediaVault {
     }
   }
 
+  /** Item count without decrypting ? safe to show on locked folder UI. */
+  async sealedCount(): Promise<number> {
+    if (this.native) {
+      if (!this.sessionUnlocked) return 0;
+      return (await this.native.list()).length;
+    }
+    const db = await openDb();
+    try {
+      const tx = db.transaction(STORE_META, "readonly");
+      const all = await idbReq(tx.objectStore(STORE_META).getAll());
+      return (all as VaultItemMeta[]).length;
+    } finally {
+      db.close();
+    }
+  }
+
   async importFile(
     file: File,
     opts?: { wipeSourceUri?: string },

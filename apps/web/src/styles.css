@@ -1103,6 +1103,30 @@ select {
   background: rgba(0, 0, 0, 0.35);
 }
 
+.media-folder-locked {
+  text-align: center;
+  padding-top: 1.5rem;
+  padding-bottom: 1.75rem;
+}
+
+.media-folder-icon {
+  color: var(--gold, #d9b56a);
+  margin-bottom: 0.75rem;
+  opacity: 0.95;
+}
+
+.consumer-quick {
+  grid-template-columns: 1fr 1fr;
+}
+
+.consumer-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-height: 7.5rem;
+  justify-content: center;
+}
+
 .code-block {
   margin: 0;
   padding: 0.85rem;
