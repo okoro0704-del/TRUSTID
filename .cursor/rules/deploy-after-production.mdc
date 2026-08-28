@@ -1,0 +1,15 @@
+---
+description: After production-ready TrustID work, always commit, push to GitHub, and confirm Netlify deploy
+alwaysApply: true
+---
+
+# Deploy after production work
+
+When TrustID changes are production-ready (features, UX, fixes the user can use live):
+
+1. Commit with a clear message (follow the repo git safety protocol).
+2. Push to `origin` on the current branch (`main` unless told otherwise).
+3. Confirm Netlify auto-deploy for `trustedid` when the push is to `main` (site: https://trustedid.netlify.app).
+4. Do this without waiting to be asked again — the user prefers automatic GitHub + Netlify after every production change.
+
+Do not push WIP experiments, secrets, or `*.tsbuildinfo` / build artifacts unless they are intentionally tracked.
