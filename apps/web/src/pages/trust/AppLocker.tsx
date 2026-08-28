@@ -6,13 +6,24 @@ import { getAppLockController } from "../../lib/security/tier1";
 const SUGGESTIONS: Omit<LockedApp, "addedAt">[] = [
   { packageId: "com.whatsapp", displayName: "WhatsApp" },
   { packageId: "com.instagram.android", displayName: "Instagram" },
+  { packageId: "com.snapchat.android", displayName: "Snapchat" },
   { packageId: "com.google.android.apps.photos", displayName: "Google Photos" },
   { packageId: "com.android.gallery3d", displayName: "Gallery" },
   { packageId: "com.sec.android.gallery3d", displayName: "Samsung Gallery" },
   { packageId: "com.android.vending", displayName: "Play Store" },
+  { packageId: "com.twitter.android", displayName: "X" },
 ];
 
-/** Consumer Apps tab ? shows locked apps and App Locker controls. */
+function initials(name: string) {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((p) => p[0]?.toUpperCase() ?? "")
+    .join("");
+}
+
+/** 2026 App Locker ? locked app tiles with biometric shield. */
 export function AppLockerPage() {
   const [policy, setPolicy] = useState<AppLockPolicy>({
     ...DEFAULT_APP_LOCK_POLICY,
@@ -105,25 +116,36 @@ export function AppLockerPage() {
   }
 
   return (
-    <div className="dashboard">
-      <section className="section surface-block">
-        <div className="section-head">
+    <div className="dashboard locker-shell">
+      <section className="locker-hero">
+        <p className="locker-eyebrow">App Locker</p>
+        <h1 className="locker-title">Protected apps</h1>
+        <p className="locker-lede">
+          Locked apps open only after biometric. Your shield stays on until you
+          turn it off.
+        </p>
+
+        <div className="locker-switch-card">
           <div>
-            <h2>Locked apps</h2>
-            <p className="sub">
-              Apps you lock need Face ID, Touch ID, or fingerprint before they open.
-            </p>
+            <strong>App Lock shield</strong>
+            <span className="muted">
+              {policy.enabled
+                ? `${policy.apps.length} app${policy.apps.length === 1 ? "" : "s"} protected`
+                : "Off ? apps open freely"}
+            </span>
           </div>
           <button
             type="button"
-            className={`btn ${policy.enabled ? "btn-ghost" : "btn-primary"}`}
+            className={`locker-switch ${policy.enabled ? "on" : ""}`}
             disabled={busy}
+            aria-pressed={policy.enabled}
             onClick={toggleEnabled}
           >
-            {policy.enabled ? "On" : "Turn on"}
+            <span className="locker-switch-knob" />
           </button>
         </div>
-        {a11y && <p className="muted">{a11y.note}</p>}
+
+        {a11y && <p className="muted locker-note">{a11y.note}</p>}
         {a11y?.supported && !a11y.enabled && (
           <button type="button" className="btn btn-ghost" onClick={openSettings}>
             Enable system App Lock
@@ -132,60 +154,75 @@ export function AppLockerPage() {
         {error && <p className="error">{error}</p>}
       </section>
 
-      <section className="section surface-block">
-        <div className="section-head">
-          <h2>Your apps</h2>
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={busy}
-            onClick={() => setShowAdd((v) => !v)}
-          >
-            {showAdd ? "Done" : "Lock an app"}
-          </button>
-        </div>
-
-        {policy.apps.length === 0 ? (
-          <p className="muted">No locked apps yet. Tap Lock an app to add one.</p>
-        ) : (
-          <ul className="list compact-list">
-            {policy.apps.map((app) => (
-              <li key={app.packageId} className="row">
-                <div className="row-main">
-                  <strong>{app.displayName}</strong>
-                  <span className="muted">Requires biometric ? locked</span>
-                </div>
-                <button
-                  type="button"
-                  className="btn btn-danger"
-                  disabled={busy}
-                  onClick={() => removeApp(app.packageId)}
-                >
-                  Unlock
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
+      <section className="locker-toolbar">
+        <h2 className="locker-title-sm">Your locker</h2>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={busy}
+          onClick={() => setShowAdd((v) => !v)}
+        >
+          {showAdd ? "Done" : "Add app"}
+        </button>
       </section>
 
+      {policy.apps.length === 0 ? (
+        <section className="locker-empty">
+          <p>No apps locked</p>
+          <span className="muted">Add WhatsApp, Gallery, or any package.</span>
+        </section>
+      ) : (
+        <div className="app-lock-grid">
+          {policy.apps.map((app) => (
+            <article key={app.packageId} className="app-lock-tile">
+              <div className="app-lock-icon" aria-hidden="true">
+                {initials(app.displayName) || "App"}
+                <span className="app-lock-badge">
+                  <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true">
+                    <rect x="3" y="7" width="10" height="7" rx="1.5" fill="currentColor" />
+                    <path
+                      d="M5 7V5a3 3 0 0 1 6 0v2"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.4"
+                    />
+                  </svg>
+                </span>
+              </div>
+              <strong>{app.displayName}</strong>
+              <span className="muted">Biometric required</span>
+              <button
+                type="button"
+                className="btn btn-ghost app-lock-remove"
+                disabled={busy}
+                onClick={() => removeApp(app.packageId)}
+              >
+                Remove
+              </button>
+            </article>
+          ))}
+        </div>
+      )}
+
       {showAdd && (
-        <section className="section surface-block">
-          <h2>Add to App Locker</h2>
-          <p className="sub">Pick a common app or enter a package name.</p>
-          <div className="hub-grid">
+        <section className="locker-add-sheet">
+          <h2 className="locker-title-sm">Lock an app</h2>
+          <div className="app-lock-grid app-lock-grid-suggest">
             {SUGGESTIONS.filter(
               (s) => !policy.apps.some((a) => a.packageId === s.packageId),
             ).map((s) => (
               <button
                 key={s.packageId}
                 type="button"
-                className="hub-card hub-card-btn"
+                className="app-lock-tile app-lock-tile-btn"
                 disabled={busy}
                 onClick={() => addSuggestion(s)}
               >
+                <div className="app-lock-icon" aria-hidden="true">
+                  {initials(s.displayName)}
+                </div>
                 <strong>{s.displayName}</strong>
-                <span className="muted">Lock with biometric</span>
+                <span className="muted">Tap to lock</span>
               </button>
             ))}
           </div>

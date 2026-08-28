@@ -62,11 +62,11 @@ export function OverviewPage() {
           <Link className="action-chip" to="/dashboard/media">
             Add photos or video
           </Link>
+          <Link className="action-chip" to="/dashboard/control">
+            Logins & devices
+          </Link>
           <Link className="action-chip" to="/dashboard/account">
             Account
-          </Link>
-          <Link className="action-chip" to="/dashboard/devices">
-            Devices
           </Link>
         </div>
       </section>

@@ -26,6 +26,7 @@ import { DeviceSyncPage } from "./pages/trust/DeviceSync";
 import { GuardiansPage } from "./pages/trust/GuardiansPage";
 import { AccountPage } from "./pages/trust/Account";
 import { IdentityPage } from "./pages/trust/Identity";
+import { ControlCenterPage } from "./pages/trust/ControlCenter";
 
 function Guard({ children }: { children: React.ReactNode }) {
   const { loading, identity } = useAuth();
@@ -66,9 +67,10 @@ export function App() {
         {/* Primary consumer tabs */}
         <Route path="apps" element={<AppLockerPage />} />
         <Route path="media" element={<MediaVaultPage />} />
+        <Route path="control" element={<ControlCenterPage />} />
         <Route path="app-locker" element={<Navigate to="/dashboard/apps" replace />} />
         <Route path="media-vault" element={<Navigate to="/dashboard/media" replace />} />
-        <Route path="security" element={<Navigate to="/dashboard/media" replace />} />
+        <Route path="security" element={<Navigate to="/dashboard/control" replace />} />
         {/* Secondary / account tools */}
         <Route path="devices" element={<DevicesPage />} />
         <Route path="devices/:id" element={<DeviceDetailPage />} />

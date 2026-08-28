@@ -1,7 +1,6 @@
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { useTopbarIdentity } from "../lib/useTopbarIdentity";
-import { TrustStars } from "./TrustStars";
 
 const TABS = [
   {
@@ -49,6 +48,22 @@ const TABS = [
     ),
   },
   {
+    to: "/dashboard/control",
+    label: "Control",
+    icon: (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="1.6" />
+        <path
+          d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M6.1 6.1l1.6 1.6M16.3 16.3l1.6 1.6M17.9 6.1l-1.6 1.6M7.7 16.3l-1.6 1.6"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+        />
+      </svg>
+    ),
+  },
+  {
     to: "/dashboard/account",
     label: "Account",
     icon: (
@@ -70,9 +85,10 @@ const TITLES: Record<string, string> = {
   "/dashboard": "TrustID",
   "/dashboard/apps": "App Locker",
   "/dashboard/app-locker": "App Locker",
-  "/dashboard/media": "Media",
-  "/dashboard/media-vault": "Media",
-  "/dashboard/security": "Media",
+  "/dashboard/media": "Media Locker",
+  "/dashboard/media-vault": "Media Locker",
+  "/dashboard/control": "Control",
+  "/dashboard/security": "Media Locker",
   "/dashboard/devices": "Devices",
   "/dashboard/approvals": "Approvals",
   "/dashboard/temporary": "Temporary",
@@ -94,7 +110,7 @@ function titleFor(pathname: string) {
 
 export function TrustCenterLayout() {
   const { identity, logout } = useAuth();
-  const { portraitUrl, trust } = useTopbarIdentity();
+  const { portraitUrl } = useTopbarIdentity();
   const navigate = useNavigate();
   const location = useLocation();
   const title = titleFor(location.pathname);
@@ -118,42 +134,11 @@ export function TrustCenterLayout() {
       <header className="app-topbar">
         <div className="app-topbar-inner">
           <div className="app-topbar-brand">
-            <NavLink
-              to="/dashboard/identity"
-              className="app-avatar-link"
-              aria-label="Verified identity portrait"
-            >
-              {portraitUrl ? (
-                <img
-                  className="app-avatar"
-                  src={portraitUrl}
-                  alt=""
-                  width={36}
-                  height={36}
-                />
-              ) : (
-                <span className="app-avatar app-avatar-fallback" aria-hidden="true">
-                  {initials}
-                </span>
-              )}
-              {portraitUrl && (
-                <span className="app-avatar-verified" aria-hidden="true" title="Verified portrait" />
-              )}
-            </NavLink>
             <div className="app-topbar-copy">
               <div className="app-topbar-title">{title}</div>
               <div className="app-topbar-sub">
                 {identity?.trustId ?? "Private & locked"}
               </div>
-              {trust && (
-                <div className="app-topbar-stars">
-                  <TrustStars
-                    stars={trust.stars}
-                    maxStars={trust.maxStars}
-                    label={`${trust.label} · ${trust.stars} of ${trust.maxStars} stars (Life OS)`}
-                  />
-                </div>
-              )}
             </div>
           </div>
           <div className="app-topbar-actions">
@@ -178,6 +163,29 @@ export function TrustCenterLayout() {
                   strokeLinecap="round"
                 />
               </svg>
+            </NavLink>
+            <NavLink
+              to="/dashboard/identity"
+              className="app-avatar-link app-avatar-link-right"
+              aria-label="Verified profile photo — used across apps that use TrustID"
+              title="Your verified profile photo"
+            >
+              {portraitUrl ? (
+                <img
+                  className="app-avatar app-avatar-lg"
+                  src={portraitUrl}
+                  alt="Verified profile"
+                  width={40}
+                  height={40}
+                />
+              ) : (
+                <span className="app-avatar app-avatar-lg app-avatar-fallback" aria-hidden="true">
+                  {initials}
+                </span>
+              )}
+              {portraitUrl && (
+                <span className="app-avatar-verified" aria-hidden="true" />
+              )}
             </NavLink>
             <button
               className="app-icon-btn"
