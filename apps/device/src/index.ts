@@ -8,9 +8,18 @@ import {
   type NativeAppLockBridge,
   type NativeVaultBridge,
 } from "@trustid/device-security";
+import {
+  HttpElfComEmergencyBridge,
+  SovereignVault,
+  type ElfComEmergencyBridge,
+  type NativeDakBridge,
+} from "@trustid/vault-sdk";
+import { sovereignToTier1Policy, tier1ToSovereignPolicy } from "./plugins/app-lock/adapter.js";
 import { TrustIdAppLock } from "./plugins/app-lock.js";
+import { DeviceAppLockRegistry } from "./plugins/app-lock/registry.js";
 import { TrustIdBiometricGate } from "./plugins/biometric-gate.js";
 import { TrustIdMediaVault } from "./plugins/media-vault.js";
+import { TrustIdSovereignVault } from "./plugins/sovereign-vault.js";
 
 export function isNativeDeviceRuntime(): boolean {
   return Capacitor.isNativePlatform();
@@ -39,8 +48,16 @@ export function createMediaVault(gate: BiometricGate): MediaVault {
 export function createAppLockController(gate: BiometricGate): AppLockController {
   if (!isNativeDeviceRuntime()) return new AppLockController(gate);
   const bridge: NativeAppLockBridge = {
-    getPolicy: () => TrustIdAppLock.getPolicy(),
-    setPolicy: (policy) => TrustIdAppLock.setPolicy({ policy }),
+    getPolicy: async () => {
+      const sovereign = await TrustIdAppLock.getPolicy();
+      return sovereignToTier1Policy(sovereign);
+    },
+    setPolicy: async (policy) => {
+      const existing = await TrustIdAppLock.getPolicy();
+      await TrustIdAppLock.setPolicy({
+        policy: tier1ToSovereignPolicy(policy, existing),
+      });
+    },
     openAccessibilitySettings: () => TrustIdAppLock.openAccessibilitySettings(),
     isAccessibilityEnabled: () => TrustIdAppLock.isAccessibilityEnabled(),
     challengeNow: (packageId) => TrustIdAppLock.challengeNow({ packageId }),
@@ -48,8 +65,39 @@ export function createAppLockController(gate: BiometricGate): AppLockController 
   return new AppLockController(gate, bridge);
 }
 
+export function createSovereignVault(
+  gate: BiometricGate,
+  opts?: { elfcom?: ElfComEmergencyBridge },
+): SovereignVault {
+  let nativeDak: NativeDakBridge | undefined;
+  if (isNativeDeviceRuntime()) {
+    nativeDak = {
+      hardwareBacked: true,
+      unlockDakAfterBiometric: async (input) => {
+        const r = await TrustIdSovereignVault.unlockDak(input);
+        return { sessionHandle: r.sessionHandle, duress: r.duress };
+      },
+      deriveCdk: (input) => TrustIdSovereignVault.deriveCdk(input),
+      lockDak: () => TrustIdSovereignVault.lockDak(),
+    };
+  }
+  return new SovereignVault({
+    gate,
+    nativeDak,
+    elfcom: opts?.elfcom,
+  });
+}
+
+export function createDeviceAppLockRegistry(storage?: Storage): DeviceAppLockRegistry {
+  return new DeviceAppLockRegistry(storage);
+}
+
 export {
   TrustIdAppLock,
   TrustIdBiometricGate,
   TrustIdMediaVault,
+  TrustIdSovereignVault,
+  SovereignVault,
+  HttpElfComEmergencyBridge,
+  DeviceAppLockRegistry,
 };

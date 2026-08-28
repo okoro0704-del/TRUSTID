@@ -13,6 +13,8 @@
     "@trustid/device-security": "*",
     "@trustid/shared": "*",
     "@trustid/sovereign-crypto": "*",
+    "@trustid/ui-react": "*",
+    "@trustid/vault-sdk": "*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.4.0"

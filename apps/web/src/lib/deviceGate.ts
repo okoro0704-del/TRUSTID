@@ -45,7 +45,9 @@ export async function gateCreateTrustId(): Promise<DeviceGateResult> {
     void _c;
     void _p;
     const response = await startAuthentication({
-      optionsJSON: optionsJSON as Parameters<typeof startAuthentication>[0]["optionsJSON"],
+      optionsJSON: optionsJSON as unknown as Parameters<
+        typeof startAuthentication
+      >[0]["optionsJSON"],
     });
     try {
       await api("/auth/webauthn/login/verify", {

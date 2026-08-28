@@ -1,7 +1,9 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
+import websocket from "@fastify/websocket";
 import { config } from "./lib/config.js";
+import { bootstrapElfComDispatcher } from "./lib/bootstrap-elfcom.js";
 import { authRoutes } from "./routes/auth.js";
 import { identityRoutes } from "./routes/identity.js";
 import { deviceRoutes } from "./routes/devices.js";
@@ -20,8 +22,12 @@ import {
 import { zkRoutes } from "./routes/zk.js";
 import { deviceSyncRoutes } from "./routes/device-sync.js";
 import { recoveryRoutes } from "./routes/recovery.js";
+import { bbsRoutes } from "./routes/bbs.js";
+import { registerRealtimeGateway } from "./modules/realtime/index.js";
 
 export async function buildApp() {
+  bootstrapElfComDispatcher();
+
   const app = Fastify({
     logger: config.isDev,
     trustProxy: true,
@@ -63,6 +69,8 @@ export async function buildApp() {
     secret: config.cookieSecret,
   });
 
+  await app.register(websocket);
+
   app.setErrorHandler((err, _req, reply) => {
     if ((err as { name?: string }).name === "ZodError") {
       return reply.code(400).send({
@@ -103,7 +111,10 @@ export async function buildApp() {
   await app.register(zkRoutes);
   await app.register(deviceSyncRoutes);
   await app.register(recoveryRoutes);
+  await app.register(bbsRoutes);
   await app.register(wipeRoutes);
+
+  await registerRealtimeGateway(app);
 
   return app;
 }

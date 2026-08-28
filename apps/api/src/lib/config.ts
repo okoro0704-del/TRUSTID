@@ -101,6 +101,16 @@ export const config = {
   get temporarySessionHours() {
     return Number(process.env.TEMPORARY_SESSION_HOURS ?? 8);
   },
+  /** ElfCom sovereign messaging node for consent push */
+  get elfcom() {
+    const mode = (process.env.ELFCOM_MODE ?? "unbound") as "unbound" | "http";
+    return {
+      mode,
+      baseUrl: process.env.ELFCOM_BASE_URL ?? "http://localhost:8791",
+      nodeSecret:
+        process.env.ELFCOM_NODE_SECRET ?? "elfcom-dev-node-secret-change-me",
+    };
+  },
   /** Temporary: show/log OTP when email/SMS provider is not configured. */
   get otpExposeDebug() {
     return process.env.OTP_EXPOSE_DEBUG === "true" || this.isDev;

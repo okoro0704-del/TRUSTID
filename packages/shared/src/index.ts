@@ -9,6 +9,8 @@ export const SCOPES = {
   IDENTITY_PORTRAIT: "identity.portrait",
   /** Zero-knowledge claim proofs (no raw PII) */
   IDENTITY_ZK_CLAIMS: "identity.zk_claims",
+  /** Payment-bound biometric banking step-up (BBS) */
+  IDENTITY_BBS_STEP_UP: "identity.bbs_step_up",
   OFFLINE_ACCESS: "offline_access",
 } as const;
 
@@ -47,6 +49,10 @@ export type DeviceTrustLevel =
 
 export const DEVICE_APPROVAL_STATUS = {
   PENDING: "pending",
+  /** ElfCom push dispatched to master device(s) */
+  PUSHED: "pushed",
+  /** Master device opened the consent notification */
+  VIEWED: "viewed",
   APPROVED: "approved",
   TEMPORARY: "temporary",
   DECLINED: "declined",
@@ -55,6 +61,32 @@ export const DEVICE_APPROVAL_STATUS = {
 
 export type DeviceApprovalStatus =
   (typeof DEVICE_APPROVAL_STATUS)[keyof typeof DEVICE_APPROVAL_STATUS];
+
+/** Non-terminal approval FSM states (guest still waiting). */
+export const DEVICE_APPROVAL_ACTIVE_STATUSES = [
+  DEVICE_APPROVAL_STATUS.PENDING,
+  DEVICE_APPROVAL_STATUS.PUSHED,
+  DEVICE_APPROVAL_STATUS.VIEWED,
+] as const;
+
+export type DeviceApprovalActiveStatus =
+  (typeof DEVICE_APPROVAL_ACTIVE_STATUSES)[number];
+
+/** Terminal approval outcomes. */
+export const DEVICE_APPROVAL_TERMINAL_STATUSES = [
+  DEVICE_APPROVAL_STATUS.APPROVED,
+  DEVICE_APPROVAL_STATUS.TEMPORARY,
+  DEVICE_APPROVAL_STATUS.DECLINED,
+  DEVICE_APPROVAL_STATUS.EXPIRED,
+] as const;
+
+export function isDeviceApprovalActive(status: string): boolean {
+  return (DEVICE_APPROVAL_ACTIVE_STATUSES as readonly string[]).includes(status);
+}
+
+export function isDeviceApprovalTerminal(status: string): boolean {
+  return (DEVICE_APPROVAL_TERMINAL_STATUSES as readonly string[]).includes(status);
+}
 
 export const SESSION_KINDS = {
   STANDARD: "standard",
@@ -173,6 +205,7 @@ export const SCOPE_LABELS: Record<string, string> = {
   "identity.verification_status": "Identity verification status",
   "identity.trust_level": "Trust level",
   "identity.zk_claims": "Zero-knowledge trust claims (no raw PII)",
+  "identity.bbs_step_up": "Payment-bound biometric banking step-up proofs",
   "identity.portrait": "Verified identity portrait reference",
   offline_access: "Stay signed in (refresh)",
   "wallet.reference": "Wallet reference (future)",
@@ -224,6 +257,8 @@ export const AUDIT_EVENTS = {
   PAIRING_APPROVED: "device.pairing_approved",
   PAIRING_REJECTED: "device.pairing_rejected",
   DEVICE_APPROVAL_REQUESTED: "device.approval.requested",
+  DEVICE_APPROVAL_PUSHED: "device.approval.pushed",
+  DEVICE_APPROVAL_VIEWED: "device.approval.viewed",
   DEVICE_APPROVAL_APPROVED: "device.approval.approved",
   DEVICE_APPROVAL_TEMPORARY: "device.approval.temporary",
   DEVICE_APPROVAL_DECLINED: "device.approval.declined",
@@ -239,6 +274,11 @@ export const AUDIT_EVENTS = {
   DEVICE_ATTESTATION_ACCEPTED: "device.attestation.accepted",
   DEVICE_ATTESTATION_REJECTED: "device.attestation.rejected",
   DEVICE_ATTESTATION_SOFT_FAIL: "device.attestation.soft_fail",
+  BBS_STEP_UP_INITIATED: "bbs.step_up.initiated",
+  BBS_STEP_UP_OOB_REQUIRED: "bbs.step_up.oob_required",
+  BBS_STEP_UP_APPROVED: "bbs.step_up.approved",
+  BBS_STEP_UP_DENIED: "bbs.step_up.denied",
+  BBS_STEP_UP_EXPIRED: "bbs.step_up.expired",
 } as const;
 
 export type AuditEventType = (typeof AUDIT_EVENTS)[keyof typeof AUDIT_EVENTS];

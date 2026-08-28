@@ -42,6 +42,7 @@ model User {
   guardianCircles         RecoveryGuardianCircle[]
   recoverySessions        RecoverySession[]
   deviceInstalls          DeviceInstall[]
+  bbsStepUpChallenges     BbsStepUpChallenge[]
 
   @@map("users")
 }
@@ -215,8 +216,15 @@ model DeviceApprovalRequest {
   location             String?
   ip                   String?
   userAgent            String?   @map("user_agent")
-  /// pending | approved | temporary | declined | expired
+  /// pending | pushed | viewed | approved | temporary | declined | expired
   status               String    @default("pending")
+  /// Correlates approval, OAuth consent, and realtime relay channels
+  correlationId        String    @unique @default(cuid()) @map("correlation_id")
+  oauthConsentCodeId   String?   @map("oauth_consent_code_id")
+  guestSessionId       String?   @map("guest_session_id")
+  pushDispatchedAt     DateTime? @map("push_dispatched_at")
+  pushFailedAt         DateTime? @map("push_failed_at")
+  viewedAt             DateTime? @map("viewed_at")
   pollTokenHash        String    @unique @map("poll_token_hash")
   enrollmentTokenHash  String?   @map("enrollment_token_hash")
   enrollmentTokenExpires DateTime? @map("enrollment_token_expires")
@@ -273,6 +281,7 @@ model Application {
   oauthAccessTokens       OAuthAccessToken[]
   oauthRefreshTokens      OAuthRefreshToken[]
   deviceApprovalRequests  DeviceApprovalRequest[]
+  bbsStepUpChallenges     BbsStepUpChallenge[]
 
   @@map("applications")
 }
@@ -743,4 +752,35 @@ model DeviceInstall {
 
   @@index([userId])
   @@map("device_installs")
+}
+
+/// Payment-bound biometric banking step-up challenge (BBS / FinProv).
+model BbsStepUpChallenge {
+  id                      String    @id @default(cuid())
+  challengeId             String    @unique @default(cuid()) @map("challenge_id")
+  correlationId           String    @unique @default(cuid()) @map("correlation_id")
+  userId                  String    @map("user_id")
+  applicationId           String?   @map("application_id")
+  /// HMAC digest of payment context — no raw account numbers
+  paymentHash             String    @map("payment_hash")
+  amountMinor             BigInt?   @map("amount_minor")
+  currency                String?
+  merchantRef             String?   @map("merchant_ref")
+  audience                String
+  /// PENDING | OOB_REQUIRED | APPROVED | DENIED | EXPIRED
+  status                  String    @default("PENDING")
+  paymentNullifier        String?   @map("payment_nullifier")
+  deviceApprovalRequestId String?   @map("device_approval_request_id")
+  masterSignatureHash     String?   @map("master_signature_hash")
+  zkProofJson             String?   @map("zk_proof_json")
+  expiresAt               DateTime  @map("expires_at")
+  approvedAt              DateTime? @map("approved_at")
+  createdAt               DateTime  @default(now()) @map("created_at")
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  application Application? @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+
+  @@index([userId, status])
+  @@index([paymentHash])
+  @@map("bbs_step_up_challenges")
 }

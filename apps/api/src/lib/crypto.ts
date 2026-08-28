@@ -198,3 +198,62 @@ export function zkNullifier(identitySecret: string, audience: string): string {
     .update(`nullifier:${audience}`)
     .digest("hex");
 }
+
+/** Stable digest for payment step-up context (no PAN/account plaintext). */
+export function hashPaymentContext(input: {
+  amountMinor?: number | bigint | null;
+  currency?: string | null;
+  merchantRef?: string | null;
+  reference?: string | null;
+  intentId?: string | null;
+}): string {
+  const parts = [
+    input.intentId ?? "",
+    input.reference ?? "",
+    input.merchantRef ?? "",
+    input.currency ?? "",
+    input.amountMinor != null ? String(input.amountMinor) : "",
+  ].join("|");
+  return createHmac("sha256", pepperKey("bbs-payment"))
+    .update(parts)
+    .digest("hex");
+}
+
+/** Audience + payment-bound nullifier for BBS step-up ZK proofs. */
+export function bbsPaymentNullifier(
+  identitySecret: string,
+  challengeId: string,
+  paymentHash: string,
+): string {
+  return createHmac("sha256", Buffer.from(identitySecret, "hex"))
+    .update(`bbs:nullifier:${challengeId}:${paymentHash}`)
+    .digest("hex");
+}
+
+/** Master/device signature over an approved payment step-up. */
+export function signBbsMasterApproval(
+  sealKey: string,
+  input: { challengeId: string; paymentHash: string; nullifier: string },
+): string {
+  return createHmac("sha256", attestKeyFromSeal(sealKey))
+    .update(`${input.challengeId}|${input.paymentHash}|${input.nullifier}|approved`)
+    .digest("hex");
+}
+
+export function verifyBbsMasterApproval(
+  sealKey: string,
+  input: { challengeId: string; paymentHash: string; nullifier: string },
+  signature: string,
+): boolean {
+  const expected = signBbsMasterApproval(sealKey, input);
+  if (expected.length !== signature.length) return false;
+  return timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+}
+
+function attestKeyFromSeal(sealKey: string): Buffer {
+  const raw = sealKey;
+  if (/^[0-9a-fA-F]{64}$/.test(raw)) return Buffer.from(raw, "hex");
+  return Buffer.from(
+    hkdfSync("sha256", Buffer.from(raw, "utf8"), Buffer.from("trustid-bbs-v1"), "sign", 32),
+  );
+}

@@ -21,6 +21,7 @@ import { SessionsPage } from "./pages/trust/Sessions";
 import { PasskeysPage } from "./pages/trust/Passkeys";
 import { SecurityPage } from "./pages/trust/Security";
 import { MediaVaultPage } from "./pages/trust/MediaVault";
+import { VaultDashboardPage } from "./pages/trust/VaultDashboard";
 import { AppLockerPage } from "./pages/trust/AppLocker";
 import { DeviceSyncPage } from "./pages/trust/DeviceSync";
 import { GuardiansPage } from "./pages/trust/GuardiansPage";
@@ -44,6 +45,7 @@ function Guard({ children }: { children: React.ReactNode }) {
 export function App() {
   return (
     <Routes>
+      <Route path="/vault" element={<Navigate to="/dashboard/vault" replace />} />
       <Route path="/" element={<WelcomePage />} />
       <Route path="/register" element={<RegisterPage />} />
       <Route path="/verify" element={<VerifyPage />} />
@@ -71,7 +73,8 @@ export function App() {
         <Route path="sessions" element={<SessionsPage />} />
         <Route path="passkeys" element={<PasskeysPage />} />
         <Route path="security" element={<SecurityPage />} />
-        <Route path="vault" element={<MediaVaultPage />} />
+        <Route path="vault" element={<VaultDashboardPage />} />
+        <Route path="media-vault" element={<MediaVaultPage />} />
         <Route path="app-locker" element={<AppLockerPage />} />
         <Route path="device-sync" element={<DeviceSyncPage />} />
         <Route path="guardians" element={<GuardiansPage />} />

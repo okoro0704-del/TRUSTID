@@ -1,7 +1,7 @@
 # TrustID PWA on Netlify — API proxied to Railway (same-origin cookies)
 
 [build]
-  command = "npm run build -w @trustid/shared && npm run build -w @trustid/web"
+  command = "npm run build -w @trustid/shared && npm run build -w @trustid/device-security && npm run build -w @trustid/vault-sdk && npm run build -w @trustid/ui-react && npm run build -w @trustid/sovereign-crypto && npm run build -w @trustid/web"
   publish = "apps/web/dist"
 
 [build.environment]

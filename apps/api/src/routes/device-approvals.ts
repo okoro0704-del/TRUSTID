@@ -17,6 +17,7 @@ import {
   getApprovalStatusByPollToken,
   listApprovals,
   listPendingApprovals,
+  markApprovalViewed,
   resolveApprovalEnrollment,
 } from "../modules/device-approval/service.js";
 import {
@@ -152,6 +153,23 @@ export async function deviceApprovalRoutes(app: FastifyInstance) {
   app.get("/device-approvals", { preHandler: requireSession }, async (req) => {
     return listApprovals(req.auth!.userId);
   });
+
+  app.post(
+    "/device-approvals/:id/viewed",
+    { preHandler: requireSession },
+    async (req, reply) => {
+      const params = z.object({ id: z.string() }).parse(req.params);
+      try {
+        return await markApprovalViewed({
+          userId: req.auth!.userId,
+          deviceId: req.auth!.deviceId,
+          requestId: params.id,
+        });
+      } catch (err) {
+        return httpError(err, reply);
+      }
+    },
+  );
 
   app.post(
     "/device-approvals/:id/approve",

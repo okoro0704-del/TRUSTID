@@ -1,0 +1,141 @@
+/* Trust ID UI React ù minimal drop-in styles (compatible with apps/web tokens) */
+
+.tid-btn {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 0.65rem 1rem;
+  font: inherit;
+  cursor: pointer;
+}
+
+.tid-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.tid-btn-primary {
+  background: #0b6b64;
+  color: #fff;
+}
+
+.tid-btn-ghost {
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.18);
+  color: inherit;
+}
+
+.tid-btn-danger {
+  background: #8b1e1e;
+  color: #fff;
+}
+
+.tid-muted {
+  opacity: 0.72;
+  font-size: 0.92rem;
+}
+
+.tid-error {
+  color: #ff8a80;
+  font-size: 0.92rem;
+}
+
+.tid-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.tid-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.62);
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+}
+
+.tid-modal {
+  width: min(420px, 100%);
+  background: #0f2624;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  padding: 1.25rem;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+}
+
+.tid-qr-block {
+  display: grid;
+  gap: 0.75rem;
+  justify-items: center;
+  margin: 1rem 0;
+}
+
+.tid-code {
+  font-size: 0.72rem;
+  word-break: break-all;
+  opacity: 0.8;
+}
+
+.tid-vault-viewer {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 1rem;
+}
+
+.tid-vault-viewer-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+}
+
+.tid-vault-viewer-gate,
+.tid-vault-viewer-media {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.tid-vault-media-el {
+  width: 100%;
+  max-height: 420px;
+  border-radius: 10px;
+  background: #000;
+}
+
+.tid-applock-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  background: rgba(4, 16, 15, 0.92);
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+}
+
+.tid-applock-gate-panel {
+  width: min(380px, 100%);
+  text-align: center;
+  padding: 1.5rem;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #102826;
+}
+
+.tid-applock-mark {
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 1rem;
+  border-radius: 50%;
+  border: 2px solid #2dd4bf;
+}
+
+.tid-applock-decoy {
+  visibility: hidden;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+}

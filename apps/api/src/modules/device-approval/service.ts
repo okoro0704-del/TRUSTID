@@ -4,6 +4,7 @@ import {
   DEVICE_STATUS,
   DEVICE_TRUST_LEVELS,
   SESSION_KINDS,
+  isDeviceApprovalActive,
 } from "@trustid/shared";
 import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
 import { prisma } from "../../db/client.js";
@@ -15,6 +16,14 @@ import { verifyReauthentication } from "../authentication/webauthn.js";
 import { createSession } from "../sessions/service.js";
 import { createSecurityNotification } from "../notifications/service.js";
 import { assertPrimaryDevice } from "../devices/trust.js";
+import { getElfComConsentDispatcher } from "../elfcom/index.js";
+import { broadcastApprovalEvent } from "../realtime/hub.js";
+import {
+  expireApprovalIfNeeded,
+  toApprovalEventPayload,
+  transitionApprovalFsm,
+  type ApprovalRow,
+} from "./fsm.js";
 
 function guessBrowser(ua: string | null | undefined) {
   if (!ua) return null;
@@ -35,33 +44,55 @@ function guessPlatform(ua: string | null | undefined) {
   return null;
 }
 
-async function markExpiredIfNeeded(row: {
-  id: string;
-  status: string;
-  expiresAt: Date;
-  userId: string;
-}) {
-  if (
-    row.status === DEVICE_APPROVAL_STATUS.PENDING &&
-    row.expiresAt.getTime() < Date.now()
-  ) {
-    await prisma.deviceApprovalRequest.update({
-      where: { id: row.id },
-      data: {
-        status: DEVICE_APPROVAL_STATUS.EXPIRED,
-        resolvedAt: new Date(),
+async function markExpiredIfNeeded(row: ApprovalRow) {
+  return expireApprovalIfNeeded(row);
+}
+
+async function dispatchConsentPush(row: ApprovalRow, userTrustId: string) {
+  const dispatcher = getElfComConsentDispatcher();
+  const deepLink = `${config.webauthn.origin}/dashboard/approvals?requestId=${row.id}&correlationId=${row.correlationId}`;
+
+  const result = await dispatcher.pushConsent({
+    correlationId: row.correlationId,
+    requestId: row.id,
+    ownerTrustId: userTrustId,
+    title: "New device wants access",
+    body: `${row.applicationName ?? "TrustID"}: ${row.requestedDeviceName}`,
+    silent: true,
+    deepLink,
+    metadata: {
+      applicationName: row.applicationName,
+      deviceName: row.requestedDeviceName,
+      platform: row.platform,
+      browser: row.browser,
+      location: row.location,
+      clientId: row.clientId,
+      oauthConsentCodeId: row.oauthConsentCodeId,
+      guestSessionId: row.guestSessionId,
+    },
+  });
+
+  if (result.ok) {
+    await transitionApprovalFsm({
+      row,
+      event: "push_dispatched",
+      audit: {
+        type: AUDIT_EVENTS.DEVICE_APPROVAL_PUSHED,
+        actorType: "system",
+        metadata: { via: "elfcom" },
       },
     });
-    await recordAudit({
-      type: AUDIT_EVENTS.DEVICE_APPROVAL_EXPIRED,
-      userId: row.userId,
-      actorType: "system",
-      actorId: null,
-      metadata: { requestId: row.id },
+  } else {
+    await transitionApprovalFsm({
+      row,
+      event: "push_failed",
+      audit: {
+        type: AUDIT_EVENTS.DEVICE_APPROVAL_REQUESTED,
+        actorType: "system",
+        metadata: { pushError: result.error ?? "unknown" },
+      },
     });
-    return true;
   }
-  return false;
 }
 
 export async function createDeviceApprovalRequest(input: {
@@ -74,6 +105,8 @@ export async function createDeviceApprovalRequest(input: {
   location?: string;
   ip?: string;
   userAgent?: string;
+  oauthConsentCodeId?: string;
+  guestSessionId?: string;
 }) {
   const user =
     (await findUserByContact(input.email, input.phone)) ||
@@ -137,9 +170,25 @@ export async function createDeviceApprovalRequest(input: {
       userAgent: input.userAgent ?? null,
       status: DEVICE_APPROVAL_STATUS.PENDING,
       pollTokenHash: hashSecret(pollToken),
+      oauthConsentCodeId: input.oauthConsentCodeId ?? null,
+      guestSessionId: input.guestSessionId ?? null,
       expiresAt,
     },
   });
+
+  const row = request as ApprovalRow;
+
+  broadcastApprovalEvent({
+    userId: user.id,
+    pollTokenHash: row.pollTokenHash,
+    message: {
+      type: "approval.created",
+      ...toApprovalEventPayload(row),
+      at: new Date().toISOString(),
+    },
+  });
+
+  await dispatchConsentPush(row, user.trustId);
 
   await recordAudit({
     type: AUDIT_EVENTS.DEVICE_APPROVAL_REQUESTED,
@@ -173,6 +222,7 @@ export async function createDeviceApprovalRequest(input: {
 
   return {
     requestId: request.id,
+    correlationId: request.correlationId,
     pollToken,
     status: request.status,
     expiresAt: expiresAt.toISOString(),
@@ -203,7 +253,7 @@ export async function getApprovalStatusByPollToken(pollToken: string) {
     applicationName: row.applicationName,
     deviceName: row.requestedDeviceName,
     message:
-      row.status === DEVICE_APPROVAL_STATUS.PENDING
+      isDeviceApprovalActive(row.status)
         ? "Waiting for approval from one of your trusted devices..."
         : row.status === DEVICE_APPROVAL_STATUS.DECLINED
           ? "Access was denied from a trusted device."
@@ -316,7 +366,16 @@ export async function claimApprovalResult(pollToken: string) {
 export async function listPendingApprovals(userId: string) {
   await expireStaleForUser(userId);
   const rows = await prisma.deviceApprovalRequest.findMany({
-    where: { userId, status: DEVICE_APPROVAL_STATUS.PENDING },
+    where: {
+      userId,
+      status: {
+        in: [
+          DEVICE_APPROVAL_STATUS.PENDING,
+          DEVICE_APPROVAL_STATUS.PUSHED,
+          DEVICE_APPROVAL_STATUS.VIEWED,
+        ],
+      },
+    },
     orderBy: { createdAt: "desc" },
   });
   return rows.map(publicApproval);
@@ -334,6 +393,7 @@ export async function listApprovals(userId: string, limit = 30) {
 
 function publicApproval(r: {
   id: string;
+  correlationId?: string;
   status: string;
   applicationName: string | null;
   requestedDeviceName: string;
@@ -344,9 +404,13 @@ function publicApproval(r: {
   createdAt: Date;
   expiresAt: Date;
   resolvedAt: Date | null;
+  pushDispatchedAt?: Date | null;
+  pushFailedAt?: Date | null;
+  viewedAt?: Date | null;
 }) {
   return {
     id: r.id,
+    correlationId: r.correlationId,
     status: r.status,
     applicationName: r.applicationName ?? "TrustID",
     deviceName: r.requestedDeviceName,
@@ -357,6 +421,9 @@ function publicApproval(r: {
     createdAt: r.createdAt.toISOString(),
     expiresAt: r.expiresAt.toISOString(),
     resolvedAt: r.resolvedAt?.toISOString() ?? null,
+    pushDispatchedAt: r.pushDispatchedAt?.toISOString() ?? null,
+    pushFailedAt: r.pushFailedAt?.toISOString() ?? null,
+    viewedAt: r.viewedAt?.toISOString() ?? null,
   };
 }
 
@@ -364,16 +431,22 @@ async function expireStaleForUser(userId: string) {
   const stale = await prisma.deviceApprovalRequest.findMany({
     where: {
       userId,
-      status: DEVICE_APPROVAL_STATUS.PENDING,
+      status: {
+        in: [
+          DEVICE_APPROVAL_STATUS.PENDING,
+          DEVICE_APPROVAL_STATUS.PUSHED,
+          DEVICE_APPROVAL_STATUS.VIEWED,
+        ],
+      },
       expiresAt: { lt: new Date() },
     },
   });
   for (const row of stale) {
-    await markExpiredIfNeeded(row);
+    await markExpiredIfNeeded(row as ApprovalRow);
   }
 }
 
-async function loadPendingForPrimary(
+async function loadActiveForPrimary(
   userId: string,
   requestId: string,
   deviceId: string | null | undefined,
@@ -387,17 +460,42 @@ async function loadPendingForPrimary(
       statusCode: 404,
     });
   }
-  if (await markExpiredIfNeeded(row)) {
+  if (await markExpiredIfNeeded(row as ApprovalRow)) {
     throw Object.assign(new Error("Approval request expired"), {
       statusCode: 400,
     });
   }
-  if (row.status !== DEVICE_APPROVAL_STATUS.PENDING) {
+  if (!isDeviceApprovalActive(row.status)) {
     throw Object.assign(new Error("Request already resolved"), {
       statusCode: 400,
     });
   }
-  return row;
+  return row as ApprovalRow;
+}
+
+export async function markApprovalViewed(input: {
+  userId: string;
+  deviceId: string | null | undefined;
+  requestId: string;
+}) {
+  const row = await loadActiveForPrimary(
+    input.userId,
+    input.requestId,
+    input.deviceId,
+  );
+  if (row.status === DEVICE_APPROVAL_STATUS.VIEWED) {
+    return publicApproval(row);
+  }
+  const updated = await transitionApprovalFsm({
+    row,
+    event: "viewed",
+    audit: {
+      type: AUDIT_EVENTS.DEVICE_APPROVAL_VIEWED,
+      actorType: "user",
+      actorId: input.userId,
+    },
+  });
+  return publicApproval(updated);
 }
 
 export async function approveTrustDevice(input: {
@@ -408,7 +506,7 @@ export async function approveTrustDevice(input: {
   ip?: string;
   userAgent?: string;
 }) {
-  const row = await loadPendingForPrimary(
+  const row = await loadActiveForPrimary(
     input.userId,
     input.requestId,
     input.deviceId,
@@ -422,25 +520,22 @@ export async function approveTrustDevice(input: {
   });
 
   const enrollmentToken = randomToken(32);
-  const updated = await prisma.deviceApprovalRequest.update({
-    where: { id: row.id },
-    data: {
-      status: DEVICE_APPROVAL_STATUS.APPROVED,
+  const updated = await transitionApprovalFsm({
+    row,
+    event: "approved",
+    extraData: {
       approvedByDeviceId: input.deviceId ?? null,
       enrollmentTokenHash: hashSecret(enrollmentToken),
       enrollmentTokenExpires: new Date(Date.now() + 5 * 60 * 1000),
-      resolvedAt: new Date(),
     },
-  });
-
-  await recordAudit({
-    type: AUDIT_EVENTS.DEVICE_APPROVAL_APPROVED,
-    userId: input.userId,
-    actorType: "user",
-    actorId: input.userId,
-    metadata: { requestId: row.id, mode: "trust" },
-    ip: input.ip,
-    userAgent: input.userAgent,
+    audit: {
+      type: AUDIT_EVENTS.DEVICE_APPROVAL_APPROVED,
+      actorType: "user",
+      actorId: input.userId,
+      metadata: { mode: "trust" },
+      ip: input.ip,
+      userAgent: input.userAgent,
+    },
   });
 
   await createSecurityNotification({
@@ -463,7 +558,7 @@ export async function approveTemporaryAccess(input: {
   ip?: string;
   userAgent?: string;
 }) {
-  const row = await loadPendingForPrimary(
+  const row = await loadActiveForPrimary(
     input.userId,
     input.requestId,
     input.deviceId,
@@ -495,30 +590,25 @@ export async function approveTemporaryAccess(input: {
     },
   });
 
-  const updated = await prisma.deviceApprovalRequest.update({
-    where: { id: row.id },
-    data: {
-      status: DEVICE_APPROVAL_STATUS.TEMPORARY,
+  const updated = await transitionApprovalFsm({
+    row,
+    event: "temporary_granted",
+    extraData: {
       approvedByDeviceId: input.deviceId ?? null,
       resultingDeviceId: tempDevice.id,
-      // Session is created only at claim time — never persist plaintext tokens
       oneTimeSessionTokenHash: null,
-      resolvedAt: new Date(),
     },
-  });
-
-  await recordAudit({
-    type: AUDIT_EVENTS.DEVICE_APPROVAL_TEMPORARY,
-    userId: input.userId,
-    actorType: "user",
-    actorId: input.userId,
-    metadata: {
-      requestId: row.id,
-      deviceId: tempDevice.id,
-      expiresAt: expiresAt.toISOString(),
+    audit: {
+      type: AUDIT_EVENTS.DEVICE_APPROVAL_TEMPORARY,
+      actorType: "user",
+      actorId: input.userId,
+      metadata: {
+        deviceId: tempDevice.id,
+        expiresAt: expiresAt.toISOString(),
+      },
+      ip: input.ip,
+      userAgent: input.userAgent,
     },
-    ip: input.ip,
-    userAgent: input.userAgent,
   });
 
   await createSecurityNotification({
@@ -540,7 +630,7 @@ export async function declineApproval(input: {
   ip?: string;
   userAgent?: string;
 }) {
-  const row = await loadPendingForPrimary(
+  const row = await loadActiveForPrimary(
     input.userId,
     input.requestId,
     input.deviceId,
@@ -553,23 +643,19 @@ export async function declineApproval(input: {
     userAgent: input.userAgent,
   });
 
-  const updated = await prisma.deviceApprovalRequest.update({
-    where: { id: row.id },
-    data: {
-      status: DEVICE_APPROVAL_STATUS.DECLINED,
+  const updated = await transitionApprovalFsm({
+    row,
+    event: "denied",
+    extraData: {
       approvedByDeviceId: input.deviceId ?? null,
-      resolvedAt: new Date(),
     },
-  });
-
-  await recordAudit({
-    type: AUDIT_EVENTS.DEVICE_APPROVAL_DECLINED,
-    userId: input.userId,
-    actorType: "user",
-    actorId: input.userId,
-    metadata: { requestId: row.id },
-    ip: input.ip,
-    userAgent: input.userAgent,
+    audit: {
+      type: AUDIT_EVENTS.DEVICE_APPROVAL_DECLINED,
+      actorType: "user",
+      actorId: input.userId,
+      ip: input.ip,
+      userAgent: input.userAgent,
+    },
   });
 
   await createSecurityNotification({

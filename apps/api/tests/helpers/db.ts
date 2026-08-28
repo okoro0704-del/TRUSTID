@@ -68,6 +68,7 @@ export async function resetTables(prisma: PrismaClient) {
   await prisma.session.deleteMany();
   await prisma.credential.deleteMany();
   await prisma.deviceApprovalRequest.deleteMany();
+  await prisma.bbsStepUpChallenge.deleteMany();
   await prisma.devicePairingRequest.deleteMany();
   await prisma.deviceInstall.deleteMany();
   await prisma.device.deleteMany();
