@@ -6,7 +6,8 @@ type CreateTrustIdAccountProps = {
 };
 
 /**
- * Zero-field account creation — one biometric action only.
+ * 1-click passkey registration — zero text fields.
+ * Shown when the silent probe finds no Trust ID passkey on this device.
  */
 export function CreateTrustIdAccount({
   busy = false,
@@ -22,11 +23,11 @@ export function CreateTrustIdAccount({
           <span />
           <span />
         </div>
-        <p className="tid-create-account-eyebrow">New on this device</p>
+        <p className="tid-create-account-eyebrow">No passkey on this device</p>
         <h1 className="tid-create-account-brand">{brand}</h1>
         <p className="tid-create-account-lead">
-          Create your Trust ID with a single biometric scan. No email, phone, or
-          password — your secure enclave is the key.
+          No active Trust ID passkey was found on this device. Create one with
+          Face ID or Fingerprint — no email, phone, or password.
         </p>
         {error && <p className="tid-error">{error}</p>}
         <button
@@ -36,8 +37,8 @@ export function CreateTrustIdAccount({
           onClick={onCreate}
         >
           {busy
-            ? "Creating…"
-            : "Create Trust ID with Face ID / Fingerprint"}
+            ? "Creating passkey…"
+            : "Create Trust ID Passkey with Face ID / Fingerprint"}
         </button>
         <p className="tid-muted tid-create-account-foot">
           Biometrics never leave this device. Trust ID stores cryptographic proof

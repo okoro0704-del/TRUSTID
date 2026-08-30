@@ -50,6 +50,10 @@ export {
   fetchSilentLoginOptions,
   postSilentWebAuthnAssert,
   clearSilentAutoLoginAttempt,
+  clearStaleAuthCaches,
+  resetSilentWebLoginInflight,
+  withWebAuthnTimeout,
+  WEBAUTHN_PROBE_TIMEOUT_MS,
 } from "./lib/silentAuth.js";
 export type { SilentAssertIdentityResult } from "./lib/silentAuth.js";
 

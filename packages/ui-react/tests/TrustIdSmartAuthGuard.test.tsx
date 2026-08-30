@@ -1,9 +1,13 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { TrustIdAuthProvider } from "../src/context/TrustIdAuthProvider.js";
 import { TrustIdSmartAuthGuard } from "../src/components/TrustIdSmartAuthGuard.js";
-import { clearSilentAutoLoginAttempt } from "../src/lib/silentAuth.js";
+import {
+  __setWebAuthnProbeTimeoutMs,
+  clearSilentAutoLoginAttempt,
+  resetSilentWebLoginInflight,
+} from "../src/lib/silentAuth.js";
 import type { TrustIdApiClient } from "../src/api/client.js";
 
 vi.mock("@simplewebauthn/browser", () => ({
@@ -30,7 +34,11 @@ function mockApi(): TrustIdApiClient {
         return {
           userId: "user_1",
           trustId: "TD-NEW00001",
-          options: { challenge: "reg", rp: { id: "localhost", name: "TrustID" }, user: { id: "u", name: "TD", displayName: "TD" } },
+          options: {
+            challenge: "reg",
+            rp: { id: "localhost", name: "TrustID" },
+            user: { id: "u", name: "TD", displayName: "TD" },
+          },
         };
       }
       if (path === "/v1/auth/register-silent") {
@@ -52,12 +60,31 @@ function mockApi(): TrustIdApiClient {
 describe("TrustIdSmartAuthGuard", () => {
   beforeEach(() => {
     clearSilentAutoLoginAttempt();
+    resetSilentWebLoginInflight();
+    __setWebAuthnProbeTimeoutMs(5000);
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    __setWebAuthnProbeTimeoutMs(5000);
+    resetSilentWebLoginInflight();
   });
 
   it("shows Create Trust ID when no passkey is found, then completes silent register", async () => {
     const user = userEvent.setup();
     const apiClient = mockApi();
+
+    Object.defineProperty(navigator, "credentials", {
+      configurable: true,
+      value: {
+        get: vi.fn(async () => {
+          throw new DOMException(
+            "The operation was aborted.",
+            "NotAllowedError",
+          );
+        }),
+      },
+    });
 
     render(
       <TrustIdAuthProvider apiClient={apiClient} enableRealtime={false}>
@@ -70,14 +97,21 @@ describe("TrustIdSmartAuthGuard", () => {
     await waitFor(() =>
       expect(
         screen.getByRole("button", {
-          name: /create trust id with face id \/ fingerprint/i,
+          name: /create trust id passkey with face id \/ fingerprint/i,
         }),
       ).toBeInTheDocument(),
     );
 
+    expect(
+      screen.getByText(/no active trust id passkey was found/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/unlocking with face id/i),
+    ).not.toBeInTheDocument();
+
     await user.click(
       screen.getByRole("button", {
-        name: /create trust id with face id \/ fingerprint/i,
+        name: /create trust id passkey with face id \/ fingerprint/i,
       }),
     );
 
@@ -88,5 +122,38 @@ describe("TrustIdSmartAuthGuard", () => {
       "/v1/auth/register-silent",
       expect.objectContaining({ method: "POST" }),
     );
+  });
+
+  it("exits biometric spinner when WebAuthn hangs past the probe timeout", async () => {
+    __setWebAuthnProbeTimeoutMs(40);
+    const apiClient = mockApi();
+
+    Object.defineProperty(navigator, "credentials", {
+      configurable: true,
+      value: {
+        get: vi.fn(() => new Promise(() => {})),
+      },
+    });
+
+    render(
+      <TrustIdAuthProvider apiClient={apiClient} enableRealtime={false}>
+        <TrustIdSmartAuthGuard getInstallId={async () => "install-timeout"}>
+          <div>Unlocked app</div>
+        </TrustIdSmartAuthGuard>
+      </TrustIdAuthProvider>,
+    );
+
+    await waitFor(
+      () =>
+        expect(
+          screen.getByRole("button", {
+            name: /create trust id passkey with face id \/ fingerprint/i,
+          }),
+        ).toBeInTheDocument(),
+      { timeout: 3000 },
+    );
+    expect(
+      screen.queryByText(/unlocking with face id/i),
+    ).not.toBeInTheDocument();
   });
 });

@@ -2,8 +2,10 @@ import { startRegistration } from "@simplewebauthn/browser";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTrustIdAuth as useTrustIdSession } from "../context/TrustIdAuthProvider.js";
 import {
+  clearStaleAuthCaches,
   clearSilentAutoLoginAttempt,
   executeSilentWebLoginOnce,
+  resetSilentWebLoginInflight,
 } from "../lib/silentAuth.js";
 import type { TrustIdIdentity } from "../types.js";
 
@@ -24,6 +26,8 @@ export type UseTrustIdAuthOptions = {
 
 export type UseTrustIdAuthResult = {
   phase: TrustIdAuthPhase;
+  /** Alias used by callers / docs (`authState`). */
+  authState: TrustIdAuthPhase;
   identity: TrustIdIdentity | null;
   error: string | null;
   /** Create a new Trust ID with a single biometric enrollment. */
@@ -32,10 +36,10 @@ export type UseTrustIdAuthResult = {
   retryProbe: () => void;
 };
 
-function isNoCredentialFailure(message: string): boolean {
-  return /not allowed|abort|cancel|no credentials|timed out|timeout|unknown credential|invalid state|not supported/i.test(
-    message,
-  );
+function failureMessage(err: unknown): string {
+  if (err instanceof DOMException) return `${err.name}: ${err.message}`;
+  if (err instanceof Error) return err.message || err.name;
+  return String(err ?? "Authentication failed");
 }
 
 /**
@@ -44,8 +48,8 @@ function isNoCredentialFailure(message: string): boolean {
  * Mount ? probe WebAuthn / passkey storage ? biometric unlock
  * OR transition to NEEDS_ACCOUNT for Create Trust ID.
  *
- * Note: session accessors remain on `useTrustIdSession` / `useAuth` from the provider.
- * This hook is the smart entry state machine requested as `useTrustIdAuth`.
+ * Missing/deleted passkeys, NotAllowedError, InvalidStateError, cancel, and
+ * timeouts always clear stale caches and land on NEEDS_ACCOUNT — never spin forever.
  */
 export function useTrustIdAuth(
   options: UseTrustIdAuthOptions,
@@ -63,6 +67,13 @@ export function useTrustIdAuth(
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
   const startedRef = useRef(false);
+
+  const goNeedsAccount = useCallback(() => {
+    clearStaleAuthCaches();
+    setIdentity(null);
+    setError(null);
+    setPhase("NEEDS_ACCOUNT");
+  }, [setIdentity]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -84,30 +95,27 @@ export function useTrustIdAuth(
     setPhase("CHECKING");
     setError(null);
     clearSilentAutoLoginAttempt();
+    resetSilentWebLoginInflight();
 
     void (async () => {
       setPhase("PROMPTING_BIOMETRIC");
       try {
         const result = await executeSilentWebLoginOnce(apiFetch);
         if (cancelled) return;
-        if (result.identity) {
+        if (result?.identity) {
           setIdentity(result.identity);
           await refresh();
+          if (cancelled) return;
           setPhase("AUTHENTICATED");
           onAuthenticated?.(result.identity);
           return;
         }
-        setPhase("NEEDS_ACCOUNT");
-      } catch (e) {
+        // Assertion completed without a usable identity — treat as no passkey.
+        goNeedsAccount();
+      } catch {
         if (cancelled) return;
-        const msg = e instanceof Error ? e.message : "Authentication failed";
-        if (isNoCredentialFailure(msg)) {
-          setPhase("NEEDS_ACCOUNT");
-          setError(null);
-        } else {
-          setPhase("ERROR");
-          setError(msg);
-        }
+        // NotAllowedError | InvalidStateError | TimeoutError | cancel | missing key
+        goNeedsAccount();
       }
     })();
 
@@ -157,8 +165,10 @@ export function useTrustIdAuth(
       setPhase("AUTHENTICATED");
       onAuthenticated?.(completed.identity);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Could not create Trust ID";
-      const cancelled = /not allowed|abort|cancel/i.test(msg);
+      const msg = failureMessage(e);
+      const cancelled = /not allowed|abort|cancel|NotAllowedError|AbortError/i.test(
+        msg,
+      );
       setError(cancelled ? null : msg);
       setPhase("NEEDS_ACCOUNT");
     }
@@ -166,12 +176,15 @@ export function useTrustIdAuth(
 
   const retryProbe = useCallback(() => {
     startedRef.current = false;
-    clearSilentAutoLoginAttempt();
+    clearStaleAuthCaches();
     setNonce((n) => n + 1);
   }, []);
 
+  const resolved: TrustIdAuthPhase = identity ? "AUTHENTICATED" : phase;
+
   return {
-    phase: identity ? "AUTHENTICATED" : phase,
+    phase: resolved,
+    authState: resolved,
     identity,
     error,
     createAccount,

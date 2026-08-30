@@ -47,6 +47,9 @@ function Splash({
 /**
  * Unified app entry: silent probe ? biometric unlock OR create-account screen.
  * No email / phone / password fields.
+ *
+ * Loading splash only for CHECKING / PROMPTING_BIOMETRIC.
+ * NEEDS_ACCOUNT immediately unmounts the spinner and shows CreateTrustIdAccount.
  */
 export function TrustIdSmartAuthGuard({
   children,
@@ -56,21 +59,25 @@ export function TrustIdSmartAuthGuard({
   onAuthenticated,
   probingMessage = "Looking for your Trust ID on this device…",
 }: TrustIdSmartAuthGuardProps) {
-  const { phase, error, createAccount, retryProbe } = useTrustIdAuth({
+  const { phase, authState, error, createAccount, retryProbe } = useTrustIdAuth({
     getInstallId,
     onAuthenticated,
   });
 
-  if (phase === "AUTHENTICATED") {
+  // Prefer authState alias; phase is kept for callers/tests.
+  const state = authState ?? phase;
+
+  if (state === "AUTHENTICATED") {
     return <>{children}</>;
   }
 
-  if (phase === "NEEDS_ACCOUNT" || phase === "CREATING_ACCOUNT") {
+  // Instant hand-off — never leave the biometric spinner mounted here.
+  if (state === "NEEDS_ACCOUNT" || state === "CREATING_ACCOUNT") {
     if (renderCreate) {
       return (
         <>
           {renderCreate({
-            busy: phase === "CREATING_ACCOUNT",
+            busy: state === "CREATING_ACCOUNT",
             error,
             onCreate: () => {
               void createAccount();
@@ -82,7 +89,7 @@ export function TrustIdSmartAuthGuard({
     return (
       <CreateTrustIdAccount
         brand={brand}
-        busy={phase === "CREATING_ACCOUNT"}
+        busy={state === "CREATING_ACCOUNT"}
         error={error}
         onCreate={() => {
           void createAccount();
@@ -91,12 +98,14 @@ export function TrustIdSmartAuthGuard({
     );
   }
 
-  if (phase === "ERROR") {
+  if (state === "ERROR") {
     return (
       <div className="tid-silent-splash" role="alert">
         <div className="tid-silent-splash-panel">
           <h1 className="tid-silent-splash-brand">{brand}</h1>
-          <p className="tid-silent-splash-msg">{error ?? "Something went wrong."}</p>
+          <p className="tid-silent-splash-msg">
+            {error ?? "Something went wrong."}
+          </p>
           <button
             type="button"
             className="tid-btn tid-btn-primary"
@@ -109,5 +118,6 @@ export function TrustIdSmartAuthGuard({
     );
   }
 
-  return <Splash brand={brand} message={probingMessage} phase={phase} />;
+  // CHECKING | PROMPTING_BIOMETRIC only
+  return <Splash brand={brand} message={probingMessage} phase={state} />;
 }
