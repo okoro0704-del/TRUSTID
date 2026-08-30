@@ -4,6 +4,7 @@ import cookie from "@fastify/cookie";
 import websocket from "@fastify/websocket";
 import { config } from "./lib/config.js";
 import { bootstrapElfComDispatcher } from "./lib/bootstrap-elfcom.js";
+import { bootstrapOAuthApplications } from "./lib/bootstrap-oauth-apps.js";
 import { authRoutes } from "./routes/auth.js";
 import { identityRoutes } from "./routes/identity.js";
 import { deviceRoutes } from "./routes/devices.js";
@@ -27,6 +28,7 @@ import { registerRealtimeGateway } from "./modules/realtime/index.js";
 
 export async function buildApp() {
   bootstrapElfComDispatcher();
+  await bootstrapOAuthApplications();
 
   const app = Fastify({
     logger: config.isDev,

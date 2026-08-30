@@ -95,11 +95,36 @@ async function main() {
     },
   });
 
+  const elfcomClientId = "elfcom_web";
+  const elfcomRedirects = [
+    "https://elfcom.netlify.app/auth/callback",
+    "http://localhost:5180/auth/callback",
+  ];
+  await prisma.application.upsert({
+    where: { clientId: elfcomClientId },
+    update: {
+      name: "ElfCom",
+      redirectUris: JSON.stringify(elfcomRedirects),
+      allowedScopes: JSON.stringify(DEFAULT_APP_SCOPES),
+      status: "active",
+      type: "public",
+    },
+    create: {
+      name: "ElfCom",
+      clientId: elfcomClientId,
+      type: "public",
+      redirectUris: JSON.stringify(elfcomRedirects),
+      allowedScopes: JSON.stringify(DEFAULT_APP_SCOPES),
+      status: "active",
+    },
+  });
+
   console.log("Seeded applications:");
   console.log("  LifeOS client_id:", lifeosClientId);
   console.log("  Digiconomy client_id:", digiconomyClientId, "(placeholder — not connected in V1)");
   console.log("  LIDIOS TOKEN client_id:", lidiosClientId);
   console.log("  LIDIOS redirect URIs:", lidiosRedirects.join(", "));
+  console.log("  ElfCom client_id:", elfcomClientId);
   console.log("  (dev secret helper unused)", hash(randomBytes(8).toString("hex")).slice(0, 8));
 }
 
