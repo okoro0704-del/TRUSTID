@@ -212,3 +212,86 @@
   }
 }
 
+/* Create Trust ID ? zero-field onboarding */
+.tid-create-account {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  color: #e8f5f3;
+  background: #071716;
+  overflow: hidden;
+}
+
+.tid-create-account-ambient {
+  position: absolute;
+  inset: -20%;
+  background:
+    radial-gradient(ellipse at 30% 20%, rgba(45, 212, 191, 0.16), transparent 50%),
+    radial-gradient(ellipse at 75% 70%, rgba(11, 107, 100, 0.22), transparent 45%);
+  pointer-events: none;
+  animation: tid-silent-pulse 4s ease-in-out infinite;
+}
+
+.tid-create-account-panel {
+  position: relative;
+  width: min(420px, 100%);
+  text-align: center;
+}
+
+.tid-create-account-orb {
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 1.5rem;
+  position: relative;
+}
+
+.tid-create-account-orb span {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(45, 212, 191, 0.45);
+  animation: tid-silent-pulse 2.2s ease-in-out infinite;
+}
+
+.tid-create-account-orb span:last-child {
+  inset: 12px;
+  border-color: rgba(45, 212, 191, 0.85);
+  animation-delay: 0.35s;
+  background: radial-gradient(circle at 40% 35%, rgba(45, 212, 191, 0.35), transparent 65%);
+}
+
+.tid-create-account-eyebrow {
+  margin: 0 0 0.35rem;
+  font-size: 0.78rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  opacity: 0.65;
+}
+
+.tid-create-account-brand {
+  margin: 0 0 0.75rem;
+  font-size: clamp(2.1rem, 7vw, 3rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.tid-create-account-lead {
+  margin: 0 0 1.5rem;
+  opacity: 0.8;
+  line-height: 1.5;
+  font-size: 1rem;
+}
+
+.tid-create-account-cta {
+  width: 100%;
+  padding: 0.95rem 1.25rem;
+  font-size: 1rem;
+}
+
+.tid-create-account-foot {
+  margin: 1.25rem 0 0;
+}
+

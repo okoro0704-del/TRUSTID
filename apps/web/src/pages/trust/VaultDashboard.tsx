@@ -3,7 +3,7 @@ import {
   AppLockGuardOverlay,
   DeviceApprovalModal,
   VaultProtectedMediaViewer,
-  useTrustIdAuth,
+  useTrustIdSession,
 } from "@trustid/ui-react";
 import type { AppLockConfig, EsfsManifest, StepUpPolicy } from "@trustid/vault-sdk";
 import { DEFAULT_APP_LOCK_CONFIG, DEFAULT_STEP_UP_POLICY } from "@trustid/vault-sdk";
@@ -28,7 +28,7 @@ const ROUTE_SUGGESTIONS = [
 
 export function VaultDashboardPage() {
   const vault = useMemo(() => getSovereignVault(), []);
-  const { approvalEvents, realtimeState, clearApprovalEvents } = useTrustIdAuth();
+  const { approvalEvents, realtimeState, clearApprovalEvents } = useTrustIdSession();
 
   const [config, setConfig] = useState<AppLockConfig>(DEFAULT_APP_LOCK_CONFIG);
   const [stepUpPolicy, setStepUpPolicy] = useState<StepUpPolicy>(DEFAULT_STEP_UP_POLICY);
@@ -59,7 +59,7 @@ export function VaultDashboardPage() {
     probeTier1Capabilities()
       .then((caps) => {
         setCapsNote(
-          `${caps.platform} ù UV ${caps.enrolled ? "enrolled" : "not enrolled"} ù realtime ${realtimeState}`,
+          `${caps.platform} ? UV ${caps.enrolled ? "enrolled" : "not enrolled"} ? realtime ${realtimeState}`,
         );
       })
       .catch(() => undefined);
@@ -102,7 +102,7 @@ export function VaultDashboardPage() {
         if (auth.duress) {
           await vault.duress.handleDuress({ config });
           setDuressState(vault.duress.getState());
-          setNote("Duress detected ù vault locked and alert dispatched.");
+          setNote("Duress detected ? vault locked and alert dispatched.");
           return;
         }
       }
@@ -232,7 +232,7 @@ export function VaultDashboardPage() {
           <h2>Sovereign Vault</h2>
           <p className="sub">
             Hardware-gated DAK/CDK encryption, app lock registry, risk-based step-up,
-            and duress handling ù zero server knowledge of plaintext media.
+            and duress handling ? zero server knowledge of plaintext media.
           </p>
           {capsNote && <p className="muted">{capsNote}</p>}
           <div className="inline-actions">
@@ -279,7 +279,7 @@ export function VaultDashboardPage() {
                 <div className="row-main">
                   <strong>{m.displayName}</strong>
                   <span className="muted">
-                    {m.mimeType} ù {m.chunkCount} chunks ù {m.contentHash.slice(0, 12)}ù
+                    {m.mimeType} ? {m.chunkCount} chunks ? {m.contentHash.slice(0, 12)}?
                   </span>
                 </div>
                 <div className="inline-actions">
@@ -469,7 +469,7 @@ export function VaultDashboardPage() {
             />
           </div>
           <div className="field">
-            <label htmlFor="riskThreshold">Risk threshold (0ù100)</label>
+            <label htmlFor="riskThreshold">Risk threshold (0?100)</label>
             <input
               id="riskThreshold"
               type="number"

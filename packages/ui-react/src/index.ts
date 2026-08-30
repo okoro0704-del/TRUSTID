@@ -1,9 +1,17 @@
 export {
   TrustIdAuthProvider,
-  useTrustIdAuth,
+  useTrustIdAuth as useTrustIdSession,
   useAuth,
 } from "./context/TrustIdAuthProvider.js";
 export type { TrustIdAuthProviderProps } from "./context/TrustIdAuthProvider.js";
+
+/** Smart auth state machine (probe → biometric → create account). */
+export {
+  useTrustIdAuth,
+  type TrustIdAuthPhase,
+  type UseTrustIdAuthOptions,
+  type UseTrustIdAuthResult,
+} from "./hooks/useTrustIdAuth.js";
 
 export {
   TrustIdLoginButton,
@@ -19,6 +27,11 @@ export type {
 
 export { AutoAuthGuard } from "./components/AutoAuthGuard.js";
 export type { AutoAuthGuardProps } from "./components/AutoAuthGuard.js";
+
+export { TrustIdSmartAuthGuard } from "./components/TrustIdSmartAuthGuard.js";
+export type { TrustIdSmartAuthGuardProps } from "./components/TrustIdSmartAuthGuard.js";
+
+export { CreateTrustIdAccount } from "./components/CreateTrustIdAccount.js";
 
 export { EcosystemAutoLogin } from "./components/EcosystemAutoLogin.js";
 export type { EcosystemAutoLoginProps } from "./components/EcosystemAutoLogin.js";

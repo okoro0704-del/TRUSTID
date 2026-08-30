@@ -20,6 +20,10 @@ import {
   silentAssert,
 } from "../modules/authentication/silent-auth.js";
 import {
+  beginSilentRegistration,
+  completeSilentRegistration,
+} from "../modules/authentication/register-silent.js";
+import {
   assertInstallAvailableForNewTrustId,
   getInstallOccupancy,
 } from "../modules/authentication/device-install.js";
@@ -275,6 +279,53 @@ export async function authRoutes(app: FastifyInstance) {
 
   app.post("/v1/auth/silent-assert", handleSilentAssert);
   app.post("/auth/silent/assert", handleSilentAssert);
+
+  /**
+   * Zero-PII account bootstrap — allocate $TID + discoverable passkey options.
+   * Body: { installId }
+   */
+  app.post("/v1/auth/register-silent/options", async (req, reply) => {
+    const body = z
+      .object({ installId: z.string().min(1).max(80) })
+      .parse(req.body ?? {});
+    try {
+      return await beginSilentRegistration({
+        installId: body.installId,
+        ...clientMeta(req),
+      });
+    } catch (err) {
+      return httpError(err, reply);
+    }
+  });
+
+  /**
+   * Complete silent registration with WebAuthn attestation.
+   * Assigns $TID session with no email/phone fields.
+   */
+  app.post("/v1/auth/register-silent", async (req, reply) => {
+    const body = z
+      .object({
+        userId: z.string().min(1),
+        installId: z.string().min(1).max(80),
+        response: z.any(),
+      })
+      .parse(req.body ?? {});
+    try {
+      const result = await completeSilentRegistration({
+        userId: body.userId,
+        installId: body.installId,
+        response: body.response,
+        ...clientMeta(req),
+      });
+      setSessionCookie(reply, result.sessionToken);
+      return {
+        ...result,
+        ...sessionBody(result.sessionToken),
+      };
+    } catch (err) {
+      return httpError(err, reply);
+    }
+  });
 
   /** One-time pairing after an existing authenticated session. */
   app.post("/auth/silent/pair", { preHandler: requireSession }, async (req, reply) => {

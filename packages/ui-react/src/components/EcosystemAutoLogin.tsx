@@ -1,35 +1,28 @@
 import type { ReactNode } from "react";
-import {
-  AutoAuthGuard,
-  TrustIdAuthProvider,
-  type TrustIdIdentity,
-} from "../index.js";
+import { TrustIdAuthProvider } from "../context/TrustIdAuthProvider.js";
+import { TrustIdSmartAuthGuard } from "./TrustIdSmartAuthGuard.js";
+import type { TrustIdIdentity } from "../types.js";
 
 export type EcosystemAutoLoginProps = {
   children: ReactNode;
-  /** Trust ID API base (`/api` via proxy, or absolute URL with credentials). */
   apiBaseUrl: string;
-  /** Product brand shown on the splash (ElfCom, Data Zone, FinProv, …). */
   brand?: string;
-  /** Called when silent biometric login succeeds. */
+  /** Required for silent account creation on first visit. */
+  getInstallId: () => Promise<string>;
   onAuthenticated?: (identity: TrustIdIdentity) => void;
-  /** Manual / OAuth fallback when no passkey is available. */
-  fallback?: ReactNode;
   credentials?: RequestCredentials;
 };
 
 /**
- * Drop-in zero-input auth shell for connected ecosystem PWAs
- * (ElfCom, Data Zone, FinProv, LifeOS, …).
- *
- * Mount at the app root. On success the child tree renders with a Trust ID session.
+ * Drop-in zero-field auth shell for ElfCom, Data Zone, FinProv, LifeOS, etc.
+ * Probe ? biometric unlock, or Create Trust ID — never email/phone forms.
  */
 export function EcosystemAutoLogin({
   children,
   apiBaseUrl,
   brand = "TrustID",
+  getInstallId,
   onAuthenticated,
-  fallback,
   credentials = "include",
 }: EcosystemAutoLoginProps) {
   return (
@@ -41,15 +34,13 @@ export function EcosystemAutoLogin({
         if (identity) onAuthenticated?.(identity);
       }}
     >
-      <AutoAuthGuard
+      <TrustIdSmartAuthGuard
         brand={brand}
-        message="Unlocking with your device biometric…"
-        fallback={fallback ?? children}
-        requireAuth={Boolean(fallback)}
-        onAuthenticated={() => undefined}
+        getInstallId={getInstallId}
+        onAuthenticated={onAuthenticated}
       >
         {children}
-      </AutoAuthGuard>
+      </TrustIdSmartAuthGuard>
     </TrustIdAuthProvider>
   );
 }
