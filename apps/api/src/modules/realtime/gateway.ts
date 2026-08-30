@@ -52,7 +52,11 @@ export async function registerRealtimeGateway(app: FastifyInstance) {
     "/realtime/approvals",
     { websocket: true },
     async (socket: WebSocket, req) => {
-      const auth = await resolveMasterAuth(req);
+      const auth = await resolveMasterAuth({
+        headers: req.headers as Record<string, unknown>,
+        cookies: req.cookies,
+        query: req.query as Record<string, unknown>,
+      });
       if (!auth?.userId) {
         socket.send(JSON.stringify({ type: "error", message: "Sign in required" }));
         socket.close(4401, "unauthorized");
@@ -95,8 +99,9 @@ export async function registerRealtimeGateway(app: FastifyInstance) {
     "/realtime/approvals/guest",
     { websocket: true },
     async (socket: WebSocket, req) => {
+      const query = req.query as Record<string, unknown> | undefined;
       const pollToken =
-        typeof req.query?.pollToken === "string" ? req.query.pollToken.trim() : "";
+        typeof query?.pollToken === "string" ? query.pollToken.trim() : "";
       if (pollToken.length < 10) {
         socket.send(JSON.stringify({ type: "error", message: "pollToken required" }));
         socket.close(4400, "bad_request");

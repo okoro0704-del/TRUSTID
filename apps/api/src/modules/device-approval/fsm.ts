@@ -75,6 +75,8 @@ export type ApprovalRow = {
   platform: string | null;
   browser: string | null;
   location: string | null;
+  ip: string | null;
+  userAgent: string | null;
   clientId: string | null;
   oauthConsentCodeId: string | null;
   guestSessionId: string | null;
@@ -162,10 +164,16 @@ export async function transitionApprovalFsm(input: {
   });
 
   if (input.audit) {
+    const actorType =
+      input.audit.actorType === "user" ||
+      input.audit.actorType === "application" ||
+      input.audit.actorType === "system"
+        ? input.audit.actorType
+        : ("system" as const);
     await recordAudit({
       type: input.audit.type,
       userId: input.row.userId,
-      actorType: input.audit.actorType ?? "system",
+      actorType,
       actorId: input.audit.actorId ?? null,
       metadata: {
         requestId: input.row.id,

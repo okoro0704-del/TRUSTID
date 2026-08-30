@@ -150,10 +150,15 @@ export function verifyZk(input: ZkVerifyRequest): ZkVerifyClaimResult | ZkVerify
     return verifyZkClaimBundle(input, config.sealKey);
   }
 
-  const legacy = verifyTrustTierGte({
-    proof: input.proof,
-    publicSignals: input.publicSignals,
-    issuerSecret: config.sealKey,
+  if ("proof" in input && "publicSignals" in input) {
+    return verifyTrustTierGte({
+      proof: input.proof,
+      publicSignals: input.publicSignals,
+      issuerSecret: config.sealKey,
+    });
+  }
+
+  throw Object.assign(new Error("Invalid ZK verify payload"), {
+    statusCode: 400,
   });
-  return legacy;
 }
