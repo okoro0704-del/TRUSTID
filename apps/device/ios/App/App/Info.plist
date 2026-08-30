@@ -47,5 +47,11 @@
 	<true/>
 	<key>NSFaceIDUsageDescription</key>
 	<string>TrustID uses Face ID to unlock your private media and protected apps.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>TrustID imports photos into the encrypted Media Locker and can remove originals after vaulting.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>TrustID may write restored media back to your library when you explicitly export.</string>
+	<key>NSFamilyControlsUsageDescription</key>
+	<string>TrustID uses Screen Time / Family Controls to shield apps you lock in App Locker.</string>
 </dict>
 </plist>

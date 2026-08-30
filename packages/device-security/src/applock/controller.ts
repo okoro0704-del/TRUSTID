@@ -10,6 +10,15 @@ export type NativeAppLockBridge = {
   isAccessibilityEnabled(): Promise<{ enabled: boolean }>;
   /** Trigger overlay challenge (used by tests / manual). */
   challengeNow(packageId: string): Promise<{ ok: boolean }>;
+  getInstalledApps?(options?: { includeIcons?: boolean }): Promise<{
+    apps: Array<{ packageId: string; displayName: string; iconBase64?: string }>;
+    platform: string;
+    note?: string;
+  }>;
+  setLockedApps?(packages: string[]): Promise<{ ok: boolean; count: number }>;
+  openOverlayPermissionSettings?(): Promise<void>;
+  canDrawOverlays?(): Promise<{ granted: boolean }>;
+  requestFamilyControlsAuth?(): Promise<{ authorized: boolean; message?: string }>;
 };
 
 /**
@@ -108,5 +117,31 @@ export class AppLockController {
       throw new Error("Native App Lock bridge unavailable");
     }
     await this.native.openAccessibilitySettings();
+  }
+
+  async getInstalledApps(options?: { includeIcons?: boolean }) {
+    if (!this.native?.getInstalledApps) {
+      return {
+        apps: [] as Array<{ packageId: string; displayName: string }>,
+        platform: "web",
+        note: "Install TrustID Device for the native app picker.",
+      };
+    }
+    return this.native.getInstalledApps(options);
+  }
+
+  async setLockedApps(packages: string[]) {
+    if (this.native?.setLockedApps) {
+      return this.native.setLockedApps(packages);
+    }
+    const policy = await this.getPolicy();
+    const now = new Date().toISOString();
+    const apps = packages.map((packageId) => ({
+      packageId,
+      displayName: packageId,
+      addedAt: now,
+    }));
+    await this.savePolicy({ ...policy, enabled: packages.length > 0, apps });
+    return { ok: true, count: packages.length };
   }
 }

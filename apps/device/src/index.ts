@@ -81,8 +81,15 @@ export function createAppLockController(gate: BiometricGate): AppLockController 
       });
     },
     openAccessibilitySettings: () => TrustIdAppLock.openAccessibilitySettings(),
+    openOverlayPermissionSettings: () => TrustIdAppLock.openOverlayPermissionSettings(),
+    canDrawOverlays: () => TrustIdAppLock.canDrawOverlays(),
     isAccessibilityEnabled: () => TrustIdAppLock.isAccessibilityEnabled(),
     challengeNow: (packageId) => TrustIdAppLock.challengeNow({ packageId }),
+    getInstalledApps: (options) => TrustIdAppLock.getInstalledApps(options),
+    setLockedApps: (packages) => TrustIdAppLock.setLockedApps({ packages }),
+    requestFamilyControlsAuth: () =>
+      TrustIdAppLock.requestFamilyControlsAuth?.() ??
+      Promise.resolve({ authorized: false, message: "unavailable" }),
   };
   return new AppLockController(gate, bridge);
 }

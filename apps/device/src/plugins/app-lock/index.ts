@@ -7,25 +7,26 @@ export type SovereignAppLockPolicy = AppLockConfig;
 export type AppLockPlugin = {
   getPolicy(): Promise<SovereignAppLockPolicy>;
   setPolicy(options: { policy: SovereignAppLockPolicy }): Promise<void>;
+  setLockedApps(options: { packages: string[] }): Promise<{ ok: boolean; count: number }>;
+  getInstalledApps(options?: {
+    includeIcons?: boolean;
+  }): Promise<{
+    apps: Array<{
+      packageId: string;
+      displayName: string;
+      systemApp?: boolean;
+      iconBase64?: string;
+    }>;
+    platform: string;
+    note?: string;
+  }>;
   openAccessibilitySettings(): Promise<void>;
+  openOverlayPermissionSettings(): Promise<void>;
+  canDrawOverlays(): Promise<{ granted: boolean }>;
   isAccessibilityEnabled(): Promise<{ enabled: boolean }>;
   challengeNow(options: { packageId: string }): Promise<{ ok: boolean; duress?: boolean }>;
-  /** Native duress finger/face slot detection (Android BiometricPrompt / iOS LAContext). */
   isDuressBiometricConfigured(): Promise<{ configured: boolean }>;
+  requestFamilyControlsAuth?(): Promise<{ authorized: boolean; message?: string }>;
 };
 
 export const TrustIdAppLock = registerPlugin<AppLockPlugin>("TrustIdAppLock");
-
-/**
- * Native plugin specification — Android/iOS implementation notes:
- *
- * Android (`AppLockPlugin.kt`):
- * - Mirror `SovereignAppLockPolicy` JSON into `AppLockAccessibilityService` prefs.
- * - `challengeNow` ? `AppLockOverlayActivity` with BiometricPrompt.
- * - Duress: register alternate biometric via `setNegativeButton` hidden path or
- *   dedicated `BiometricManager` authenticator; on duress match return `{ duress: true }`.
- *
- * iOS (`AppLockPlugin.swift`):
- * - Cross-app intercept limited; expose in-app route shield + Shortcuts hidden apps list.
- * - Duress via separate LAContext policy evaluation flag.
- */

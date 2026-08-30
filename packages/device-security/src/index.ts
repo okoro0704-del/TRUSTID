@@ -37,6 +37,16 @@ export {
 } from "./applock/controller.js";
 
 export {
+  getInstalledApps,
+  setLockedApps,
+  ensureAndroidOverlayPermission,
+  type InstalledAppInfo,
+  type GetInstalledAppsResult,
+  type SetLockedAppsResult,
+  type AppLockNativeBridge,
+} from "./applock.js";
+
+export {
   runNativeSilentLogin,
   pairSilentHardwareKey,
   type SilentAuthBridge,
