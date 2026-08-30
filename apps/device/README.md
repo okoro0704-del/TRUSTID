@@ -63,12 +63,16 @@ npm run cap:sync -w @trustid/device
 Source of truth for native code: `native/android` and `native/ios`.  
 Synced copies live under `android/app/src/main/java/...` and `ios/App/App/plugins/`.
 
-### Android Studio
+### Build a debug APK (Windows)
 
-1. `npm run android -w @trustid/device`
-2. Wait for Gradle sync
-3. Run on emulator or device
-4. For App Lock: enable **TrustID App Lock** in system Accessibility settings
+```bash
+npm run cap:sync -w @trustid/device
+cd apps/device/android
+# requires Android SDK + JDK 17 (Android Studio JBR works)
+.\gradlew.bat assembleDebug
+```
+
+APK output: `apps/device/android/app/build/outputs/apk/debug/app-debug.apk`
 
 ### iOS (macOS)
 

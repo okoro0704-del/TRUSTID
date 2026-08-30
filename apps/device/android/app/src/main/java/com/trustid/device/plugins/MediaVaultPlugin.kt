@@ -243,9 +243,9 @@ class MediaVaultPlugin : Plugin() {
     return try {
       val pending = MediaStore.createDeleteRequest(context.contentResolver, listOf(uri))
       // Host Activity must launch pending.intent; Capacitor bridge should expose startIntentSender.
-      // We mark as scheduled — UI layer completes the system confirmation.
+      // We mark as scheduled Â— UI layer completes the system confirmation.
       activity.startIntentSenderForResult(
-        pending.intent.intentSender,
+        pending.intentSender,
         19001,
         null,
         0,
