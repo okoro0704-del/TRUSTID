@@ -1,5 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
+import { useSilentAutoLogin } from "@trustid/ui-react";
 import { api, setSessionToken } from "../lib/api";
 import { useAuth, type Identity } from "../lib/auth";
 import { consumeReturnTo, peekReturnTo } from "../lib/returnTo";
@@ -58,6 +59,12 @@ export function ContinuePage() {
     Boolean(remembered) &&
     !switchAccount &&
     Boolean(remembered?.trustId);
+
+  // Zero-input for returning Trust ID users (ElfCom / Data Zone / FinProv return_to included).
+  const { prompting: autoPrompting, status: autoStatus } = useSilentAutoLogin({
+    enabled: showQuick && !identity && !silent,
+    oncePerSession: true,
+  });
 
   const contactHints = useCallback(() => {
     if (showQuick && remembered) {
@@ -181,6 +188,21 @@ export function ContinuePage() {
   if (identity && !busy) {
     const next = peekReturnTo() ? consumeReturnTo()! : null;
     if (next) return <Navigate to={next} replace />;
+  }
+
+  if (autoPrompting || autoStatus === "prompting") {
+    return (
+      <div className="tid-silent-splash" role="status" aria-live="polite">
+        <div className="tid-silent-splash-panel">
+          <div className="tid-silent-splash-mark" aria-hidden="true" />
+          <h1 className="tid-silent-splash-brand">TrustID</h1>
+          <p className="tid-silent-splash-msg">
+            Unlocking with your device biometric…
+          </p>
+          <div className="tid-silent-splash-ring" aria-hidden="true" />
+        </div>
+      </div>
+    );
   }
 
   async function onPasskey(e: FormEvent) {

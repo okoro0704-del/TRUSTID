@@ -139,3 +139,76 @@
   pointer-events: none;
   user-select: none;
 }
+
+/* Zero-input silent auth splash (AutoAuthGuard / PWA mount) */
+.tid-silent-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background:
+    radial-gradient(ellipse at 30% 20%, rgba(45, 212, 191, 0.12), transparent 55%),
+    radial-gradient(ellipse at 70% 80%, rgba(11, 107, 100, 0.18), transparent 50%),
+    #071716;
+  color: #e8f5f3;
+}
+
+.tid-silent-splash-panel {
+  width: min(360px, 100%);
+  text-align: center;
+}
+
+.tid-silent-splash-brand {
+  margin: 0 0 0.5rem;
+  font-size: clamp(2rem, 6vw, 2.75rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.tid-silent-splash-msg {
+  margin: 0 0 1.5rem;
+  opacity: 0.78;
+  font-size: 0.95rem;
+  line-height: 1.45;
+}
+
+.tid-silent-splash-mark {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 1.25rem;
+  border-radius: 50%;
+  border: 2px solid rgba(45, 212, 191, 0.55);
+  box-shadow: 0 0 0 8px rgba(45, 212, 191, 0.08);
+  animation: tid-silent-pulse 1.6s ease-in-out infinite;
+}
+
+.tid-silent-splash-ring {
+  width: 28px;
+  height: 28px;
+  margin: 0 auto;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  border-top-color: #2dd4bf;
+  animation: tid-silent-spin 0.85s linear infinite;
+}
+
+@keyframes tid-silent-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes tid-silent-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.06);
+    opacity: 0.85;
+  }
+}
+

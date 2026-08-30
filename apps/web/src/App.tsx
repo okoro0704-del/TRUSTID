@@ -1,5 +1,5 @@
 import { Navigate, Route, Routes } from "react-router-dom";
-import { useAuth } from "./lib/auth";
+import { AutoAuthGuard } from "@trustid/ui-react";
 import { WelcomePage } from "./pages/Welcome";
 import { RegisterPage } from "./pages/Register";
 import { VerifyPage } from "./pages/Verify";
@@ -29,17 +29,16 @@ import { IdentityPage } from "./pages/trust/Identity";
 import { ControlCenterPage } from "./pages/trust/ControlCenter";
 
 function Guard({ children }: { children: React.ReactNode }) {
-  const { loading, identity } = useAuth();
-  if (loading)
-    return (
-      <div className="app-frame">
-        <p className="muted" style={{ padding: "2rem" }}>
-          Loading…
-        </p>
-      </div>
-    );
-  if (!identity) return <Navigate to="/" replace />;
-  return <>{children}</>;
+  return (
+    <AutoAuthGuard
+      requireAuth
+      brand="TrustID"
+      message="Unlocking with Face ID, fingerprint, or passkey…"
+      fallback={<Navigate to="/continue" replace />}
+    >
+      {children}
+    </AutoAuthGuard>
+  );
 }
 
 export function App() {
@@ -64,14 +63,12 @@ export function App() {
         }
       >
         <Route index element={<OverviewPage />} />
-        {/* Primary consumer tabs */}
         <Route path="apps" element={<AppLockerPage />} />
         <Route path="media" element={<MediaVaultPage />} />
         <Route path="control" element={<ControlCenterPage />} />
         <Route path="app-locker" element={<Navigate to="/dashboard/apps" replace />} />
         <Route path="media-vault" element={<Navigate to="/dashboard/media" replace />} />
         <Route path="security" element={<Navigate to="/dashboard/control" replace />} />
-        {/* Secondary / account tools */}
         <Route path="devices" element={<DevicesPage />} />
         <Route path="devices/:id" element={<DeviceDetailPage />} />
         <Route path="approvals" element={<ApprovalsPage />} />

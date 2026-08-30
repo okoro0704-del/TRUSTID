@@ -1,5 +1,6 @@
 import { Link, Navigate } from "react-router-dom";
 import { useRef } from "react";
+import { useSilentAutoLogin } from "@trustid/ui-react";
 import { useAuth } from "../lib/auth";
 import { consumeReturnTo, peekReturnTo } from "../lib/returnTo";
 import { getRememberedAccount } from "../lib/rememberedAccount";
@@ -11,14 +12,35 @@ export function WelcomePage() {
   const remembered = getRememberedAccount();
   const occupied = Boolean(getLocalOccupancy()?.trustId || remembered?.trustId);
 
-  if (!loading && identity) {
+  // Zero-input: auto OS biometric as soon as the PWA mounts for returning devices.
+  const { prompting, status } = useSilentAutoLogin({
+    enabled: !identity,
+    oncePerSession: true,
+  });
+
+  if ((!loading && identity) || status === "success") {
     if (resumeTo.current === null) {
       resumeTo.current = consumeReturnTo() ?? "/dashboard";
     }
     return <Navigate to={resumeTo.current} replace />;
   }
 
-  if (!loading && !identity && occupied) {
+  if ((loading || prompting) && occupied) {
+    return (
+      <div className="tid-silent-splash" role="status" aria-live="polite">
+        <div className="tid-silent-splash-panel">
+          <div className="tid-silent-splash-mark" aria-hidden="true" />
+          <h1 className="tid-silent-splash-brand">TrustID</h1>
+          <p className="tid-silent-splash-msg">
+            Unlocking with your device biometric…
+          </p>
+          <div className="tid-silent-splash-ring" aria-hidden="true" />
+        </div>
+      </div>
+    );
+  }
+
+  if (!loading && !identity && occupied && status !== "prompting") {
     return <Navigate to="/continue" replace />;
   }
 

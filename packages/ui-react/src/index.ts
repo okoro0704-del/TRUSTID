@@ -17,6 +17,29 @@ export type {
   LoginHints,
 } from "./components/TrustIdLoginButton.js";
 
+export { AutoAuthGuard } from "./components/AutoAuthGuard.js";
+export type { AutoAuthGuardProps } from "./components/AutoAuthGuard.js";
+
+export { EcosystemAutoLogin } from "./components/EcosystemAutoLogin.js";
+export type { EcosystemAutoLoginProps } from "./components/EcosystemAutoLogin.js";
+
+export { useSilentAutoLogin } from "./hooks/useSilentAutoLogin.js";
+export type {
+  UseSilentAutoLoginOptions,
+  UseSilentAutoLoginResult,
+  SilentAutoLoginStatus,
+} from "./hooks/useSilentAutoLogin.js";
+
+export {
+  executeSilentWebLogin,
+  executeSilentWebLoginOnce,
+  runImmediateSilentPasskey,
+  fetchSilentLoginOptions,
+  postSilentWebAuthnAssert,
+  clearSilentAutoLoginAttempt,
+} from "./lib/silentAuth.js";
+export type { SilentAssertIdentityResult } from "./lib/silentAuth.js";
+
 export { VaultProtectedMediaViewer } from "./components/VaultProtectedMediaViewer.js";
 export type { VaultProtectedMediaViewerProps } from "./components/VaultProtectedMediaViewer.js";
 

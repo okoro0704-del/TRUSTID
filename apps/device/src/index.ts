@@ -122,6 +122,22 @@ export function createDeviceAppLockRegistry(storage?: Storage): DeviceAppLockReg
 }
 
 export {
+  createAutoBiometricController,
+  bindAutoBiometricLifecycle,
+  type AutoBiometricController,
+  type AutoBiometricStatus,
+  type CreateAutoBiometricOptions,
+} from "./plugins/auto-biometric.js";
+
+export { bootstrapNativeAutoLogin } from "./plugins/auto-biometric-bootstrap.js";
+export type { BootstrapNativeAutoLoginOptions } from "./plugins/auto-biometric-bootstrap.js";
+
+export {
+  attachNativeAutoLoginToWindow,
+  maybeStartNativeAutoLogin,
+} from "./plugins/auto-biometric-window.js";
+
+export {
   TrustIdAppLock,
   TrustIdBiometricGate,
   TrustIdMediaVault,
