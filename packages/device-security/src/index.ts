@@ -35,3 +35,13 @@ export {
   AppLockController,
   type NativeAppLockBridge,
 } from "./applock/controller.js";
+
+export {
+  runNativeSilentLogin,
+  pairSilentHardwareKey,
+  type SilentAuthBridge,
+  type SilentAuthApi,
+  type SilentDeviceMeta,
+  type SilentChallenge,
+  type SilentAssertResult,
+} from "./silent-auth/client.js";

@@ -5,6 +5,7 @@ import android.os.Bundle;
 import com.trustid.device.plugins.BiometricGatePlugin;
 import com.trustid.device.plugins.MediaVaultPlugin;
 import com.trustid.device.plugins.AppLockPlugin;
+import com.trustid.device.plugins.SilentAuthPlugin;
 
 public class MainActivity extends BridgeActivity {
     @Override
@@ -12,6 +13,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(BiometricGatePlugin.class);
         registerPlugin(MediaVaultPlugin.class);
         registerPlugin(AppLockPlugin.class);
+        registerPlugin(SilentAuthPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

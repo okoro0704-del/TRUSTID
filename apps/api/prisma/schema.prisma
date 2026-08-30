@@ -43,6 +43,7 @@ model User {
   recoverySessions        RecoverySession[]
   deviceInstalls          DeviceInstall[]
   bbsStepUpChallenges     BbsStepUpChallenge[]
+  silentDeviceKeys        SilentDeviceKey[]
 
   @@map("users")
 }
@@ -126,10 +127,37 @@ model Device {
   syncPrekeyBundles       DeviceSyncPrekeyBundle[]
   syncEnvelopesSent       DeviceSyncEnvelope[] @relation("SyncEnvSenderDevice")
   syncEnvelopesRecv       DeviceSyncEnvelope[] @relation("SyncEnvRecipientDevice")
+  silentDeviceKeys        SilentDeviceKey[]
 
   @@index([userId])
   @@index([userId, trustLevel])
   @@map("devices")
+}
+
+/// Hardware-backed public key for zero-input silent biometric login.
+/// Private key never leaves Keystore / Keychain; only SPKI is stored.
+model SilentDeviceKey {
+  id            String    @id @default(cuid())
+  userId        String    @map("user_id")
+  deviceId      String?   @map("device_id")
+  /// Client-stable key alias (not secret); used to look up the public key.
+  keyId         String    @unique @map("key_id")
+  /// SPKI DER of the ES256 public key
+  publicKeySpki Bytes     @map("public_key_spki")
+  algorithm     String    @default("ES256")
+  platform      String?
+  model         String?
+  osVersion     String?   @map("os_version")
+  status        String    @default("active")
+  lastUsedAt    DateTime? @map("last_used_at")
+  revokedAt     DateTime? @map("revoked_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device Device? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@map("silent_device_keys")
 }
 
 model Credential {
@@ -437,7 +465,7 @@ model WebAuthnChallenge {
   userId    String?   @map("user_id")
   /// Legacy alias of purpose (kept for compatibility)
   type      String
-  /// registration | authentication | reauthentication | device_addition
+  /// registration | authentication | reauthentication | device_addition | silent_authentication
   purpose   String    @default("registration")
   challenge String
   expiresAt DateTime  @map("expires_at")

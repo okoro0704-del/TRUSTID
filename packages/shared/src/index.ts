@@ -98,6 +98,8 @@ export const WEBAUTHN_PURPOSES = {
   AUTHENTICATION: "authentication",
   REAUTHENTICATION: "reauthentication",
   DEVICE_ADDITION: "device_addition",
+  /** Hardware-backed silent login (Keystore / Keychain attestation). */
+  SILENT_AUTHENTICATION: "silent_authentication",
 } as const;
 
 export type WebAuthnPurpose =
@@ -238,6 +240,10 @@ export const AUDIT_EVENTS = {
   DEVICE_AUTHENTICATION_STARTED: "device.authentication.started",
   DEVICE_AUTHENTICATION_COMPLETED: "device.authentication.completed",
   DEVICE_AUTHENTICATION_FAILED: "device.authentication.failed",
+  DEVICE_SILENT_AUTH_STARTED: "device.silent_auth.started",
+  DEVICE_SILENT_AUTH_COMPLETED: "device.silent_auth.completed",
+  DEVICE_SILENT_AUTH_FAILED: "device.silent_auth.failed",
+  DEVICE_SILENT_KEY_PAIRED: "device.silent_key.paired",
   DEVICE_SIGNATURE_COUNTER_WARNING: "device.signature_counter.warning",
   DEVICE_ENROLLMENT_CREATED: "device.enrollment.created",
   DEVICE_ENROLLMENT_APPROVED: "device.enrollment.approved",

@@ -20,9 +20,31 @@ import { DeviceAppLockRegistry } from "./plugins/app-lock/registry.js";
 import { TrustIdBiometricGate } from "./plugins/biometric-gate.js";
 import { TrustIdMediaVault } from "./plugins/media-vault.js";
 import { TrustIdSovereignVault } from "./plugins/sovereign-vault.js";
+import {
+  TrustIdSilentAuth,
+  silentAuthBridge,
+} from "./plugins/silent-auth/index.js";
+import {
+  pairSilentHardwareKey,
+  runNativeSilentLogin,
+} from "@trustid/device-security";
 
 export function isNativeDeviceRuntime(): boolean {
   return Capacitor.isNativePlatform();
+}
+
+export async function silentNativeLogin(apiFetch: <T>(
+  path: string,
+  init?: RequestInit,
+) => Promise<T>) {
+  return runNativeSilentLogin(silentAuthBridge, { fetch: apiFetch });
+}
+
+export async function pairSilentNativeKey(apiFetch: <T>(
+  path: string,
+  init?: RequestInit,
+) => Promise<T>) {
+  return pairSilentHardwareKey(silentAuthBridge, { fetch: apiFetch });
 }
 
 export function createBiometricGate(
@@ -97,6 +119,8 @@ export {
   TrustIdBiometricGate,
   TrustIdMediaVault,
   TrustIdSovereignVault,
+  TrustIdSilentAuth,
+  silentAuthBridge,
   SovereignVault,
   HttpElfComEmergencyBridge,
   DeviceAppLockRegistry,

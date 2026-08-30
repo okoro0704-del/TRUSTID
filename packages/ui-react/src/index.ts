@@ -9,6 +9,7 @@ export {
   TrustIdLoginButton,
   createLoginOptionsCache,
   runPasskeyLogin,
+  runSilentPasskeyLogin,
 } from "./components/TrustIdLoginButton.js";
 export type {
   TrustIdLoginButtonProps,

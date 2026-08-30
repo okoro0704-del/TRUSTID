@@ -123,20 +123,51 @@ export async function runPasskeyLogin(optionsJSON: AuthOptions) {
   return startAuthentication({ optionsJSON });
 }
 
+/**
+ * Zero-input discoverable passkey assertion.
+ * Prefers conditional mediation (browser autofill) when available; otherwise
+ * direct WebAuthn get with empty allowCredentials (resident credentials).
+ */
+export async function runSilentPasskeyLogin(optionsJSON: AuthOptions) {
+  const publicKey: AuthOptions = {
+    ...optionsJSON,
+    // Ensure discoverable-credential path: no username pre-fill.
+    allowCredentials: optionsJSON.allowCredentials?.length
+      ? optionsJSON.allowCredentials
+      : [],
+  };
+
+  try {
+    return await startAuthentication({
+      optionsJSON: publicKey,
+      useBrowserAutofill: true,
+    });
+  } catch {
+    return startAuthentication({ optionsJSON: publicKey });
+  }
+}
+
 export type TrustIdLoginButtonProps = {
+  /** Optional hints ? unused for primary silent login; kept for advanced / fallback flows. */
   hints?: LoginHints;
   label?: string;
   className?: string;
+  /** When true (default), Login immediately invokes silent biometric / passkey assert. */
+  silent?: boolean;
   onSuccess?: () => void;
   onError?: (message: string) => void;
+  /** Called when silent assert reports the device must complete one-time pairing. */
+  onDeviceUnpaired?: () => void;
 };
 
 export function TrustIdLoginButton({
   hints = {},
-  label = "Sign in with passkey",
+  label = "Login",
   className = "tid-btn tid-btn-primary",
+  silent = true,
   onSuccess,
   onError,
+  onDeviceUnpaired,
 }: TrustIdLoginButtonProps) {
   const { refresh, setIdentity, apiFetch } = useTrustIdAuth();
   const cacheRef = useRef(createLoginOptionsCache(apiFetch));
@@ -148,28 +179,67 @@ export function TrustIdLoginButton({
   const [oobStatus, setOobStatus] = useState<string | null>(null);
 
   useEffect(() => {
+    // Prefetch discoverable options with zero identity fields.
+    cacheRef.current.prefetch({}).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
     if (open && mode === "passkey") {
       cacheRef.current.prefetch(hints).catch(() => undefined);
     }
   }, [open, mode, hints]);
 
+  async function completeSilentWebAuthn() {
+    // Zero-input: never send email/phone/trustId for primary login.
+    const options = await cacheRef.current.take({});
+    const assertion = await runSilentPasskeyLogin(options);
+    const data = await apiFetch<{ identity: import("../types.js").TrustIdIdentity }>(
+      "/v1/auth/silent-assert",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          mode: "webauthn",
+          response: assertion,
+        }),
+      },
+    );
+    setIdentity(data.identity);
+    await refresh();
+    onSuccess?.();
+  }
+
+  async function onSilentLogin() {
+    setBusy(true);
+    setError(null);
+    try {
+      await completeSilentWebAuthn();
+      setOpen(false);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Sign-in failed";
+      const unpaired =
+        /unpaired|device_unpaired|Unknown credential/i.test(msg);
+      if (unpaired) {
+        onDeviceUnpaired?.();
+        setOpen(true);
+        setMode("passkey");
+        setError("This device is not paired yet. Complete one-time setup below.");
+      } else {
+        setError(msg);
+        onError?.(msg);
+        // Offer fallback modal only when silent path needs recovery options.
+        setOpen(true);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function onPasskeyLogin() {
     setBusy(true);
     setError(null);
     try {
-      const options = await cacheRef.current.take(hints);
-      const assertion = await runPasskeyLogin(options);
-      const data = await apiFetch<{ identity: import("../types.js").TrustIdIdentity }>(
-        "/auth/webauthn/login/verify",
-        {
-          method: "POST",
-          body: JSON.stringify(assertion),
-        },
-      );
-      setIdentity(data.identity);
-      await refresh();
+      await completeSilentWebAuthn();
       setOpen(false);
-      onSuccess?.();
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Sign-in failed";
       setError(msg);
@@ -250,13 +320,18 @@ export function TrustIdLoginButton({
       <button
         type="button"
         className={className}
+        disabled={busy}
         onClick={() => {
-          setOpen(true);
-          setMode("passkey");
           setError(null);
+          if (silent) {
+            void onSilentLogin();
+          } else {
+            setOpen(true);
+            setMode("passkey");
+          }
         }}
       >
-        {label}
+        {busy ? "Signing in?" : label}
       </button>
 
       {open && (
@@ -266,7 +341,7 @@ export function TrustIdLoginButton({
             {mode === "passkey" ? (
               <>
                 <p className="tid-muted">
-                  Use your device passkey (Face ID, Touch ID, or security key).
+                  Use your device biometric (Face ID, fingerprint, or passkey). No email or phone needed.
                 </p>
                 {error && <p className="tid-error">{error}</p>}
                 <div className="tid-actions">
@@ -276,7 +351,7 @@ export function TrustIdLoginButton({
                     disabled={busy}
                     onClick={onPasskeyLogin}
                   >
-                    {busy ? "Waitingù" : "Continue with passkey"}
+                    {busy ? "Waiting?" : "Continue with biometric"}
                   </button>
                   <button
                     type="button"
@@ -320,7 +395,7 @@ export function TrustIdLoginButton({
                     className="tid-btn tid-btn-ghost"
                     onClick={() => setMode("passkey")}
                   >
-                    Back to passkey
+                    Back to biometric
                   </button>
                   <button
                     type="button"

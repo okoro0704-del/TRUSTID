@@ -17,7 +17,19 @@ function mockApi(): TrustIdApiClient {
         return { identity: null };
       }
       if (path === "/auth/webauthn/login/options") {
-        return { challenge: "abc", rpId: "localhost" };
+        return { challenge: "abc", rpId: "localhost", allowCredentials: [] };
+      }
+      if (path === "/v1/auth/silent-assert") {
+        return {
+          identity: {
+            trustId: "tid_test",
+            status: "active",
+            profile: { firstName: "T", lastName: "U", name: "T U" },
+            contacts: [],
+          },
+          trustId: "tid_test",
+          mode: "webauthn",
+        };
       }
       if (path === "/auth/webauthn/login/verify") {
         return {
@@ -35,7 +47,7 @@ function mockApi(): TrustIdApiClient {
 }
 
 describe("TrustIdLoginButton", () => {
-  it("opens modal and completes passkey login", async () => {
+  it("silent Login invokes zero-input passkey assert without opening a form", async () => {
     const user = userEvent.setup();
     const onSuccess = vi.fn();
     const apiClient = mockApi();
@@ -46,11 +58,18 @@ describe("TrustIdLoginButton", () => {
       </TrustIdAuthProvider>,
     );
 
-    await user.click(screen.getByRole("button", { name: /sign in with passkey/i }));
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: /continue with passkey/i }));
+    await user.click(screen.getByRole("button", { name: /login/i }));
 
     await waitFor(() => expect(onSuccess).toHaveBeenCalled());
+    expect(apiClient.fetch).toHaveBeenCalledWith(
+      "/v1/auth/silent-assert",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.stringContaining('"mode":"webauthn"'),
+      }),
+    );
+    // No email/phone fields in the primary silent path
+    expect(screen.queryByLabelText(/email/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/phone/i)).not.toBeInTheDocument();
   });
 });

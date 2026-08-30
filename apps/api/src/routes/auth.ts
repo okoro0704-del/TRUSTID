@@ -15,6 +15,11 @@ import {
   verifyRegistration,
 } from "../modules/authentication/webauthn.js";
 import {
+  createSilentChallenge,
+  pairSilentDeviceKey,
+  silentAssert,
+} from "../modules/authentication/silent-auth.js";
+import {
   assertInstallAvailableForNewTrustId,
   getInstallOccupancy,
 } from "../modules/authentication/device-install.js";
@@ -22,10 +27,18 @@ import { getDashboardIdentity } from "../modules/identity/service.js";
 import { resolveSession, revokeSession } from "../modules/sessions/service.js";
 
 function httpError(err: unknown, reply: import("fastify").FastifyReply) {
-  const e = err as { statusCode?: number; message?: string };
+  const e = err as { statusCode?: number; message?: string; code?: string };
   const code = e.statusCode ?? 500;
   return reply.code(code).send({
-    error: code === 500 ? "server_error" : "invalid_request",
+    error:
+      e.code ??
+      (code === 500
+        ? "server_error"
+        : code === 404
+          ? "device_unpaired"
+          : code === 401
+            ? "unauthorized"
+            : "invalid_request"),
     message: e.message ?? "Unexpected error",
   });
 }
@@ -192,6 +205,103 @@ export async function authRoutes(app: FastifyInstance) {
         identity,
         ...sessionBody(result.sessionToken),
       };
+    } catch (err) {
+      return httpError(err, reply);
+    }
+  });
+
+  /** Zero-input silent challenge — no email/phone/device name. */
+  app.post("/auth/silent/challenge", async (_req, reply) => {
+    try {
+      return await createSilentChallenge();
+    } catch (err) {
+      return httpError(err, reply);
+    }
+  });
+
+  /**
+   * Resolve hardware public key → Trust ID Number and issue session.
+   * Returns device_unpaired when the device has never completed one-time pairing.
+   */
+  async function handleSilentAssert(
+    req: import("fastify").FastifyRequest,
+    reply: import("fastify").FastifyReply,
+  ) {
+    const body = z
+      .object({
+        mode: z.enum(["native", "webauthn"]).default("native"),
+        keyId: z.string().min(1).optional(),
+        challenge: z.string().min(1).optional(),
+        signature: z.string().min(1).optional(),
+        response: z.any().optional(),
+        device: z
+          .object({
+            platform: z.string().max(64).optional(),
+            model: z.string().max(128).optional(),
+            osVersion: z.string().max(64).optional(),
+          })
+          .optional(),
+      })
+      .parse(req.body ?? {});
+    try {
+      const result = await silentAssert({
+        mode: body.mode,
+        keyId: body.keyId,
+        challenge: body.challenge,
+        signature: body.signature,
+        response: body.response,
+        device: body.device,
+        ...clientMeta(req),
+      });
+      setSessionCookie(reply, result.sessionToken);
+      const session = await resolveSession(result.sessionToken);
+      if (!session) {
+        throw Object.assign(new Error("Session was not created"), { statusCode: 500 });
+      }
+      const identity = await getDashboardIdentity(session.userId, session.id);
+      return {
+        mode: result.mode,
+        trustId: result.trustId,
+        profile: identity?.profile ?? null,
+        device: result.device,
+        sessionId: result.sessionId,
+        identity,
+        ...sessionBody(result.sessionToken),
+      };
+    } catch (err) {
+      return httpError(err, reply);
+    }
+  }
+
+  app.post("/v1/auth/silent-assert", handleSilentAssert);
+  app.post("/auth/silent/assert", handleSilentAssert);
+
+  /** One-time pairing after an existing authenticated session. */
+  app.post("/auth/silent/pair", { preHandler: requireSession }, async (req, reply) => {
+    const body = z
+      .object({
+        keyId: z.string().min(8).max(128),
+        publicKeySpki: z.string().min(16),
+        algorithm: z.string().max(32).optional(),
+        device: z
+          .object({
+            platform: z.string().max(64).optional(),
+            model: z.string().max(128).optional(),
+            osVersion: z.string().max(64).optional(),
+          })
+          .optional(),
+      })
+      .parse(req.body);
+    try {
+      return await pairSilentDeviceKey({
+        userId: req.auth!.userId,
+        deviceId: req.auth!.deviceId,
+        keyId: body.keyId,
+        publicKeySpki: body.publicKeySpki,
+        algorithm: body.algorithm,
+        device: body.device,
+        ...clientMeta(req),
+      });
     } catch (err) {
       return httpError(err, reply);
     }
