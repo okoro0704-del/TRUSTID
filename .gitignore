@@ -19,3 +19,9 @@ apps/api/prisma/template.db-shm
 dev-dist
 apps/api/data/
 apps/api/prisma/media/
+apps/device/android/local.properties
+apps/device/android/.gradle/
+apps/device/android/**/build/
+apps/device/ios/App/Pods/
+apps/device/ios/App/Podfile.lock
+*.tsbuildinfo

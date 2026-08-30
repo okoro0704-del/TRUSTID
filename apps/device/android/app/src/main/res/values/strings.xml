@@ -1,0 +1,8 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">TrustID</string>
+    <string name="title_activity_main">TrustID</string>
+    <string name="package_name">com.trustid.device</string>
+    <string name="custom_url_scheme">com.trustid.device</string>
+    <string name="trustid_app_lock_a11y_description">TrustID App Lock watches when protected apps open and asks for your biometric before they can be used.</string>
+</resources>

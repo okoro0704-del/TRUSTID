@@ -22,11 +22,22 @@ Independent Identity and Trust Infrastructure for the ecosystem.
 
 ```text
 apps/api           Identity service (Fastify + Prisma)
-apps/web           TrustID PWA
+apps/web           TrustID web app + PWA (Netlify)
+apps/device        Capacitor Android/iOS shell (native plugins)
 apps/mock-lifeos   Mock relying party (OAuth + PKCE)
 packages/shared    Shared types and helpers
 docs/              Architecture documentation
 ```
+
+### Mobile (Capacitor)
+
+```bash
+npm run cap:sync     # rebuild web + sync into android/ios
+npm run android      # open Android Studio
+npm run ios          # open Xcode (macOS)
+```
+
+See [apps/device/README.md](apps/device/README.md).
 
 ## Quick start
 
