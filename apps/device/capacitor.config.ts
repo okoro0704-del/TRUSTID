@@ -11,6 +11,7 @@ const config: CapacitorConfig = {
     TrustIdBiometricGate: {},
     TrustIdMediaVault: {},
     TrustIdAppLock: {},
+    TrustIdSilentAuth: {},
   },
 };
 
