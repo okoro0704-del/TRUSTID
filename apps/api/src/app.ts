@@ -24,6 +24,7 @@ import { zkRoutes } from "./routes/zk.js";
 import { deviceSyncRoutes } from "./routes/device-sync.js";
 import { recoveryRoutes } from "./routes/recovery.js";
 import { bbsRoutes } from "./routes/bbs.js";
+import { trustIdRoutes } from "./routes/trust-id.js";
 import { registerRealtimeGateway } from "./modules/realtime/index.js";
 
 export async function buildApp() {
@@ -114,6 +115,7 @@ export async function buildApp() {
   await app.register(deviceSyncRoutes);
   await app.register(recoveryRoutes);
   await app.register(bbsRoutes);
+  await app.register(trustIdRoutes);
   await app.register(wipeRoutes);
 
   await registerRealtimeGateway(app);

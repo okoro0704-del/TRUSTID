@@ -180,6 +180,30 @@ export function openJson<T>(sealed: string): T {
   return JSON.parse(openBytes(sealed).toString("utf8")) as T;
 }
 
+/** Peppered hash of a normalized biometric embedding for fast 1:N pre-filter. */
+export function biometricTemplateHash(modality: string, embedding: number[]): string {
+  const normalized = embedding.map((v) => v.toFixed(6)).join(",");
+  return createHmac("sha256", pepperKey("biometric-template"))
+    .update(`${modality}:${normalized}`)
+    .digest("hex");
+}
+
+/** Peppered HMAC of a hardware device fingerprint (UUID / enclave id). */
+export function deviceFingerprintHash(fingerprint: string): string {
+  const id = fingerprint.trim();
+  if (!id) throw new Error("deviceFingerprint required");
+  return createHmac("sha256", pepperKey("master-device"))
+    .update(id)
+    .digest("hex");
+}
+
+/** Hash action payload for master step-up integrity. */
+export function hashMasterActionPayload(action: string, payload: unknown): string {
+  return createHmac("sha256", pepperKey("master-action"))
+    .update(`${action}:${JSON.stringify(payload ?? {})}`)
+    .digest("hex");
+}
+
 /** HKDF identity secret for ZK nullifiers — never sent to relying parties. */
 export function identitySecretForUser(userId: string): string {
   return Buffer.from(

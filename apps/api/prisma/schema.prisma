@@ -44,6 +44,9 @@ model User {
   deviceInstalls          DeviceInstall[]
   bbsStepUpChallenges     BbsStepUpChallenge[]
   silentDeviceKeys        SilentDeviceKey[]
+  biometricTemplates      BiometricTemplate[]
+  masterDevices           MasterDevice[]
+  masterAuthChallenges    MasterAuthChallenge[]
 
   @@map("users")
 }
@@ -128,6 +131,7 @@ model Device {
   syncEnvelopesSent       DeviceSyncEnvelope[] @relation("SyncEnvSenderDevice")
   syncEnvelopesRecv       DeviceSyncEnvelope[] @relation("SyncEnvRecipientDevice")
   silentDeviceKeys        SilentDeviceKey[]
+  masterDeviceBinding     MasterDevice?
 
   @@index([userId])
   @@index([userId, trustLevel])
@@ -811,4 +815,75 @@ model BbsStepUpChallenge {
   @@index([userId, status])
   @@index([paymentHash])
   @@map("bbs_step_up_challenges")
+}
+
+/// Encrypted biometric embedding for 1:N server-side identity matching.
+/// Raw biometrics never stored — only irreversible normalized embeddings.
+model BiometricTemplate {
+  id            String   @id @default(cuid())
+  userId        String   @map("user_id")
+  /// face | fingerprint
+  modality      String
+  /// Peppered hash of normalized embedding (fast pre-filter)
+  templateHash  String   @map("template_hash")
+  /// AES-GCM sealed float embedding vector (JSON array)
+  embeddingSeal String   @map("embedding_seal")
+  algorithm     String   @default("cosine-v1")
+  status        String   @default("active")
+  enrolledAt    DateTime @default(now()) @map("enrolled_at")
+  lastMatchedAt DateTime? @map("last_matched_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, modality, templateHash])
+  @@index([modality, status])
+  @@index([templateHash])
+  @@map("biometric_templates")
+}
+
+/// Master Device binding — secondary security key for elevated operations.
+model MasterDevice {
+  id                String    @id @default(cuid())
+  userId            String    @map("user_id")
+  deviceId          String?   @unique @map("device_id")
+  /// Peppered HMAC of hardware UUID / secure enclave fingerprint
+  deviceFingerprint String    @unique @map("device_fingerprint")
+  /// SPKI or COSE public key for challenge signing
+  publicKey         Bytes     @map("public_key")
+  isMasterDevice    Boolean   @default(true) @map("is_master_device")
+  lastVerifiedAt    DateTime? @map("last_verified_at")
+  status            String    @default("active")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device Device? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@map("master_devices")
+}
+
+/// Step-up authorization challenge sent to Master Device for high-value actions.
+model MasterAuthChallenge {
+  id                  String    @id @default(cuid())
+  challengeId         String    @unique @default(cuid()) @map("challenge_id")
+  userId              String    @map("user_id")
+  /// Action being authorized (wallet_transfer, settings_change, etc.)
+  action              String
+  /// Hash of action payload for integrity
+  payloadHash         String    @map("payload_hash")
+  /// Device fingerprint of the requesting (secondary) terminal
+  requesterFingerprint String?  @map("requester_fingerprint")
+  status              String    @default("pending")
+  /// Master device signature hash once approved
+  approvalSignatureHash String? @map("approval_signature_hash")
+  expiresAt           DateTime  @map("expires_at")
+  approvedAt          DateTime? @map("approved_at")
+  createdAt           DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@map("master_auth_challenges")
 }

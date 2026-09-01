@@ -1,5 +1,6 @@
 import { startRegistration } from "@simplewebauthn/browser";
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { BiometricPayload } from "@trustid/sdk";
 import { useTrustIdAuth as useTrustIdSession } from "../context/TrustIdAuthProvider.js";
 import {
   clearStaleAuthCaches,
@@ -22,6 +23,13 @@ export type UseTrustIdAuthOptions = {
   getInstallId: () => Promise<string>;
   enabled?: boolean;
   onAuthenticated?: (identity: TrustIdIdentity) => void;
+  /**
+   * Identity-first path: capture face/fingerprint embedding on any terminal.
+   * When provided, cloud 1:N match runs before local WebAuthn fallback.
+   */
+  captureBiometric?: () => Promise<BiometricPayload | null>;
+  /** Hardware fingerprint for Master Device tier evaluation */
+  getDeviceFingerprint?: () => Promise<string | undefined>;
 };
 
 export type UseTrustIdAuthResult = {
@@ -45,16 +53,22 @@ function failureMessage(err: unknown): string {
 /**
  * Implicit authentication + onboarding engine.
  *
- * Mount ? probe WebAuthn / passkey storage ? biometric unlock
+ * Mount ? cloud 1:N biometric identify (preferred) OR WebAuthn passkey fallback
  * OR transition to NEEDS_ACCOUNT for Create Trust ID.
  *
  * Missing/deleted passkeys, NotAllowedError, InvalidStateError, cancel, and
- * timeouts always clear stale caches and land on NEEDS_ACCOUNT — never spin forever.
+ * timeouts always clear stale caches and land on NEEDS_ACCOUNT  never spin forever.
  */
 export function useTrustIdAuth(
   options: UseTrustIdAuthOptions,
 ): UseTrustIdAuthResult {
-  const { getInstallId, enabled = true, onAuthenticated } = options;
+  const {
+    getInstallId,
+    enabled = true,
+    onAuthenticated,
+    captureBiometric,
+    getDeviceFingerprint,
+  } = options;
   const {
     loading,
     identity,
@@ -100,6 +114,36 @@ export function useTrustIdAuth(
     void (async () => {
       setPhase("PROMPTING_BIOMETRIC");
       try {
+        if (captureBiometric) {
+          const payload = await captureBiometric();
+          if (cancelled) return;
+          if (payload) {
+            const fp = getDeviceFingerprint
+              ? await getDeviceFingerprint()
+              : undefined;
+            const cloud = await apiFetch<{
+              matched: boolean;
+              identity?: TrustIdIdentity;
+            }>("/v1/trust-id/verify-biometric", {
+              method: "POST",
+              body: JSON.stringify({
+                biometric: {
+                  ...payload,
+                  deviceFingerprint: fp ?? payload.deviceFingerprint,
+                },
+              }),
+            });
+            if (cloud.matched && cloud.identity) {
+              setIdentity(cloud.identity);
+              await refresh();
+              if (cancelled) return;
+              setPhase("AUTHENTICATED");
+              onAuthenticated?.(cloud.identity);
+              return;
+            }
+          }
+        }
+
         const result = await executeSilentWebLoginOnce(apiFetch);
         if (cancelled) return;
         if (result?.identity) {
@@ -110,11 +154,9 @@ export function useTrustIdAuth(
           onAuthenticated?.(result.identity);
           return;
         }
-        // Assertion completed without a usable identity — treat as no passkey.
         goNeedsAccount();
       } catch {
         if (cancelled) return;
-        // NotAllowedError | InvalidStateError | TimeoutError | cancel | missing key
         goNeedsAccount();
       }
     })();
@@ -162,6 +204,17 @@ export function useTrustIdAuth(
 
       setIdentity(completed.identity);
       await refresh();
+
+      if (captureBiometric) {
+        const payload = await captureBiometric();
+        if (payload) {
+          await apiFetch("/v1/trust-id/enroll-biometric", {
+            method: "POST",
+            body: JSON.stringify({ biometric: payload }),
+          });
+        }
+      }
+
       setPhase("AUTHENTICATED");
       onAuthenticated?.(completed.identity);
     } catch (e) {
@@ -172,7 +225,7 @@ export function useTrustIdAuth(
       setError(cancelled ? null : msg);
       setPhase("NEEDS_ACCOUNT");
     }
-  }, [apiFetch, getInstallId, onAuthenticated, refresh, setIdentity]);
+  }, [apiFetch, captureBiometric, getInstallId, onAuthenticated, refresh, setIdentity]);
 
   const retryProbe = useCallback(() => {
     startedRef.current = false;

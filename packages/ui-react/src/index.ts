@@ -74,6 +74,14 @@ export {
 export type { TrustIdApiClient, TrustIdApiClientOptions } from "./api/client.js";
 
 export type {
+  BiometricPayload,
+  ScanAndIdentifyResult,
+  TrustIdSdkOptions,
+  VerifyMasterDeviceResult,
+} from "@trustid/sdk";
+export { TrustIdSdk, createTrustIdSdk, BIOMETRIC_MODALITIES, TRUST_ID_ACCESS_LEVELS } from "@trustid/sdk";
+
+export type {
   TrustIdIdentity,
   TrustIdAuthContextValue,
   RealtimeConnectionState,

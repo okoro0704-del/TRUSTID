@@ -285,6 +285,15 @@ export const AUDIT_EVENTS = {
   BBS_STEP_UP_APPROVED: "bbs.step_up.approved",
   BBS_STEP_UP_DENIED: "bbs.step_up.denied",
   BBS_STEP_UP_EXPIRED: "bbs.step_up.expired",
+  BIOMETRIC_ENROLLED: "biometric.enrolled",
+  BIOMETRIC_MATCHED: "biometric.matched",
+  BIOMETRIC_MATCH_FAILED: "biometric.match_failed",
+  MASTER_DEVICE_REGISTERED: "master_device.registered",
+  MASTER_DEVICE_VERIFIED: "master_device.verified",
+  MASTER_AUTH_CHALLENGE_ISSUED: "master_auth.challenge_issued",
+  MASTER_AUTH_CHALLENGE_APPROVED: "master_auth.challenge_approved",
+  MASTER_AUTH_CHALLENGE_DENIED: "master_auth.challenge_denied",
+  MASTER_AUTH_CHALLENGE_EXPIRED: "master_auth.challenge_expired",
 } as const;
 
 export type AuditEventType = (typeof AUDIT_EVENTS)[keyof typeof AUDIT_EVENTS];
@@ -329,3 +338,41 @@ export function maskPhone(phone: string): string {
 export function isVerifiedIdentityPortrait(status: string): boolean {
   return status === PORTRAIT_STATUS.VERIFIED;
 }
+
+/** Biometric capture modality for 1:N cloud matching */
+export const BIOMETRIC_MODALITIES = {
+  FACE: "face",
+  FINGERPRINT: "fingerprint",
+} as const;
+
+export type BiometricModality =
+  (typeof BIOMETRIC_MODALITIES)[keyof typeof BIOMETRIC_MODALITIES];
+
+/** Access tier after 1:N biometric match */
+export const TRUST_ID_ACCESS_LEVELS = {
+  /** Any device — baseline profile/view/receive */
+  UNIVERSAL: "universal",
+  /** Bound Master Device — wallet, settings, revocations */
+  MASTER: "master",
+} as const;
+
+export type TrustIdAccessLevel =
+  (typeof TRUST_ID_ACCESS_LEVELS)[keyof typeof TRUST_ID_ACCESS_LEVELS];
+
+export const MASTER_AUTH_CHALLENGE_STATUS = {
+  PENDING: "pending",
+  APPROVED: "approved",
+  DENIED: "denied",
+  EXPIRED: "expired",
+} as const;
+
+export type MasterAuthChallengeStatus =
+  (typeof MASTER_AUTH_CHALLENGE_STATUS)[keyof typeof MASTER_AUTH_CHALLENGE_STATUS];
+
+/** High-value actions requiring Master Device step-up on secondary terminals */
+export const MASTER_STEP_UP_ACTIONS = {
+  WALLET_TRANSFER: "wallet_transfer",
+  SETTINGS_CHANGE: "settings_change",
+  SECURITY_REVOCATION: "security_revocation",
+  DEVICE_PROMOTION: "device_promotion",
+} as const;
