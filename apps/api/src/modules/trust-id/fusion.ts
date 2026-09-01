@@ -1,6 +1,5 @@
 import {
   AUDIT_EVENTS,
-  BIOMETRIC_FUSION_THRESHOLD,
   BIOMETRIC_SINGLE_MODALITY_THRESHOLD,
   TRUST_ID_ACCESS_LEVELS,
   type TrustIdAccessLevel,
@@ -27,6 +26,9 @@ export type FusionMatchResult = {
   fusionScore?: number;
   faceMatchScore?: number;
   fingerprintMatchScore?: number;
+  matchedModality?: "face" | "fingerprint" | "both";
+  isFaceMatched?: boolean;
+  isFingerprintMatched?: boolean;
   accessLevel: TrustIdAccessLevel;
   isMasterDevice: boolean;
 };
@@ -41,8 +43,10 @@ async function evaluateMaster(userId: string, deviceFingerprint?: string) {
 }
 
 /**
- * 1:N multi-vector fusion — parallel face + fingerprint matching.
- * fusionScore = faceMatchScore + fingerprintMatchScore
+ * Single-biometric OR resolution for daily sign-in.
+ * isAuthenticated = isFaceMatched || isFingerprintMatched
+ *
+ * Day-1 onboarding may register both templates; daily login accepts either one.
  */
 export async function matchMultiModalFusion(input: {
   payload: MultiModalPayload;
@@ -69,16 +73,18 @@ export async function matchMultiModalFusion(input: {
       : Promise.resolve(null),
   ]);
 
-  const faceScore = faceResult?.matched ? (faceResult.similarity ?? 0) : 0;
-  const fpScore = fpResult?.matched ? (fpResult.similarity ?? 0) : 0;
+  const isFaceMatched =
+    Boolean(faceResult?.matched) &&
+    (faceResult?.similarity ?? 0) >= BIOMETRIC_SINGLE_MODALITY_THRESHOLD;
+  const isFingerprintMatched =
+    Boolean(fpResult?.matched) &&
+    (fpResult?.similarity ?? 0) >= BIOMETRIC_SINGLE_MODALITY_THRESHOLD;
 
-  let userId: string | undefined;
-  let trustId: string | undefined;
-  let fusionScore = 0;
-  let matched = false;
+  const faceScore = isFaceMatched ? (faceResult?.similarity ?? 0) : 0;
+  const fpScore = isFingerprintMatched ? (fpResult?.similarity ?? 0) : 0;
 
-  if (faceResult?.matched && fpResult?.matched) {
-    if (faceResult.userId !== fpResult.userId) {
+  if (isFaceMatched && isFingerprintMatched) {
+    if (faceResult!.userId !== fpResult!.userId) {
       await recordAudit({
         type: AUDIT_EVENTS.AMBIENT_SIGNIN_FAILED,
         actorType: "system",
@@ -88,6 +94,8 @@ export async function matchMultiModalFusion(input: {
       });
       return {
         matched: false,
+        isFaceMatched,
+        isFingerprintMatched,
         faceMatchScore: faceScore,
         fingerprintMatchScore: fpScore,
         fusionScore: faceScore + fpScore,
@@ -95,44 +103,43 @@ export async function matchMultiModalFusion(input: {
         isMasterDevice: false,
       };
     }
-    fusionScore = faceScore + fpScore;
-    matched = fusionScore >= BIOMETRIC_FUSION_THRESHOLD;
-    userId = faceResult.userId;
-    trustId = faceResult.trustId;
-  } else if (faceResult?.matched) {
-    fusionScore = faceScore;
-    matched = faceScore >= BIOMETRIC_SINGLE_MODALITY_THRESHOLD;
-    userId = faceResult.userId;
-    trustId = faceResult.trustId;
-  } else if (fpResult?.matched) {
-    fusionScore = fpScore;
-    matched = fpScore >= BIOMETRIC_SINGLE_MODALITY_THRESHOLD;
-    userId = fpResult.userId;
-    trustId = fpResult.trustId;
   }
 
-  if (!matched || !userId || !trustId) {
+  const matched = isFaceMatched || isFingerprintMatched;
+  if (!matched) {
     await recordAudit({
       type: AUDIT_EVENTS.AMBIENT_SIGNIN_FAILED,
       actorType: "system",
       metadata: {
         faceMatchScore: faceScore,
         fingerprintMatchScore: fpScore,
-        fusionScore,
-        reason: "below_threshold",
+        reason: "no_single_modality_match",
       },
       ip: input.ip,
       userAgent: input.userAgent,
     });
     return {
       matched: false,
+      isFaceMatched,
+      isFingerprintMatched,
       faceMatchScore: faceScore,
       fingerprintMatchScore: fpScore,
-      fusionScore,
       accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
       isMasterDevice: false,
     };
   }
+
+  const winner = isFaceMatched ? faceResult! : fpResult!;
+  const matchedModality: FusionMatchResult["matchedModality"] =
+    isFaceMatched && isFingerprintMatched
+      ? "both"
+      : isFaceMatched
+        ? "face"
+        : "fingerprint";
+
+  const userId = winner.userId!;
+  const trustId = winner.trustId!;
+  const fusionScore = faceScore + fpScore;
 
   const isMasterDevice = await evaluateMaster(userId, fp);
   const accessLevel = isMasterDevice
@@ -145,6 +152,9 @@ export async function matchMultiModalFusion(input: {
     actorType: "user",
     actorId: userId,
     metadata: {
+      matchedModality,
+      isFaceMatched,
+      isFingerprintMatched,
       fusionScore,
       faceMatchScore: faceScore,
       fingerprintMatchScore: fpScore,
@@ -162,12 +172,15 @@ export async function matchMultiModalFusion(input: {
     fusionScore,
     faceMatchScore: faceScore,
     fingerprintMatchScore: fpScore,
+    matchedModality,
+    isFaceMatched,
+    isFingerprintMatched,
     accessLevel,
     isMasterDevice,
   };
 }
 
-/** Zero-UI auto-enroll: create Trust ID + enroll multi-modal templates. */
+/** Zero-UI auto-enroll: create Trust ID + enroll captured template(s). */
 export async function autoEnrollFromBiometrics(input: {
   payload: MultiModalPayload;
   installId?: string;
@@ -256,6 +269,9 @@ export async function ambientSignInAndSession(input: {
       userId: created.userId,
       trustId: created.trustId,
       fusionScore: 1,
+      matchedModality: input.payload.face ? "face" : "fingerprint",
+      isFaceMatched: Boolean(input.payload.face),
+      isFingerprintMatched: Boolean(input.payload.fingerprint),
       accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
       isMasterDevice: false,
     };
@@ -286,5 +302,8 @@ export async function ambientSignInAndSession(input: {
     fusionScore: fusion.fusionScore,
     faceMatchScore: fusion.faceMatchScore,
     fingerprintMatchScore: fusion.fingerprintMatchScore,
+    matchedModality: fusion.matchedModality,
+    isFaceMatched: fusion.isFaceMatched,
+    isFingerprintMatched: fusion.isFingerprintMatched,
   };
 }

@@ -98,6 +98,8 @@ export {
   createTrustIdSdk,
   ambientAuthenticate,
   captureMultiModal,
+  captureSingleBiometric,
+  detectDeviceBiometricContext,
   BIOMETRIC_MODALITIES,
   TRUST_ID_ACCESS_LEVELS,
 } from "@trustid/sdk";

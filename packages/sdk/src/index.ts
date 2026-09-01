@@ -6,7 +6,9 @@ import {
 } from "@trustid/shared";
 import { ambientAuthenticate } from "./ambient.js";
 import type { AmbientAuthenticateOptions, AmbientSignInResult } from "./ambient.js";
+import { captureSingleBiometric } from "./capture/single-modal.js";
 import { captureMultiModal } from "./capture/multi-modal.js";
+import { detectDeviceBiometricContext } from "./capture/device-context.js";
 import { embeddingFromBytes } from "./capture/embedding.js";
 import { captureWebFaceProxy, captureWebFingerprint } from "./capture/web.js";
 import type { CaptureHandlers, MultiModalBiometricPayload } from "./capture/types.js";
@@ -46,7 +48,7 @@ export type TrustIdSdkOptions = {
 
 /**
  * Identity-first Trust ID client SDK.
- * Devices are passive capture terminals — identity lives in the cloud registry.
+ * Devices are passive capture terminals  identity lives in the cloud registry.
  */
 export class TrustIdSdk {
   private readonly baseUrl: string;
@@ -83,8 +85,8 @@ export class TrustIdSdk {
   }
 
   /**
-   * Zero-UI ambient authenticate — auto-invoked on app boot.
-   * Captures face + fingerprint, fuses server-side, issues session.
+ * Zero-UI ambient authenticate  auto-invoked on app boot.
+ * Captures one context-aware biometric, resolves server-side, issues session.
    */
   async ambientAuthenticate(
     options: AmbientAuthenticateOptions = {},
@@ -108,6 +110,9 @@ export class TrustIdSdk {
       fusionScore?: number;
       faceMatchScore?: number;
       fingerprintMatchScore?: number;
+      matchedModality?: "face" | "fingerprint" | "both";
+      isFaceMatched?: boolean;
+      isFingerprintMatched?: boolean;
       identity?: unknown;
       sessionToken?: string;
     }>("/v1/trust-id/ambient-signin", {
@@ -123,6 +128,7 @@ export class TrustIdSdk {
       fusionScore: data.fusionScore,
       faceMatchScore: data.faceMatchScore,
       fingerprintMatchScore: data.fingerprintMatchScore,
+      matchedModality: data.matchedModality,
       identity: data.identity,
       sessionToken: data.sessionToken,
     };
@@ -259,6 +265,8 @@ export {
   TRUST_ID_ACCESS_LEVELS,
   ambientAuthenticate,
   captureMultiModal,
+  captureSingleBiometric,
+  detectDeviceBiometricContext,
   embeddingFromBytes,
   captureWebFaceProxy,
   captureWebFingerprint,
@@ -266,6 +274,6 @@ export {
 export type {
   AmbientAuthenticateOptions,
   AmbientSignInResult,
-  CaptureHandlers,
-  MultiModalBiometricPayload,
-};
+} from "./ambient.js";
+export type { CaptureHandlers, MultiModalBiometricPayload } from "./capture/types.js";
+export type { DeviceBiometricContext, DevicePlatform } from "./capture/device-context.js";

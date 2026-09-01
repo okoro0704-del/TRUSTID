@@ -1,5 +1,5 @@
 import type { TrustIdAccessLevel } from "@trustid/shared";
-import { captureMultiModal } from "./capture/multi-modal.js";
+import { captureSingleBiometric } from "./capture/single-modal.js";
 import type { CaptureHandlers, MultiModalBiometricPayload } from "./capture/types.js";
 
 export type AmbientAuthenticateOptions = CaptureHandlers & {
@@ -14,6 +14,7 @@ export type AmbientSignInResult = {
   trustId?: string;
   accessLevel?: TrustIdAccessLevel;
   isMasterDevice?: boolean;
+  matchedModality?: "face" | "fingerprint" | "both";
   fusionScore?: number;
   faceMatchScore?: number;
   fingerprintMatchScore?: number;
@@ -37,14 +38,14 @@ export async function ambientAuthenticate(
 ): Promise<AmbientSignInResult> {
   const payload =
     options.payload ??
-    (await captureMultiModal({
+    (await captureSingleBiometric({
       captureFace: options.captureFace,
       captureFingerprint: options.captureFingerprint,
       getDeviceFingerprint: options.getDeviceFingerprint,
     }));
 
   if (!payload.face && !payload.fingerprint) {
-    return { matched: false, error: "No biometric sensors available" };
+    return { matched: false, error: "No biometric sensor available for this device" };
   }
 
   try {

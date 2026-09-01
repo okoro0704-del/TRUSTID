@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
   BIOMETRIC_MODALITIES,
-  BIOMETRIC_FUSION_THRESHOLD,
+  BIOMETRIC_SINGLE_MODALITY_THRESHOLD,
   TRUST_ID_ACCESS_LEVELS,
 } from "@trustid/shared";
 import { prisma } from "../src/db/client.js";
@@ -54,7 +54,7 @@ async function seedDualModalUser(trustId: string, faceSeed: number, fpSeed: numb
   return user;
 }
 
-describe("ambient zero-UI multi-modal fusion", () => {
+describe("ambient single-biometric OR sign-in", () => {
   beforeEach(async () => {
     await resetTables(prisma);
   });
@@ -63,15 +63,11 @@ describe("ambient zero-UI multi-modal fusion", () => {
     await prisma.$disconnect();
   });
 
-  it("fuses face + fingerprint scores above threshold", async () => {
+  it("matches with fingerprint-only payload when user enrolled both modalities", async () => {
     const user = await seedDualModalUser(newTrustId(), 10, 20);
 
     const fusion = await matchMultiModalFusion({
       payload: {
-        face: {
-          modality: BIOMETRIC_MODALITIES.FACE,
-          embedding: faceEmbedding(10.001),
-        },
         fingerprint: {
           modality: BIOMETRIC_MODALITIES.FINGERPRINT,
           embedding: fpEmbedding(20.001),
@@ -81,17 +77,39 @@ describe("ambient zero-UI multi-modal fusion", () => {
 
     expect(fusion.matched).toBe(true);
     expect(fusion.userId).toBe(user.id);
-    expect(fusion.fusionScore).toBeGreaterThanOrEqual(BIOMETRIC_FUSION_THRESHOLD);
+    expect(fusion.isFingerprintMatched).toBe(true);
+    expect(fusion.isFaceMatched).toBe(false);
+    expect(fusion.matchedModality).toBe("fingerprint");
+    expect(fusion.fingerprintMatchScore).toBeGreaterThanOrEqual(
+      BIOMETRIC_SINGLE_MODALITY_THRESHOLD,
+    );
     expect(fusion.accessLevel).toBe(TRUST_ID_ACCESS_LEVELS.UNIVERSAL);
   });
 
-  it("auto-enrolls and signs in on unknown biometric (zero-UI onboarding)", async () => {
-    const result = await ambientSignInAndSession({
+  it("matches with face-only payload when user enrolled both modalities", async () => {
+    const user = await seedDualModalUser(newTrustId(), 10, 20);
+
+    const fusion = await matchMultiModalFusion({
       payload: {
         face: {
           modality: BIOMETRIC_MODALITIES.FACE,
-          embedding: faceEmbedding(999),
+          embedding: faceEmbedding(10.001),
         },
+      },
+    });
+
+    expect(fusion.matched).toBe(true);
+    expect(fusion.userId).toBe(user.id);
+    expect(fusion.isFaceMatched).toBe(true);
+    expect(fusion.isFingerprintMatched).toBe(false);
+    expect(fusion.matchedModality).toBe("face");
+    expect(fusion.faceMatchScore).toBeGreaterThanOrEqual(BIOMETRIC_SINGLE_MODALITY_THRESHOLD);
+    expect(fusion.accessLevel).toBe(TRUST_ID_ACCESS_LEVELS.UNIVERSAL);
+  });
+
+  it("auto-enrolls and signs in on unknown single-modality biometric (zero-UI onboarding)", async () => {
+    const result = await ambientSignInAndSession({
+      payload: {
         fingerprint: {
           modality: BIOMETRIC_MODALITIES.FINGERPRINT,
           embedding: fpEmbedding(888),
@@ -104,9 +122,10 @@ describe("ambient zero-UI multi-modal fusion", () => {
     expect(result.enrolled).toBe(true);
     expect(result.trustId).toMatch(/^TD-/);
     expect(result.sessionToken).toBeTruthy();
+    expect(result.matchedModality).toBe("fingerprint");
   });
 
-  it("POST /v1/trust-id/ambient-signin issues session", async () => {
+  it("POST /v1/trust-id/ambient-signin issues session from single modality", async () => {
     const user = await seedDualModalUser(newTrustId(), 5, 15);
     const app = await buildApp();
 
@@ -114,10 +133,6 @@ describe("ambient zero-UI multi-modal fusion", () => {
       method: "POST",
       url: "/v1/trust-id/ambient-signin",
       payload: {
-        face: {
-          modality: BIOMETRIC_MODALITIES.FACE,
-          embedding: faceEmbedding(5.001),
-        },
         fingerprint: {
           modality: BIOMETRIC_MODALITIES.FINGERPRINT,
           embedding: fpEmbedding(15.001),
@@ -126,10 +141,18 @@ describe("ambient zero-UI multi-modal fusion", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { matched: boolean; trustId: string; fusionScore: number };
+    const body = res.json() as {
+      matched: boolean;
+      trustId: string;
+      matchedModality: string;
+      isFingerprintMatched: boolean;
+      isFaceMatched: boolean;
+    };
     expect(body.matched).toBe(true);
     expect(body.trustId).toBe(user.trustId);
-    expect(body.fusionScore).toBeGreaterThan(0);
+    expect(body.matchedModality).toBe("fingerprint");
+    expect(body.isFingerprintMatched).toBe(true);
+    expect(body.isFaceMatched).toBe(false);
     await app.close();
   });
 });
