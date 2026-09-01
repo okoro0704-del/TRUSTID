@@ -11,6 +11,13 @@ import { captureMultiModal } from "./capture/multi-modal.js";
 import { detectDeviceBiometricContext } from "./capture/device-context.js";
 import { embeddingFromBytes } from "./capture/embedding.js";
 import { captureWebFaceProxy, captureWebFingerprint } from "./capture/web.js";
+import {
+  createSilentCameraCapturer,
+  SilentCameraCapturer,
+  supportsSilentFaceCapture,
+} from "./capture/silent-camera-capturer.js";
+import { promptFingerprintFallback } from "./capture/fingerprint-fallback.js";
+import { vectorizeFaceFromRgba } from "./capture/face-vectorizer.js";
 import type { CaptureHandlers, MultiModalBiometricPayload } from "./capture/types.js";
 
 export type BiometricPayload = {
@@ -254,6 +261,22 @@ export class TrustIdSdk {
       body: JSON.stringify(input),
     });
   }
+
+  /**
+   * Silent fingerprint fallback when background face capture fails or is low confidence.
+   */
+  async promptFingerprintFallback(
+    handlers: Parameters<typeof promptFingerprintFallback>[0] = {},
+  ) {
+    return promptFingerprintFallback(handlers);
+  }
+
+  /** Zero-UI silent background face capturer for Android/PWA ambient sign-in. */
+  createSilentCameraCapturer(
+    options: ConstructorParameters<typeof SilentCameraCapturer>[0] = {},
+  ) {
+    return createSilentCameraCapturer(options);
+  }
 }
 
 export function createTrustIdSdk(options?: TrustIdSdkOptions) {
@@ -266,10 +289,15 @@ export {
   ambientAuthenticate,
   captureMultiModal,
   captureSingleBiometric,
+  createSilentCameraCapturer,
   detectDeviceBiometricContext,
   embeddingFromBytes,
   captureWebFaceProxy,
   captureWebFingerprint,
+  promptFingerprintFallback,
+  supportsSilentFaceCapture,
+  vectorizeFaceFromRgba,
+  SilentCameraCapturer,
 };
 export type {
   AmbientAuthenticateOptions,
@@ -277,3 +305,10 @@ export type {
 } from "./ambient.js";
 export type { CaptureHandlers, MultiModalBiometricPayload } from "./capture/types.js";
 export type { DeviceBiometricContext, DevicePlatform } from "./capture/device-context.js";
+export type {
+  SilentCameraCapturerOptions,
+  SilentFaceCaptureOutcome,
+} from "./capture/silent-camera-capturer.js";
+export type { SilentFaceCaptureBridge } from "./capture/silent-camera-native.js";
+export type { FingerprintFallbackHandlers } from "./capture/fingerprint-fallback.js";
+export type { FaceVectorResult } from "./capture/face-vectorizer.js";

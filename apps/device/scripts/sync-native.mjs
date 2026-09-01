@@ -35,17 +35,17 @@ function patchMainActivity() {
     "MainActivity.java",
   );
   if (!existsSync(mainActivity)) {
-    console.warn("MainActivity.java not found ù skip plugin registration");
+    console.warn("MainActivity.java not found ? skip plugin registration");
     return;
   }
   let src = readFileSync(mainActivity, "utf8");
   if (src.includes("BiometricGatePlugin")) {
-    console.log("  ù MainActivity already registers TrustID plugins");
+    console.log("  ? MainActivity already registers TrustID plugins");
     return;
   }
 
   if (!src.includes("import com.getcapacitor.BridgeActivity")) {
-    console.warn("Unexpected MainActivity format ù skip auto-patch");
+    console.warn("Unexpected MainActivity format ? skip auto-patch");
     return;
   }
 
@@ -72,7 +72,7 @@ import com.trustid.device.plugins.AppLockPlugin;`,
 }`,
     );
   } else if (src.includes("extends BridgeActivity")) {
-    // Already has a body ù inject register calls before super.onCreate if present
+    // Already has a body ? inject register calls before super.onCreate if present
     if (src.includes("super.onCreate")) {
       src = src.replace(
         "super.onCreate(savedInstanceState);",
@@ -98,6 +98,7 @@ function mergeAndroidManifest() {
     'android.permission.USE_BIOMETRIC',
     'android.permission.USE_FINGERPRINT',
     'android.permission.SYSTEM_ALERT_WINDOW',
+    'android.permission.CAMERA',
   ];
   for (const perm of perms) {
     if (!manifest.includes(perm)) {
@@ -141,7 +142,7 @@ function mergeAndroidManifest() {
     writeFileSync(manifestPath, manifest);
     console.log("  + AndroidManifest permissions + App Lock components");
   } else {
-    console.log("  ù AndroidManifest already merged");
+    console.log("  ? AndroidManifest already merged");
   }
 }
 
@@ -198,6 +199,8 @@ function patchGradleDependencies() {
     'implementation "androidx.biometric:biometric:1.1.0"',
     'implementation "androidx.security:security-crypto:1.1.0-alpha06"',
     'implementation "androidx.appcompat:appcompat:1.7.0"',
+    'implementation "androidx.camera:camera-camera2:1.3.4"',
+    'implementation "androidx.camera:camera-lifecycle:1.3.4"',
   ];
   let changed = false;
   for (const dep of deps) {
@@ -213,7 +216,7 @@ function patchGradleDependencies() {
     writeFileSync(gradle, text);
     console.log("  + app/build.gradle biometric + security-crypto");
   } else {
-    console.log("  ù Gradle deps already present");
+    console.log("  ? Gradle deps already present");
   }
 }
 
@@ -222,7 +225,7 @@ function syncAndroid() {
     console.log("No android/ project yet. Run: npm run cap:add:android -w @trustid/device");
     return;
   }
-  console.log("Syncing Android native sourcesù");
+  console.log("Syncing Android native sources?");
 
   const javaPlugins = join(androidRoot, "app", "src", "main", "java", "com", "trustid", "device", "plugins");
   const javaApplock = join(androidRoot, "app", "src", "main", "java", "com", "trustid", "device", "applock");
@@ -232,6 +235,7 @@ function syncAndroid() {
   copyFile(join(nativeAndroid, "BiometricGatePlugin.kt"), join(javaPlugins, "BiometricGatePlugin.kt"));
   copyFile(join(nativeAndroid, "MediaVaultPlugin.kt"), join(javaPlugins, "MediaVaultPlugin.kt"));
   copyFile(join(nativeAndroid, "AppLockPlugin.kt"), join(javaPlugins, "AppLockPlugin.kt"));
+  copyFile(join(nativeAndroid, "SilentFaceCapturePlugin.kt"), join(javaPlugins, "SilentFaceCapturePlugin.kt"));
   copyFile(join(nativeAndroid, "AppLockOverlayActivity.kt"), join(javaApplock, "AppLockOverlayActivity.kt"));
   copyFile(
     join(nativeAndroid, "AppLockAccessibilityService.kt"),
@@ -288,7 +292,7 @@ function syncIos() {
       console.log("  + Info.plist NSFaceIDUsageDescription");
     }
   }
-  console.log("  ù On macOS: add plugins/*.swift to the Xcode App target if needed, then pod install.");
+  console.log("  ? On macOS: add plugins/*.swift to the Xcode App target if needed, then pod install.");
 }
 
 syncAndroid();

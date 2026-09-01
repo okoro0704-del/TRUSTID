@@ -1,8 +1,10 @@
 import {
   BIOMETRIC_MODALITIES,
-  captureWebFaceProxy,
   captureWebFingerprint,
+  captureWebFaceProxy,
+  createSilentCameraCapturer,
   detectDeviceBiometricContext,
+  supportsSilentFaceCapture,
   type MultiModalBiometricPayload,
 } from "@trustid/sdk";
 import {
@@ -13,13 +15,15 @@ import {
 type ApiFetch = <T>(path: string, init?: RequestInit) => Promise<T>;
 
 /**
- * Single WebAuthn OS prompt ? one context-aware biometric payload.
- * iOS ? face only, Android/POS ? fingerprint only, kiosk ? first success.
+ * Ambient single-modality capture with silent background face on Android/PWA.
+ * Falls back to hardware fingerprint when face confidence is low or camera blocked.
  */
 export async function captureWebAmbientSingleModal(
   apiFetch: ApiFetch,
 ): Promise<MultiModalBiometricPayload> {
-  const ctx = detectDeviceBiometricContext();
+  const silentFace = supportsSilentFaceCapture();
+  const ctx = detectDeviceBiometricContext(undefined, { silentFaceAvailable: silentFace });
+
   let cached: Awaited<ReturnType<typeof runImmediateSilentPasskey>> | null = null;
 
   const runOnce = async () => {
@@ -32,6 +36,17 @@ export async function captureWebAmbientSingleModal(
       return null;
     }
   };
+
+  const capturer = createSilentCameraCapturer({
+    runWebAuthn: runOnce,
+    captureFingerprint: () => captureWebFingerprint(runOnce),
+  });
+
+  if (ctx.supportsSilentFace || ctx.platform === "android") {
+    const face = await capturer.captureWithFallback();
+    if (face?.modality === BIOMETRIC_MODALITIES.FACE) return { face };
+    if (face?.modality === BIOMETRIC_MODALITIES.FINGERPRINT) return { fingerprint: face };
+  }
 
   if (ctx.multiSensor) {
     const face = await captureWebFaceProxy(runOnce);
@@ -53,6 +68,9 @@ export async function captureWebAmbientSingleModal(
 export function createWebAmbientCapture(apiFetch: ApiFetch) {
   return {
     payload: () => captureWebAmbientSingleModal(apiFetch),
-    context: () => detectDeviceBiometricContext(),
+    context: () =>
+      detectDeviceBiometricContext(undefined, {
+        silentFaceAvailable: supportsSilentFaceCapture(),
+      }),
   };
 }

@@ -385,3 +385,9 @@ export const BIOMETRIC_FUSION_THRESHOLD = 1.5;
 
 /** Single-modality fallback when only face OR fingerprint is captured */
 export const BIOMETRIC_SINGLE_MODALITY_THRESHOLD = 0.82;
+
+/** Normalized facial embedding dimension for silent background capture */
+export const BIOMETRIC_FACE_EMBEDDING_DIMS = 128;
+
+/** Minimum local confidence score before fingerprint fallback is invoked */
+export const BIOMETRIC_FACE_CAPTURE_MIN_CONFIDENCE = 0.35;

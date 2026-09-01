@@ -99,7 +99,11 @@ export {
   ambientAuthenticate,
   captureMultiModal,
   captureSingleBiometric,
+  createSilentCameraCapturer,
   detectDeviceBiometricContext,
+  supportsSilentFaceCapture,
+  SilentCameraCapturer,
+  promptFingerprintFallback,
   BIOMETRIC_MODALITIES,
   TRUST_ID_ACCESS_LEVELS,
 } from "@trustid/sdk";

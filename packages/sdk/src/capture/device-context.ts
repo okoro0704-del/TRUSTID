@@ -8,7 +8,9 @@ export type DeviceBiometricContext = {
   primaryModality: BiometricModality;
   supportsFace: boolean;
   supportsFingerprint: boolean;
-  /** ATM / kiosk ù accept first successful capture from either sensor */
+  /** Silent off-screen face capture (Android PWA / native) */
+  supportsSilentFace: boolean;
+  /** ATM / kiosk ó accept first successful capture from either sensor */
   multiSensor: boolean;
 };
 
@@ -28,11 +30,13 @@ function isIosLike(ua: string): boolean {
 
 /**
  * Context-aware primary biometric for single-modality daily sign-in.
- * iOS ? Face, Android/POS ? Fingerprint, Kiosk ? either (first success).
+ * iOS ? Face, Android/PWA ? silent background face (fingerprint fallback), Kiosk ? either.
  */
 export function detectDeviceBiometricContext(
   userAgent: string = readUa(),
+  options: { silentFaceAvailable?: boolean } = {},
 ): DeviceBiometricContext {
+  const silentFace = options.silentFaceAvailable ?? false;
   const ua = userAgent;
   const kiosk =
     /TrustID-Kiosk|TrustID-Terminal|ATM|Kiosk/i.test(ua) ||
@@ -45,6 +49,7 @@ export function detectDeviceBiometricContext(
       primaryModality: BIOMETRIC_MODALITIES.FACE,
       supportsFace: true,
       supportsFingerprint: true,
+      supportsSilentFace: silentFace,
       multiSensor: true,
     };
   }
@@ -55,6 +60,7 @@ export function detectDeviceBiometricContext(
       primaryModality: BIOMETRIC_MODALITIES.FACE,
       supportsFace: true,
       supportsFingerprint: false,
+      supportsSilentFace: silentFace,
       multiSensor: false,
     };
   }
@@ -62,20 +68,25 @@ export function detectDeviceBiometricContext(
   if (/Android/i.test(ua)) {
     return {
       platform: "android",
-      primaryModality: BIOMETRIC_MODALITIES.FINGERPRINT,
-      supportsFace: false,
+      primaryModality: BIOMETRIC_MODALITIES.FACE,
+      supportsFace: true,
       supportsFingerprint: true,
+      supportsSilentFace: true,
       multiSensor: false,
     };
   }
 
-  // Desktop / POS Chrome ó fingerprint-first (platform authenticator)
+  // Desktop / POS Chrome ó silent face when camera available, else fingerprint
   if (/Chrome|Edg|Firefox|Safari/i.test(ua)) {
+    const facePrimary = silentFace;
     return {
       platform: "desktop",
-      primaryModality: BIOMETRIC_MODALITIES.FINGERPRINT,
-      supportsFace: false,
+      primaryModality: facePrimary
+        ? BIOMETRIC_MODALITIES.FACE
+        : BIOMETRIC_MODALITIES.FINGERPRINT,
+      supportsFace: facePrimary,
       supportsFingerprint: true,
+      supportsSilentFace: silentFace,
       multiSensor: false,
     };
   }
@@ -85,6 +96,7 @@ export function detectDeviceBiometricContext(
     primaryModality: BIOMETRIC_MODALITIES.FINGERPRINT,
     supportsFace: true,
     supportsFingerprint: true,
+    supportsSilentFace: silentFace,
     multiSensor: false,
   };
 }
