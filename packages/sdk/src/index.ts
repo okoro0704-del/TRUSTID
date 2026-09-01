@@ -4,10 +4,15 @@ import {
   type BiometricModality,
   type TrustIdAccessLevel,
 } from "@trustid/shared";
+import { ambientAuthenticate } from "./ambient.js";
+import type { AmbientAuthenticateOptions, AmbientSignInResult } from "./ambient.js";
+import { captureMultiModal } from "./capture/multi-modal.js";
+import { embeddingFromBytes } from "./capture/embedding.js";
+import { captureWebFaceProxy, captureWebFingerprint } from "./capture/web.js";
+import type { CaptureHandlers, MultiModalBiometricPayload } from "./capture/types.js";
 
 export type BiometricPayload = {
   modality: BiometricModality;
-  /** Normalized embedding from client capture (face/fingerprint pipeline) */
   embedding: number[];
   deviceFingerprint?: string;
 };
@@ -23,6 +28,8 @@ export type ScanAndIdentifyResult = {
   error?: string;
   masterRequired?: boolean;
 };
+
+export type AmbientSignInApiResult = AmbientSignInResult;
 
 export type VerifyMasterDeviceResult = {
   verified: boolean;
@@ -76,9 +83,51 @@ export class TrustIdSdk {
   }
 
   /**
-   * Capture biometric on any terminal and identify the human via 1:N cloud match.
-   * Replaces device-bound passkey as primary auth path.
+   * Zero-UI ambient authenticate — auto-invoked on app boot.
+   * Captures face + fingerprint, fuses server-side, issues session.
    */
+  async ambientAuthenticate(
+    options: AmbientAuthenticateOptions = {},
+  ): Promise<AmbientSignInResult> {
+    return ambientAuthenticate(this, options);
+  }
+
+  /** Multi-modal ambient sign-in (called by ambientAuthenticate). */
+  async ambientSignIn(
+    payload: MultiModalBiometricPayload & {
+      allowAutoEnroll?: boolean;
+      installId?: string;
+    },
+  ): Promise<AmbientSignInResult> {
+    const data = await this.api<{
+      matched: boolean;
+      enrolled?: boolean;
+      trustId?: string;
+      accessLevel?: TrustIdAccessLevel;
+      isMasterDevice?: boolean;
+      fusionScore?: number;
+      faceMatchScore?: number;
+      fingerprintMatchScore?: number;
+      identity?: unknown;
+      sessionToken?: string;
+    }>("/v1/trust-id/ambient-signin", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    return {
+      matched: data.matched,
+      enrolled: data.enrolled,
+      trustId: data.trustId,
+      accessLevel: data.accessLevel,
+      isMasterDevice: data.isMasterDevice,
+      fusionScore: data.fusionScore,
+      faceMatchScore: data.faceMatchScore,
+      fingerprintMatchScore: data.fingerprintMatchScore,
+      identity: data.identity,
+      sessionToken: data.sessionToken,
+    };
+  }
+
   async scanAndIdentify(
     biometricPayload: BiometricPayload,
     options?: { requireMasterAccess?: boolean },
@@ -123,7 +172,6 @@ export class TrustIdSdk {
     }
   }
 
-  /** Enroll biometric template into central 1:N registry (requires session). */
   async enrollBiometric(biometricPayload: BiometricPayload) {
     return this.api<{ templateId: string; modality: string }>(
       "/v1/trust-id/enroll-biometric",
@@ -134,7 +182,6 @@ export class TrustIdSdk {
     );
   }
 
-  /** Register this terminal as the user's Master Device. */
   async registerMasterDevice(input: {
     deviceFingerprint: string;
     publicKey: string;
@@ -149,10 +196,6 @@ export class TrustIdSdk {
     );
   }
 
-  /**
-   * Verify Master Device binding and approve a step-up challenge.
-   * Called on the bound Master Device after push notification.
-   */
   async verifyMasterDevice(input: {
     deviceFingerprint: string;
     challengeId: string;
@@ -174,7 +217,6 @@ export class TrustIdSdk {
     };
   }
 
-  /** Issue step-up challenge to Master Device for sensitive action on secondary terminal. */
   async issueMasterChallenge(input: {
     userId: string;
     action: string;
@@ -192,7 +234,6 @@ export class TrustIdSdk {
     });
   }
 
-  /** Approve pending step-up challenge from Master Device. */
   async approveMasterChallenge(input: {
     challengeId: string;
     deviceFingerprint: string;
@@ -209,9 +250,22 @@ export class TrustIdSdk {
   }
 }
 
-/** Factory matching directive naming: `trustId.scanAndIdentify()` */
 export function createTrustIdSdk(options?: TrustIdSdkOptions) {
   return new TrustIdSdk(options);
 }
 
-export { BIOMETRIC_MODALITIES, TRUST_ID_ACCESS_LEVELS };
+export {
+  BIOMETRIC_MODALITIES,
+  TRUST_ID_ACCESS_LEVELS,
+  ambientAuthenticate,
+  captureMultiModal,
+  embeddingFromBytes,
+  captureWebFaceProxy,
+  captureWebFingerprint,
+};
+export type {
+  AmbientAuthenticateOptions,
+  AmbientSignInResult,
+  CaptureHandlers,
+  MultiModalBiometricPayload,
+};

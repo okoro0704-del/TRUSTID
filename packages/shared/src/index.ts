@@ -294,6 +294,9 @@ export const AUDIT_EVENTS = {
   MASTER_AUTH_CHALLENGE_APPROVED: "master_auth.challenge_approved",
   MASTER_AUTH_CHALLENGE_DENIED: "master_auth.challenge_denied",
   MASTER_AUTH_CHALLENGE_EXPIRED: "master_auth.challenge_expired",
+  AMBIENT_SIGNIN_MATCHED: "ambient.signin.matched",
+  AMBIENT_SIGNIN_ENROLLED: "ambient.signin.enrolled",
+  AMBIENT_SIGNIN_FAILED: "ambient.signin.failed",
 } as const;
 
 export type AuditEventType = (typeof AUDIT_EVENTS)[keyof typeof AUDIT_EVENTS];
@@ -376,3 +379,9 @@ export const MASTER_STEP_UP_ACTIONS = {
   SECURITY_REVOCATION: "security_revocation",
   DEVICE_PROMOTION: "device_promotion",
 } as const;
+
+/** Multi-modal fusion: faceScore + fingerprintScore must exceed this */
+export const BIOMETRIC_FUSION_THRESHOLD = 1.5;
+
+/** Single-modality fallback when only face OR fingerprint is captured */
+export const BIOMETRIC_SINGLE_MODALITY_THRESHOLD = 0.82;

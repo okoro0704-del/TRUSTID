@@ -12,9 +12,11 @@ import {
   registerMasterDeviceSchema,
   verifyBiometricRequestSchema,
   verifyMasterDeviceSchema,
+  ambientSignInRequestSchema,
 } from "../modules/trust-id/schemas.js";
 import {
   approveMasterChallenge,
+  ambientSignInAndSession,
   biometricMatcher,
   issueMasterChallenge,
   registerMasterDevice,
@@ -39,8 +41,47 @@ function sessionBody(token: string | undefined) {
 }
 
 export async function trustIdRoutes(app: FastifyInstance) {
+  /** Zero-UI ambient multi-modal sign-in with fusion matching. */
+  app.post("/v1/trust-id/ambient-signin", async (req, reply) => {
+    const body = ambientSignInRequestSchema.parse(req.body ?? {});
+    try {
+      const { allowAutoEnroll, installId, ...payload } = body;
+      const result = await ambientSignInAndSession({
+        payload,
+        allowAutoEnroll,
+        installId,
+        ...clientMeta(req),
+      });
+
+      if (!result.matched) {
+        return reply.code(401).send({
+          error: "ambient_no_match",
+          message: "No Trust ID identity matched this biometric fusion",
+          fusionScore: result.fusion.fusionScore,
+          faceMatchScore: result.fusion.faceMatchScore,
+          fingerprintMatchScore: result.fusion.fingerprintMatchScore,
+        });
+      }
+
+      setSessionCookie(reply, result.sessionToken);
+      return {
+        matched: true,
+        enrolled: result.enrolled,
+        trustId: result.trustId,
+        accessLevel: result.accessLevel,
+        isMasterDevice: result.isMasterDevice,
+        fusionScore: result.fusionScore,
+        faceMatchScore: result.faceMatchScore,
+        fingerprintMatchScore: result.fingerprintMatchScore,
+        identity: result.identity,
+        ...sessionBody(result.sessionToken),
+      };
+    } catch (err) {
+      return httpError(err, reply);
+    }
+  });
+
   /**
-   * Primary identity gate  1:N cloud biometric match.
    * Client captures biometric on any terminal and streams embedding here.
    */
   app.post("/v1/trust-id/verify-biometric", async (req, reply) => {

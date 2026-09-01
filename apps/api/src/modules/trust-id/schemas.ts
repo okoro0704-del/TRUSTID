@@ -57,3 +57,21 @@ export const approveMasterChallengeSchema = z.object({
 
 export type BiometricPayload = z.infer<typeof biometricPayloadSchema>;
 export type VerifyBiometricRequest = z.infer<typeof verifyBiometricRequestSchema>;
+
+export const multiModalPayloadSchema = z.object({
+  face: biometricPayloadSchema.optional(),
+  fingerprint: biometricPayloadSchema.optional(),
+  deviceFingerprint: z.string().min(8).max(256).optional(),
+});
+
+export const ambientSignInRequestSchema = multiModalPayloadSchema
+  .extend({
+    allowAutoEnroll: z.boolean().optional().default(true),
+    installId: z.string().min(1).max(80).optional(),
+  })
+  .refine((b) => b.face || b.fingerprint, {
+    message: "At least one biometric modality (face or fingerprint) is required",
+  });
+
+export type MultiModalPayload = z.infer<typeof multiModalPayloadSchema>;
+export type AmbientSignInRequest = z.infer<typeof ambientSignInRequestSchema>;

@@ -1,6 +1,4 @@
 import { Navigate, Route, Routes } from "react-router-dom";
-import { TrustIdSmartAuthGuard } from "@trustid/ui-react";
-import { AuthPage } from "./pages/Auth";
 import { SecurePage } from "./pages/Secure";
 import { SecuredPage } from "./pages/Secured";
 import { ConsentPage } from "./pages/Consent";
@@ -24,43 +22,23 @@ import { GuardiansPage } from "./pages/trust/GuardiansPage";
 import { AccountPage } from "./pages/trust/Account";
 import { IdentityPage } from "./pages/trust/Identity";
 import { ControlCenterPage } from "./pages/trust/ControlCenter";
-import { getOrCreateInstallId } from "./lib/deviceInstall";
-
-function Guard({ children }: { children: React.ReactNode }) {
-  return (
-    <TrustIdSmartAuthGuard
-      brand="TrustID"
-      getInstallId={getOrCreateInstallId}
-      probingMessage="Unlocking Trust ID…"
-    >
-      {children}
-    </TrustIdSmartAuthGuard>
-  );
-}
 
 export function App() {
   return (
     <Routes>
       <Route path="/vault" element={<Navigate to="/dashboard/vault" replace />} />
-      {/* Unified zero-field auth entry — no email/phone/password forms */}
-      <Route path="/" element={<AuthPage />} />
-      <Route path="/auth" element={<AuthPage />} />
-      <Route path="/continue" element={<Navigate to="/" replace />} />
-      <Route path="/register" element={<Navigate to="/" replace />} />
-      <Route path="/verify" element={<Navigate to="/" replace />} />
+      {/* Zero-UI ambient auth runs globally in main.tsx — no auth pages */}
+      <Route path="/" element={<Navigate to="/dashboard" replace />} />
+      <Route path="/auth" element={<Navigate to="/dashboard" replace />} />
+      <Route path="/continue" element={<Navigate to="/dashboard" replace />} />
+      <Route path="/register" element={<Navigate to="/dashboard" replace />} />
+      <Route path="/verify" element={<Navigate to="/dashboard" replace />} />
       <Route path="/secure" element={<SecurePage />} />
       <Route path="/secured" element={<SecuredPage />} />
       <Route path="/enroll" element={<EnrollPage />} />
       <Route path="/waiting-approval" element={<WaitingApprovalPage />} />
       <Route path="/oauth/consent" element={<ConsentPage />} />
-      <Route
-        path="/dashboard"
-        element={
-          <Guard>
-            <TrustCenterLayout />
-          </Guard>
-        }
-      >
+      <Route path="/dashboard" element={<TrustCenterLayout />}>
         <Route index element={<OverviewPage />} />
         <Route path="apps" element={<AppLockerPage />} />
         <Route path="media" element={<MediaVaultPage />} />

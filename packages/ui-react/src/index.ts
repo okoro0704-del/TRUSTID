@@ -31,6 +31,16 @@ export type { AutoAuthGuardProps } from "./components/AutoAuthGuard.js";
 export { TrustIdSmartAuthGuard } from "./components/TrustIdSmartAuthGuard.js";
 export type { TrustIdSmartAuthGuardProps } from "./components/TrustIdSmartAuthGuard.js";
 
+export { TrustIdAmbientAuthProvider } from "./components/TrustIdAmbientAuthProvider.js";
+export type { TrustIdAmbientAuthProviderProps } from "./components/TrustIdAmbientAuthProvider.js";
+
+export {
+  useAmbientTrustIdAuth,
+  type AmbientAuthPhase,
+  type UseAmbientTrustIdAuthOptions,
+  type UseAmbientTrustIdAuthResult,
+} from "./hooks/useAmbientTrustIdAuth.js";
+
 export { CreateTrustIdAccount } from "./components/CreateTrustIdAccount.js";
 
 export { EcosystemAutoLogin } from "./components/EcosystemAutoLogin.js";
@@ -78,8 +88,19 @@ export type {
   ScanAndIdentifyResult,
   TrustIdSdkOptions,
   VerifyMasterDeviceResult,
+  AmbientAuthenticateOptions,
+  AmbientSignInResult,
+  CaptureHandlers,
+  MultiModalBiometricPayload,
 } from "@trustid/sdk";
-export { TrustIdSdk, createTrustIdSdk, BIOMETRIC_MODALITIES, TRUST_ID_ACCESS_LEVELS } from "@trustid/sdk";
+export {
+  TrustIdSdk,
+  createTrustIdSdk,
+  ambientAuthenticate,
+  captureMultiModal,
+  BIOMETRIC_MODALITIES,
+  TRUST_ID_ACCESS_LEVELS,
+} from "@trustid/sdk";
 
 export type {
   TrustIdIdentity,

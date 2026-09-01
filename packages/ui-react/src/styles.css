@@ -1,4 +1,4 @@
-/* Trust ID UI React ù minimal drop-in styles (compatible with apps/web tokens) */
+/* Trust ID UI React ? minimal drop-in styles (compatible with apps/web tokens) */
 
 .tid-btn {
   appearance: none;
@@ -192,6 +192,34 @@
   border: 2px solid rgba(255, 255, 255, 0.15);
   border-top-color: #2dd4bf;
   animation: tid-silent-spin 0.85s linear infinite;
+}
+
+/* Zero-UI ambient boot splash */
+.tid-ambient-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(
+    ellipse 80% 60% at 50% 40%,
+    rgba(45, 212, 191, 0.08),
+    transparent 70%
+  ),
+  var(--tid-bg, #0a0f14);
+}
+
+.tid-ambient-splash-panel {
+  width: min(320px, 100%);
+  text-align: center;
+  padding: 1rem;
+}
+
+.tid-ambient-splash-msg {
+  margin: 0;
+  opacity: 0.72;
+  font-size: 0.9rem;
+  line-height: 1.4;
 }
 
 @keyframes tid-silent-spin {

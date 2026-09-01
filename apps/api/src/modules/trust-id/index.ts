@@ -15,5 +15,11 @@ export {
   checkMasterDeviceBinding,
   verifyBiometricAndSession,
 } from "./middleware.js";
+export {
+  matchMultiModalFusion,
+  ambientSignInAndSession,
+  autoEnrollFromBiometrics,
+} from "./fusion.js";
+export type { FusionMatchResult, MultiModalPayload as FusionMultiModalPayload } from "./fusion.js";
 export type { BiometricAuthContext } from "./middleware.js";
 export * from "./schemas.js";
