@@ -20,6 +20,12 @@ export type AmbientSignInResult = {
   fingerprintMatchScore?: number;
   identity?: unknown;
   sessionToken?: string;
+  /** Cloud identity matched but this terminal needs Master Device approval */
+  needsMasterApproval?: boolean;
+  approvalPollToken?: string;
+  approvalRequestId?: string;
+  /** Offer saving a silent device key after approval (not a second passkey) */
+  offerSaveDeviceKey?: boolean;
   error?: string;
 };
 

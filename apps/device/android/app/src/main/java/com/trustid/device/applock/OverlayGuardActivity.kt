@@ -14,7 +14,7 @@ import androidx.fragment.app.FragmentActivity
  * Applies [WindowManager.LayoutParams.FLAG_SECURE] so screenshots, screen
  * recordings, and recent-app previews cannot capture vault/app-lock content.
  */
-open class OverlayGuardActivity : FragmentActivity() {
+class OverlayGuardActivity : FragmentActivity() {
 
   companion object {
     const val EXTRA_PACKAGE = "packageId"

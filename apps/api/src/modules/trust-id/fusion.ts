@@ -2,13 +2,19 @@ import {
   AUDIT_EVENTS,
   BIOMETRIC_PGVECTOR_MAX_DISTANCE,
   BIOMETRIC_SINGLE_MODALITY_THRESHOLD,
+  DEVICE_STATUS,
+  DEVICE_TRUST_LEVELS,
   TRUST_ID_ACCESS_LEVELS,
   type TrustIdAccessLevel,
 } from "@trustid/shared";
 import { prisma } from "../../db/client.js";
 import { commitName, deviceFingerprintHash, newTrustId } from "../../lib/crypto.js";
 import { recordAudit } from "../audit/service.js";
-import { assertInstallAvailableForNewTrustId } from "../authentication/device-install.js";
+import {
+  assertInstallAvailableForNewTrustId,
+  bindInstallToUser,
+  getInstallOccupancy,
+} from "../authentication/device-install.js";
 import { getDashboardIdentity } from "../identity/service.js";
 import { createSession } from "../sessions/service.js";
 import { biometricMatcher } from "./matcher.js";
@@ -36,13 +42,33 @@ export type FusionMatchResult = {
   isMasterDevice: boolean;
 };
 
-async function evaluateMaster(userId: string, deviceFingerprint?: string) {
-  if (!deviceFingerprint) return false;
-  const hash = deviceFingerprintHash(deviceFingerprint);
-  const row = await prisma.masterDevice.findFirst({
-    where: { userId, deviceFingerprint: hash, isMasterDevice: true, status: "active" },
-  });
-  return Boolean(row);
+async function evaluateMaster(
+  userId: string,
+  deviceFingerprint?: string,
+  installId?: string,
+) {
+  if (deviceFingerprint) {
+    const hash = deviceFingerprintHash(deviceFingerprint);
+    const row = await prisma.masterDevice.findFirst({
+      where: {
+        userId,
+        deviceFingerprint: hash,
+        isMasterDevice: true,
+        status: "active",
+      },
+    });
+    if (row) return true;
+  }
+  // Same phone / APK install that already owns this Trust ID is the master terminal.
+  if (installId) {
+    try {
+      const occ = await getInstallOccupancy(installId);
+      if (occ.occupied && occ.userId === userId) return true;
+    } catch {
+      /* invalid install id — ignore */
+    }
+  }
+  return false;
 }
 
 function modalityMatched(
@@ -72,6 +98,7 @@ function modalityScore(result: BiometricMatchResult | null, payload?: BiometricP
  */
 export async function matchMultiModalFusion(input: {
   payload: MultiModalPayload;
+  installId?: string;
   ip?: string;
   userAgent?: string;
 }): Promise<FusionMatchResult> {
@@ -159,7 +186,7 @@ export async function matchMultiModalFusion(input: {
   const trustId = winner.trustId!;
   const fusionScore = faceScore + fpScore;
 
-  const isMasterDevice = await evaluateMaster(userId, fp);
+  const isMasterDevice = await evaluateMaster(userId, fp, input.installId);
   const accessLevel = isMasterDevice
     ? TRUST_ID_ACCESS_LEVELS.MASTER
     : TRUST_ID_ACCESS_LEVELS.UNIVERSAL;
@@ -249,6 +276,23 @@ export async function autoEnrollFromBiometrics(input: {
     });
   }
 
+  // First terminal becomes Primary / Master so later devices can request approval.
+  await prisma.device.create({
+    data: {
+      userId: user.id,
+      name: "Master device",
+      status: DEVICE_STATUS.ACTIVE,
+      trustLevel: DEVICE_TRUST_LEVELS.PRIMARY,
+      userAgent: input.userAgent ?? null,
+      lastIp: input.ip ?? null,
+      lastActiveAt: new Date(),
+    },
+  });
+
+  if (input.installId) {
+    await bindInstallToUser(input.installId, user.id);
+  }
+
   await recordAudit({
     type: AUDIT_EVENTS.AMBIENT_SIGNIN_ENROLLED,
     userId: user.id,
@@ -271,6 +315,7 @@ export async function ambientSignInAndSession(input: {
 }) {
   let fusion = await matchMultiModalFusion({
     payload: input.payload,
+    installId: input.installId,
     ip: input.ip,
     userAgent: input.userAgent,
   });
@@ -302,28 +347,121 @@ export async function ambientSignInAndSession(input: {
     return { matched: false as const, fusion };
   }
 
-  const identity = await getDashboardIdentity(fusion.userId);
-  const { token } = await createSession({
-    userId: fusion.userId,
-    kind: enrolled ? "ambient_enroll" : fusion.isMasterDevice ? "master" : "ambient",
-    ip: input.ip,
-    userAgent: input.userAgent,
-  });
+  // First-time cloud enroll: this terminal becomes the account's primary/master.
+  if (enrolled) {
+    const identity = await getDashboardIdentity(fusion.userId);
+    const { token } = await createSession({
+      userId: fusion.userId,
+      kind: "ambient_enroll",
+      ip: input.ip,
+      userAgent: input.userAgent,
+    });
+    return {
+      matched: true as const,
+      enrolled: true,
+      fusion,
+      sessionToken: token,
+      identity,
+      trustId: fusion.trustId,
+      accessLevel: fusion.accessLevel,
+      isMasterDevice: true,
+      offerSaveDeviceKey: true,
+      fusionScore: fusion.fusionScore,
+      faceMatchScore: fusion.faceMatchScore,
+      fingerprintMatchScore: fusion.fingerprintMatchScore,
+      matchedModality: fusion.matchedModality,
+      isFaceMatched: fusion.isFaceMatched,
+      isFingerprintMatched: fusion.isFingerprintMatched,
+    };
+  }
 
-  return {
-    matched: true as const,
-    enrolled,
-    fusion,
-    sessionToken: token,
-    identity,
-    trustId: fusion.trustId,
-    accessLevel: fusion.accessLevel,
-    isMasterDevice: fusion.isMasterDevice,
-    fusionScore: fusion.fusionScore,
-    faceMatchScore: fusion.faceMatchScore,
-    fingerprintMatchScore: fusion.fingerprintMatchScore,
-    matchedModality: fusion.matchedModality,
-    isFaceMatched: fusion.isFaceMatched,
-    isFingerprintMatched: fusion.isFingerprintMatched,
-  };
+  // Returning identity: master / already-bound terminal gets a session immediately.
+  if (fusion.isMasterDevice) {
+    const identity = await getDashboardIdentity(fusion.userId);
+    const { token } = await createSession({
+      userId: fusion.userId,
+      kind: "master",
+      ip: input.ip,
+      userAgent: input.userAgent,
+    });
+    return {
+      matched: true as const,
+      enrolled: false,
+      fusion,
+      sessionToken: token,
+      identity,
+      trustId: fusion.trustId,
+      accessLevel: TRUST_ID_ACCESS_LEVELS.MASTER,
+      isMasterDevice: true,
+      fusionScore: fusion.fusionScore,
+      faceMatchScore: fusion.faceMatchScore,
+      fingerprintMatchScore: fusion.fingerprintMatchScore,
+      matchedModality: fusion.matchedModality,
+      isFaceMatched: fusion.isFaceMatched,
+      isFingerprintMatched: fusion.isFingerprintMatched,
+    };
+  }
+
+  // New terminal for an existing Trust ID → notify Master Device (no session yet).
+  const { createDeviceApprovalRequest } = await import(
+    "../device-approval/service.js"
+  );
+  try {
+    const approval = await createDeviceApprovalRequest({
+      trustId: fusion.trustId,
+      deviceName: "TrustID terminal",
+      applicationName: "TrustID",
+      ip: input.ip,
+      userAgent: input.userAgent,
+    });
+
+    return {
+      matched: true as const,
+      enrolled: false,
+      fusion,
+      trustId: fusion.trustId,
+      accessLevel: fusion.accessLevel,
+      isMasterDevice: false,
+      needsMasterApproval: true,
+      approvalPollToken: approval.pollToken,
+      approvalRequestId: approval.requestId,
+      offerSaveDeviceKey: true,
+      fusionScore: fusion.fusionScore,
+      faceMatchScore: fusion.faceMatchScore,
+      fingerprintMatchScore: fusion.fingerprintMatchScore,
+      matchedModality: fusion.matchedModality,
+      isFaceMatched: fusion.isFaceMatched,
+      isFingerprintMatched: fusion.isFingerprintMatched,
+    };
+  } catch (err) {
+    // No primary device yet (legacy accounts) — allow ambient session once.
+    const identity = await getDashboardIdentity(fusion.userId);
+    const { token } = await createSession({
+      userId: fusion.userId,
+      kind: "ambient",
+      ip: input.ip,
+      userAgent: input.userAgent,
+    });
+    return {
+      matched: true as const,
+      enrolled: false,
+      fusion,
+      sessionToken: token,
+      identity,
+      trustId: fusion.trustId,
+      accessLevel: fusion.accessLevel,
+      isMasterDevice: false,
+      offerSaveDeviceKey: true,
+      fusionScore: fusion.fusionScore,
+      faceMatchScore: fusion.faceMatchScore,
+      fingerprintMatchScore: fusion.fingerprintMatchScore,
+      matchedModality: fusion.matchedModality,
+      isFaceMatched: fusion.isFaceMatched,
+      isFingerprintMatched: fusion.isFingerprintMatched,
+      error:
+        err instanceof Error
+          ? `Master approval unavailable: ${err.message}`
+          : undefined,
+    };
+  }
 }

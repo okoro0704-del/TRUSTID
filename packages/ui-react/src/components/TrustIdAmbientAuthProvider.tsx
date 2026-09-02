@@ -9,15 +9,13 @@ export type TrustIdAmbientAuthProviderProps = UseAmbientTrustIdAuthOptions & {
   brand?: string;
 };
 
-function AmbientSplash({ brand }: { brand: string }) {
+function AmbientSplash({ brand, msg }: { brand: string; msg: string }) {
   return (
     <div className="tid-ambient-splash" role="status" aria-live="polite">
       <div className="tid-ambient-splash-panel">
         <div className="tid-silent-splash-mark" aria-hidden="true" />
         <h1 className="tid-silent-splash-brand">{brand}</h1>
-        <p className="tid-ambient-splash-msg">
-          Trust ID is verifying you…
-        </p>
+        <p className="tid-ambient-splash-msg">{msg}</p>
         <div className="tid-silent-splash-ring" aria-hidden="true" />
       </div>
     </div>
@@ -25,18 +23,43 @@ function AmbientSplash({ brand }: { brand: string }) {
 }
 
 /**
- * Global zero-UI auth shell — mounts ambient biometric pipeline on boot.
- * OS biometric prompt is the only user-facing interaction.
+ * Global identity-first auth shell — cloud biometric before any device key.
  */
 export function TrustIdAmbientAuthProvider({
   children,
   brand = "TrustID",
   ...options
 }: TrustIdAmbientAuthProviderProps) {
-  const { phase, error, retry } = useAmbientTrustIdAuth(options);
+  const { phase, error, retry, continueAfterApproval, lastResult } =
+    useAmbientTrustIdAuth(options);
 
   if (phase === "AUTHENTICATED") {
     return <>{children}</>;
+  }
+
+  if (phase === "NEEDS_APPROVAL") {
+    return (
+      <div className="tid-ambient-splash" role="status">
+        <div className="tid-ambient-splash-panel">
+          <h1 className="tid-silent-splash-brand">{brand}</h1>
+          <p className="tid-ambient-splash-msg">
+            Identity matched
+            {lastResult?.trustId ? ` (${lastResult.trustId})` : ""}. Waiting for
+            your Master Device to allow this terminal…
+          </p>
+          <p className="tid-ambient-splash-msg">
+            Approve the request on your primary phone, then tap Continue.
+          </p>
+          <button
+            type="button"
+            className="tid-btn tid-btn-primary"
+            onClick={continueAfterApproval}
+          >
+            Continue
+          </button>
+        </div>
+      </div>
+    );
   }
 
   if (phase === "ERROR") {
@@ -46,13 +69,17 @@ export function TrustIdAmbientAuthProvider({
           <h1 className="tid-silent-splash-brand">{brand}</h1>
           <p className="tid-ambient-splash-msg">{error ?? "Verification paused"}</p>
           <button type="button" className="tid-btn tid-btn-primary" onClick={retry}>
-            Retry biometric
+            Retry face verification
           </button>
         </div>
       </div>
     );
   }
 
-  // CHECKING | PROMPTING | ENROLLING — lightweight background state only
-  return <AmbientSplash brand={brand} />;
+  const msg =
+    phase === "ENROLLING"
+      ? "Creating your Trust ID…"
+      : "Matching your face to the Trust ID cloud registry…";
+
+  return <AmbientSplash brand={brand} msg={msg} />;
 }

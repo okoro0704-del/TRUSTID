@@ -65,7 +65,7 @@ export type TrustIdSdkOptions = {
 
 /**
  * Identity-first Trust ID client SDK.
- * Devices are passive capture terminals  identity lives in the cloud registry.
+ * Devices are passive capture terminals ? identity lives in the cloud registry.
  */
 export class TrustIdSdk {
   private readonly baseUrl: string;
@@ -102,7 +102,7 @@ export class TrustIdSdk {
   }
 
   /**
- * Zero-UI ambient authenticate  auto-invoked on app boot.
+ * Zero-UI ambient authenticate ? auto-invoked on app boot.
  * Captures one context-aware biometric, resolves server-side, issues session.
    */
   async ambientAuthenticate(
@@ -132,6 +132,10 @@ export class TrustIdSdk {
       isFingerprintMatched?: boolean;
       identity?: unknown;
       sessionToken?: string;
+      needsMasterApproval?: boolean;
+      approvalPollToken?: string;
+      approvalRequestId?: string;
+      offerSaveDeviceKey?: boolean;
     }>("/v1/trust-id/ambient-signin", {
       method: "POST",
       body: JSON.stringify(payload),
@@ -148,7 +152,35 @@ export class TrustIdSdk {
       matchedModality: data.matchedModality,
       identity: data.identity,
       sessionToken: data.sessionToken,
+      needsMasterApproval: data.needsMasterApproval,
+      approvalPollToken: data.approvalPollToken,
+      approvalRequestId: data.approvalRequestId,
+      offerSaveDeviceKey: data.offerSaveDeviceKey,
     };
+  }
+
+  async pollDeviceApproval(pollToken: string): Promise<{
+    requestId: string;
+    status: string;
+    message?: string;
+    expiresAt?: string;
+  }> {
+    return this.api(`/device-approvals/poll/${encodeURIComponent(pollToken)}`);
+  }
+
+  async claimDeviceApproval(pollToken: string): Promise<{
+    mode: string;
+    status: string;
+    identity?: unknown;
+    sessionToken?: string;
+    sessionId?: string;
+    offerSaveDeviceKey?: boolean;
+    enrollmentToken?: string;
+  }> {
+    return this.api("/device-approvals/claim", {
+      method: "POST",
+      body: JSON.stringify({ pollToken }),
+    });
   }
 
   async scanAndIdentify(

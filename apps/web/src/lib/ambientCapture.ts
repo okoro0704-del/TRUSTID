@@ -1,68 +1,83 @@
 import {
   BIOMETRIC_MODALITIES,
-  captureWebFingerprint,
-  captureWebFaceProxy,
   createSilentCameraCapturer,
   detectDeviceBiometricContext,
   supportsSilentFaceCapture,
   type MultiModalBiometricPayload,
+  type SilentFaceCaptureBridge,
 } from "@trustid/sdk";
-import {
-  fetchSilentLoginOptions,
-  runImmediateSilentPasskey,
-} from "@trustid/ui-react";
 
 type ApiFetch = <T>(path: string, init?: RequestInit) => Promise<T>;
 
+function isNativeCapacitor(): boolean {
+  if (typeof window === "undefined") return false;
+  const cap = (window as Window & {
+    Capacitor?: {
+      isNativePlatform?: () => boolean;
+      Plugins?: Record<string, unknown>;
+      registerPlugin?: (name: string) => SilentFaceCaptureBridge;
+    };
+  }).Capacitor;
+  return cap?.isNativePlatform?.() === true;
+}
+
+function getNativeSilentFaceBridge(): SilentFaceCaptureBridge | undefined {
+  if (!isNativeCapacitor()) return undefined;
+  const cap = (
+    window as Window & {
+      Capacitor?: {
+        Plugins?: { TrustIdSilentFaceCapture?: SilentFaceCaptureBridge };
+        registerPlugin?: (name: string) => SilentFaceCaptureBridge;
+      };
+    }
+  ).Capacitor;
+
+  if (cap?.Plugins?.TrustIdSilentFaceCapture) {
+    return cap.Plugins.TrustIdSilentFaceCapture;
+  }
+  try {
+    return cap?.registerPlugin?.("TrustIdSilentFaceCapture");
+  } catch {
+    return undefined;
+  }
+}
+
 /**
- * Ambient single-modality capture with silent background face on Android/PWA.
- * Falls back to hardware fingerprint when face confidence is low or camera blocked.
+ * Identity-first ambient capture: cloud biometric only.
+ * Does NOT probe device-local passkeys / WebAuthn on boot.
  */
 export async function captureWebAmbientSingleModal(
-  apiFetch: ApiFetch,
+  _apiFetch?: ApiFetch,
 ): Promise<MultiModalBiometricPayload> {
-  const silentFace = supportsSilentFaceCapture();
-  const ctx = detectDeviceBiometricContext(undefined, { silentFaceAvailable: silentFace });
-
-  let cached: Awaited<ReturnType<typeof runImmediateSilentPasskey>> | null = null;
-
-  const runOnce = async () => {
-    if (cached) return cached;
-    try {
-      const options = await fetchSilentLoginOptions(apiFetch);
-      cached = await runImmediateSilentPasskey(options);
-      return cached;
-    } catch {
-      return null;
-    }
-  };
-
-  const capturer = createSilentCameraCapturer({
-    runWebAuthn: runOnce,
-    captureFingerprint: () => captureWebFingerprint(runOnce),
+  const nativeBridge = getNativeSilentFaceBridge();
+  const silentFace = Boolean(nativeBridge) || supportsSilentFaceCapture();
+  const ctx = detectDeviceBiometricContext(undefined, {
+    silentFaceAvailable: silentFace,
   });
 
-  if (ctx.supportsSilentFace || ctx.platform === "android") {
-    const face = await capturer.captureWithFallback();
-    if (face?.modality === BIOMETRIC_MODALITIES.FACE) return { face };
-    if (face?.modality === BIOMETRIC_MODALITIES.FINGERPRINT) return { fingerprint: face };
-  }
+  const capturer = createSilentCameraCapturer({
+    nativeBridge,
+    // No WebAuthn / device-passkey fallback on ambient boot
+  });
 
-  if (ctx.multiSensor) {
-    const face = await captureWebFaceProxy(runOnce);
-    if (face) return { face };
-    const fingerprint = await captureWebFingerprint(runOnce);
-    if (fingerprint) return { fingerprint };
+  try {
+    if (ctx.supportsSilentFace || ctx.platform === "android" || nativeBridge) {
+      const face = await capturer.captureFaceVector();
+      if (face?.payload) return { face: face.payload };
+      return {};
+    }
+
+    if (ctx.primaryModality === BIOMETRIC_MODALITIES.FACE || silentFace) {
+      const face = await capturer.captureFaceVector();
+      return face?.payload ? { face: face.payload } : {};
+    }
+
+    // Desktop without camera: leave empty — UI will ask for camera / enroll path
+    const face = await capturer.captureFaceVector();
+    return face?.payload ? { face: face.payload } : {};
+  } catch {
     return {};
   }
-
-  if (ctx.primaryModality === BIOMETRIC_MODALITIES.FACE) {
-    const face = await captureWebFaceProxy(runOnce);
-    return face ? { face } : {};
-  }
-
-  const fingerprint = await captureWebFingerprint(runOnce);
-  return fingerprint ? { fingerprint } : {};
 }
 
 export function createWebAmbientCapture(apiFetch: ApiFetch) {
@@ -70,7 +85,8 @@ export function createWebAmbientCapture(apiFetch: ApiFetch) {
     payload: () => captureWebAmbientSingleModal(apiFetch),
     context: () =>
       detectDeviceBiometricContext(undefined, {
-        silentFaceAvailable: supportsSilentFaceCapture(),
+        silentFaceAvailable:
+          Boolean(getNativeSilentFaceBridge()) || supportsSilentFaceCapture(),
       }),
   };
 }

@@ -6,9 +6,8 @@ import com.getcapacitor.BridgeActivity;
 import com.trustid.device.plugins.AppLockPlugin;
 import com.trustid.device.plugins.BiometricGatePlugin;
 import com.trustid.device.plugins.MediaVaultPlugin;
-import com.trustid.device.plugins.AppLockPlugin;
-import com.trustid.device.plugins.SilentFaceCapturePlugin;
 import com.trustid.device.plugins.SilentAuthPlugin;
+import com.trustid.device.plugins.SilentFaceCapturePlugin;
 
 public class MainActivity extends BridgeActivity {
     @Override

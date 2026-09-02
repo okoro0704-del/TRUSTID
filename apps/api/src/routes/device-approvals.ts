@@ -81,7 +81,10 @@ export async function deviceApprovalRoutes(app: FastifyInstance) {
     const body = z.object({ pollToken: z.string().min(10) }).parse(req.body);
     try {
       const result = await claimApprovalResult(body.pollToken);
-      if (result.mode === "temporary" && result.sessionToken) {
+      if (
+        (result.mode === "temporary" || result.mode === "ambient") &&
+        result.sessionToken
+      ) {
         setSessionCookie(reply, result.sessionToken);
         const identity = await getDashboardIdentity(
           result.userId,
@@ -91,6 +94,7 @@ export async function deviceApprovalRoutes(app: FastifyInstance) {
         return {
           ...rest,
           identity,
+          offerSaveDeviceKey: result.offerSaveDeviceKey ?? false,
           ...(config.exposeSessionTokenInBody ? { sessionToken } : {}),
         };
       }

@@ -1,6 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { startRegistration } from "@simplewebauthn/browser";
 import { api, setSessionToken } from "../lib/api";
 import { useAuth, type Identity } from "../lib/auth";
 import { consumeReturnTo } from "../lib/returnTo";
@@ -15,6 +14,10 @@ type PollStatus = {
   deviceName?: string;
 };
 
+/**
+ * Waiting room after cloud identity match — Master Device approval grants a
+ * session without creating a second passkey.
+ */
 export function WaitingApprovalPage() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
@@ -64,7 +67,7 @@ export function WaitingApprovalPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pollToken]);
 
-  async function finish(mode: string) {
+  async function finish(_mode: string) {
     if (busy) return;
     setBusy(true);
     setError(null);
@@ -74,40 +77,21 @@ export function WaitingApprovalPage() {
         enrollmentToken?: string;
         sessionToken?: string;
         identity?: Identity;
+        offerSaveDeviceKey?: boolean;
       }>("/device-approvals/claim", {
         method: "POST",
         body: JSON.stringify({ pollToken }),
       });
 
-      if (claimed.mode === "temporary" && claimed.sessionToken) {
-        setSessionToken(claimed.sessionToken);
+      // Ambient / temporary: session only — never create another passkey.
+      if (
+        (claimed.mode === "temporary" ||
+          claimed.mode === "ambient" ||
+          claimed.mode === "trust") &&
+        (claimed.sessionToken || claimed.identity)
+      ) {
+        if (claimed.sessionToken) setSessionToken(claimed.sessionToken);
         if (claimed.identity) setIdentity(claimed.identity);
-        else await refresh();
-        navigate(consumeReturnTo() ?? "/dashboard", { replace: true });
-        return;
-      }
-
-      if (claimed.mode === "trust" && claimed.enrollmentToken) {
-        const options = await api<
-          Parameters<typeof startRegistration>[0]["optionsJSON"]
-        >("/device-approvals/register/options", {
-          method: "POST",
-          body: JSON.stringify({ enrollmentToken: claimed.enrollmentToken }),
-        });
-        const response = await startRegistration({ optionsJSON: options });
-        const result = await api<{ sessionToken?: string; identity?: Identity }>(
-          "/device-approvals/register/verify",
-          {
-            method: "POST",
-            body: JSON.stringify({
-              enrollmentToken: claimed.enrollmentToken,
-              deviceName: deviceName || undefined,
-              response,
-            }),
-          },
-        );
-        if (result.sessionToken) setSessionToken(result.sessionToken);
-        if (result.identity) setIdentity(result.identity);
         else await refresh();
         navigate(consumeReturnTo() ?? "/dashboard", { replace: true });
         return;
@@ -125,20 +109,20 @@ export function WaitingApprovalPage() {
   }
 
   return (
-    <AuthChrome title="Waiting" backTo="/continue">
+    <AuthChrome title="Waiting" backTo="/dashboard">
       <div className="panel surface-block">
         <div className="app-loading-ring waiting-ring" aria-hidden="true" />
         <h1>Waiting for approval</h1>
         <p className="lead">
           {status?.message ??
-            "Waiting for approval from one of your trusted devices..."}
+            "Waiting for approval from your Master Device…"}
         </p>
         {status?.applicationName && (
           <p className="notice">Application: {status.applicationName}</p>
         )}
         {status?.status === "pending" && (
           <p className="muted">
-            Open TrustID on a primary trusted device and approve this request.
+            Open TrustID on your primary device and approve this request.
             {status.expiresAt
               ? ` Expires ${new Date(status.expiresAt).toLocaleTimeString()}.`
               : ""}
@@ -147,7 +131,7 @@ export function WaitingApprovalPage() {
         {status?.status === "approved" && (
           <form onSubmit={onName}>
             <div className="field">
-              <label htmlFor="deviceName">Name this device</label>
+              <label htmlFor="deviceName">Name this device (optional)</label>
               <input
                 id="deviceName"
                 value={deviceName}
@@ -155,12 +139,12 @@ export function WaitingApprovalPage() {
                 placeholder="e.g. Work laptop"
               />
             </div>
-            <p className="muted">Creating passkey…</p>
+            <p className="muted">Signing you in — no new passkey…</p>
           </form>
         )}
         {busy && <p className="muted">Completing sign-in…</p>}
         {error && <p className="error">{error}</p>}
-        <Link className="btn btn-ghost continue-primary" to="/continue">
+        <Link className="btn btn-ghost continue-primary" to="/dashboard">
           Back
         </Link>
       </div>

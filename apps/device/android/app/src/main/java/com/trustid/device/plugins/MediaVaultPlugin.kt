@@ -68,10 +68,14 @@ class MediaVaultPlugin : Plugin() {
     authenticateForCipher(Cipher.ENCRYPT_MODE, call) { cipher ->
       try {
         val id = UUID.randomUUID().toString()
-        val envelope = com.trustid.device.vault.TidVaultFormat.encryptChunked(plain, cipher)
+        val iv = cipher.iv
+        val cipherBytes = cipher.doFinal(plain)
+        val envelope = ByteArray(iv.size + cipherBytes.size)
+        System.arraycopy(iv, 0, envelope, 0, iv.size)
+        System.arraycopy(cipherBytes, 0, envelope, iv.size, cipherBytes.size)
+
         val dir = File(context.filesDir, DIR).apply { mkdirs() }
-        // Primary eSFS extension; also keep .tvm alias removed — gallery sees nothing either way.
-        val out = File(dir, "$id.${com.trustid.device.vault.TidVaultFormat.EXT}")
+        val out = File(dir, "$id.tvm")
         out.writeBytes(envelope)
 
         val hash = sha256Hex(plain)
@@ -86,11 +90,10 @@ class MediaVaultPlugin : Plugin() {
         meta.put("id", id)
         meta.put("kind", kind)
         meta.put("mimeType", mime)
-        meta.put("byteLength", envelope.size)
+        meta.put("byteLength", cipherBytes.size)
         meta.put("contentHash", hash)
         meta.put("createdAt", java.time.Instant.now().toString())
         meta.put("displayName", name)
-        meta.put("format", "tidvault")
 
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
           .edit()
@@ -124,37 +127,15 @@ class MediaVaultPlugin : Plugin() {
     val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     val metaRaw = prefs.getString(id, null) ?: return call.reject("Not found")
     val meta = JSONObject(metaRaw)
-    val dir = File(context.filesDir, DIR)
-    val tid = File(dir, "$id.${com.trustid.device.vault.TidVaultFormat.EXT}")
-    val legacy = File(dir, "$id.tvm")
-    val file = when {
-      tid.exists() -> tid
-      legacy.exists() -> legacy
-      else -> return call.reject("Ciphertext missing")
-    }
+    val file = File(File(context.filesDir, DIR), "$id.tvm")
+    if (!file.exists()) return call.reject("Ciphertext missing")
 
     val envelope = file.readBytes()
     if (envelope.size < GCM_IV + 16) return call.reject("Corrupt envelope")
 
-    val isTid = file.extension == com.trustid.device.vault.TidVaultFormat.EXT ||
-      runCatching {
-        envelope.copyOfRange(0, 5).toString(Charsets.US_ASCII) ==
-          com.trustid.device.vault.TidVaultFormat.MAGIC
-      }.getOrDefault(false)
-
-    val wrapIv = if (isTid) {
-      com.trustid.device.vault.TidVaultFormat.peekWrapIv(envelope)
-    } else {
-      envelope.copyOfRange(0, GCM_IV)
-    }
-
-    authenticateForCipher(Cipher.DECRYPT_MODE, call, wrapIv) { cipher ->
+    authenticateForCipher(Cipher.DECRYPT_MODE, call, envelope.copyOfRange(0, GCM_IV)) { cipher ->
       try {
-        val plain = if (isTid) {
-          com.trustid.device.vault.TidVaultFormat.decryptChunked(envelope, cipher)
-        } else {
-          cipher.doFinal(envelope, GCM_IV, envelope.size - GCM_IV)
-        }
+        val plain = cipher.doFinal(envelope, GCM_IV, envelope.size - GCM_IV)
         val ret = JSObject()
         ret.put("bytesBase64", Base64.encodeToString(plain, Base64.NO_WRAP))
         ret.put("mimeType", meta.getString("mimeType"))
@@ -170,9 +151,7 @@ class MediaVaultPlugin : Plugin() {
   @PluginMethod
   fun remove(call: PluginCall) {
     val id = call.getString("id") ?: return call.reject("id required")
-    val dir = File(context.filesDir, DIR)
-    File(dir, "$id.${com.trustid.device.vault.TidVaultFormat.EXT}").delete()
-    File(dir, "$id.tvm").delete()
+    File(File(context.filesDir, DIR), "$id.tvm").delete()
     context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove(id).apply()
     call.resolve()
   }

@@ -12,6 +12,7 @@ const config: CapacitorConfig = {
     TrustIdMediaVault: {},
     TrustIdAppLock: {},
     TrustIdSilentAuth: {},
+    TrustIdSilentFaceCapture: {},
   },
 };
 

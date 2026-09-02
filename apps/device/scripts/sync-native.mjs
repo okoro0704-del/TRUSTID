@@ -2,7 +2,7 @@
  * Syncs TrustID native plugin sources into Capacitor android/ (and ios/ when present).
  * Run after `npx cap add android|ios` and before `npx cap sync`.
  */
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -110,11 +110,11 @@ function mergeAndroidManifest() {
     }
   }
 
-  if (!manifest.includes("AppLockOverlayActivity")) {
+  if (!manifest.includes("AppLockService") || !manifest.includes("OverlayGuardActivity")) {
     manifest = manifest.replace(
       "</application>",
       `        <activity
-            android:name="com.trustid.device.applock.AppLockOverlayActivity"
+            android:name="com.trustid.device.applock.OverlayGuardActivity"
             android:excludeFromRecents="true"
             android:exported="false"
             android:launchMode="singleInstance"
@@ -123,7 +123,7 @@ function mergeAndroidManifest() {
             android:theme="@style/Theme.AppCompat.DayNight.NoActionBar" />
 
         <service
-            android:name="com.trustid.device.applock.AppLockAccessibilityService"
+            android:name="com.trustid.device.applock.AppLockService"
             android:exported="false"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
@@ -236,11 +236,19 @@ function syncAndroid() {
   copyFile(join(nativeAndroid, "MediaVaultPlugin.kt"), join(javaPlugins, "MediaVaultPlugin.kt"));
   copyFile(join(nativeAndroid, "AppLockPlugin.kt"), join(javaPlugins, "AppLockPlugin.kt"));
   copyFile(join(nativeAndroid, "SilentFaceCapturePlugin.kt"), join(javaPlugins, "SilentFaceCapturePlugin.kt"));
-  copyFile(join(nativeAndroid, "AppLockOverlayActivity.kt"), join(javaApplock, "AppLockOverlayActivity.kt"));
-  copyFile(
-    join(nativeAndroid, "AppLockAccessibilityService.kt"),
-    join(javaApplock, "AppLockAccessibilityService.kt"),
-  );
+  copyFile(join(nativeAndroid, "OverlayGuardActivity.kt"), join(javaApplock, "OverlayGuardActivity.kt"));
+  copyFile(join(nativeAndroid, "AppLockService.kt"), join(javaApplock, "AppLockService.kt"));
+  if (existsSync(join(nativeAndroid, "OverlayWindowGuard.kt"))) {
+    copyFile(join(nativeAndroid, "OverlayWindowGuard.kt"), join(javaApplock, "OverlayWindowGuard.kt"));
+  }
+  // Remove legacy misnamed copies that redeclare the same classes
+  for (const stale of ["AppLockOverlayActivity.kt", "AppLockAccessibilityService.kt"]) {
+    const p = join(javaApplock, stale);
+    if (existsSync(p)) {
+      unlinkSync(p);
+      console.log(`  - removed stale ${stale}`);
+    }
+  }
   copyFile(
     join(nativeAndroid, "res", "xml", "trustid_app_lock_accessibility.xml"),
     join(resXml, "trustid_app_lock_accessibility.xml"),

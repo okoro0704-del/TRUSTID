@@ -1,5 +1,6 @@
-import { BIOMETRIC_MODALITIES } from "@trustid/shared";
+import { BIOMETRIC_AI_MODEL_NAME, BIOMETRIC_MODALITIES } from "@trustid/shared";
 import type { BiometricPayload } from "../index.js";
+import { projectTo512 } from "./ai-vector-extractor.js";
 
 export type SilentFaceCaptureBridge = {
   isAvailable(): Promise<{ available: boolean }>;
@@ -25,10 +26,16 @@ export async function captureSilentFaceFromNative(
     const result = await bridge.captureFaceVector();
     if (!result || !result.embedding?.length) return null;
 
+    // Project native spatial embedding → 512-D cloud AI vector
+    const vector = projectTo512(result.embedding);
+
     return {
       confidence: result.confidence,
       payload: {
         modality: BIOMETRIC_MODALITIES.FACE,
+        vector,
+        modelName: BIOMETRIC_AI_MODEL_NAME,
+        modelVersion: 1,
         embedding: result.embedding,
       },
     };

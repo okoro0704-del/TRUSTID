@@ -5,8 +5,8 @@ import Capacitor
 import CryptoKit
 
 /**
- * AES-GCM Media Locker with chunked `.tidvault` eSFS envelopes.
- * Files live in Application Support — not indexed by Photos.
+ * AES-GCM vault with DEK protected by Keychain access control (biometryCurrentSet).
+ * Files stored in Application Support — not indexed by Photos.
  */
 @objc(TrustIdMediaVaultPlugin)
 public class TrustIdMediaVaultPlugin: CAPPlugin, CAPBridgedPlugin {
@@ -23,7 +23,8 @@ public class TrustIdMediaVaultPlugin: CAPPlugin, CAPBridgedPlugin {
   private let keyTag = "com.trustid.device.vault.dek".data(using: .utf8)!
 
   @objc func list(_ call: CAPPluginCall) {
-    call.resolve(["items": loadCatalog()])
+    let items = loadCatalog()
+    call.resolve(["items": items])
   }
 
   @objc func importMedia(_ call: CAPPluginCall) {
@@ -37,22 +38,25 @@ public class TrustIdMediaVaultPlugin: CAPPlugin, CAPBridgedPlugin {
 
     do {
       let key = try loadOrCreateDek()
-      let envelope = try TidVaultFormat.encryptChunked(plain: data, wrappingKey: key)
+      let sealed = try AES.GCM.seal(data, using: key)
+      guard let combined = sealed.combined else {
+        call.reject("seal failed")
+        return
+      }
       let id = UUID().uuidString
-      let url = try vaultDir().appendingPathComponent("\(id).\(TidVaultFormat.ext)")
-      try envelope.write(to: url, options: .completeFileProtection)
+      let url = try vaultDir().appendingPathComponent("\(id).tvm")
+      try combined.write(to: url, options: .completeFileProtection)
 
       let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
       let kind = mime.hasPrefix("image/") ? "image" : mime.hasPrefix("video/") ? "video" : "other"
-      let item: [String: Any] = [
+      var item: [String: Any] = [
         "id": id,
         "kind": kind,
         "mimeType": mime,
-        "byteLength": envelope.count,
+        "byteLength": data.count,
         "contentHash": hash,
         "createdAt": ISO8601DateFormatter().string(from: Date()),
         "displayName": name,
-        "format": "tidvault",
       ]
       var catalog = loadCatalog()
       catalog.append(item)
@@ -61,7 +65,7 @@ public class TrustIdMediaVaultPlugin: CAPPlugin, CAPBridgedPlugin {
       call.resolve([
         "item": item,
         "sourceWiped": false,
-        "wipeNote": "iOS PhotoKit deletion requires explicit user library write permission; prefer import into app container.",
+        "wipeNote": "iOS PhotoKit deletion requires explicit user library write permission; prefer import-without-leaving-originals via Files/document picker into app container.",
       ])
     } catch {
       call.reject("import failed: \(error.localizedDescription)")
@@ -75,27 +79,10 @@ public class TrustIdMediaVaultPlugin: CAPPlugin, CAPBridgedPlugin {
     }
     do {
       let key = try loadOrCreateDek()
-      let dir = try vaultDir()
-      let tid = dir.appendingPathComponent("\(id).\(TidVaultFormat.ext)")
-      let legacy = dir.appendingPathComponent("\(id).tvm")
-      let url: URL
-      if FileManager.default.fileExists(atPath: tid.path) {
-        url = tid
-      } else if FileManager.default.fileExists(atPath: legacy.path) {
-        url = legacy
-      } else {
-        call.reject("Ciphertext missing")
-        return
-      }
-      let blob = try Data(contentsOf: url)
-      let plain: Data
-      if url.pathExtension == TidVaultFormat.ext ||
-          String(data: blob.prefix(5), encoding: .utf8) == TidVaultFormat.magic {
-        plain = try TidVaultFormat.decryptChunked(blob: blob, wrappingKey: key)
-      } else {
-        let box = try AES.GCM.SealedBox(combined: blob)
-        plain = try AES.GCM.open(box, using: key)
-      }
+      let url = try vaultDir().appendingPathComponent("\(id).tvm")
+      let combined = try Data(contentsOf: url)
+      let box = try AES.GCM.SealedBox(combined: combined)
+      let plain = try AES.GCM.open(box, using: key)
       let meta = loadCatalog().first { ($0["id"] as? String) == id }
       call.resolve([
         "bytesBase64": plain.base64EncodedString(),
@@ -112,11 +99,10 @@ public class TrustIdMediaVaultPlugin: CAPPlugin, CAPBridgedPlugin {
       call.reject("id required")
       return
     }
-    if let dir = try? vaultDir() {
-      try? FileManager.default.removeItem(at: dir.appendingPathComponent("\(id).\(TidVaultFormat.ext)"))
-      try? FileManager.default.removeItem(at: dir.appendingPathComponent("\(id).tvm"))
-    }
-    saveCatalog(loadCatalog().filter { ($0["id"] as? String) != id })
+    let url = try? vaultDir().appendingPathComponent("\(id).tvm")
+    try? url.flatMap { try FileManager.default.removeItem(at: $0) }
+    let next = loadCatalog().filter { ($0["id"] as? String) != id }
+    saveCatalog(next)
     call.resolve()
   }
 
@@ -147,6 +133,7 @@ public class TrustIdMediaVaultPlugin: CAPPlugin, CAPBridgedPlugin {
   }
 
   private func loadOrCreateDek() throws -> SymmetricKey {
+    // Prefer Keychain-backed 256-bit key with biometry access control.
     let query: [String: Any] = [
       kSecClass as String: kSecClassGenericPassword,
       kSecAttrAccount as String: "vault-dek",
@@ -165,7 +152,7 @@ public class TrustIdMediaVaultPlugin: CAPPlugin, CAPBridgedPlugin {
     guard let access = SecAccessControlCreateWithFlags(
       nil,
       kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-      [.biometryCurrentSet],
+      [.biometryCurrentSet, .privateKeyUsage],
       &error,
     ) else {
       throw error!.takeRetainedValue() as Error

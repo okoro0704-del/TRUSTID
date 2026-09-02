@@ -282,31 +282,46 @@ export async function claimApprovalResult(pollToken: string) {
   }
 
   if (row.status === DEVICE_APPROVAL_STATUS.APPROVED) {
-    if (!row.enrollmentTokenHash || !row.enrollmentTokenExpires) {
-      throw Object.assign(new Error("Enrollment token missing"), {
-        statusCode: 400,
-      });
-    }
-    if (row.enrollmentTokenExpires.getTime() < Date.now()) {
-      throw Object.assign(new Error("Enrollment token expired"), {
-        statusCode: 400,
-      });
-    }
-    const enrollmentToken = randomToken(32);
+    // Identity-first: grant a session on this terminal without creating another passkey.
+    const device = await prisma.device.create({
+      data: {
+        userId: row.userId,
+        name: row.requestedDeviceName,
+        status: DEVICE_STATUS.ACTIVE,
+        trustLevel: DEVICE_TRUST_LEVELS.STANDARD,
+        platform: row.platform,
+        userAgent: row.userAgent,
+        lastIp: row.ip,
+        lastActiveAt: new Date(),
+        trustedAt: new Date(),
+      },
+    });
+    const { session, token } = await createSession({
+      userId: row.userId,
+      deviceId: device.id,
+      applicationId: row.applicationId,
+      kind: SESSION_KINDS.STANDARD,
+      ip: row.ip ?? undefined,
+      userAgent: row.userAgent ?? undefined,
+    });
     await prisma.deviceApprovalRequest.update({
       where: { id: row.id },
       data: {
-        enrollmentTokenHash: hashSecret(enrollmentToken),
-        enrollmentTokenExpires: new Date(Date.now() + 5 * 60 * 1000),
+        resultingDeviceId: device.id,
         claimConsumedAt: new Date(),
+        enrollmentTokenHash: null,
+        enrollmentTokenExpires: null,
       },
     });
     return {
       status: DEVICE_APPROVAL_STATUS.APPROVED,
-      mode: "trust" as const,
-      enrollmentToken,
+      mode: "ambient" as const,
+      sessionToken: token,
+      sessionId: session.id,
       requestId: row.id,
       userId: row.userId,
+      deviceId: device.id,
+      offerSaveDeviceKey: true,
     };
   }
 

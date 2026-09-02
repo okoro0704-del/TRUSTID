@@ -56,20 +56,44 @@ export async function trustIdRoutes(app: FastifyInstance) {
       if (!result.matched) {
         return reply.code(401).send({
           error: "ambient_no_match",
-          message: "No Trust ID identity matched this biometric fusion",
+          message: "No Trust ID identity matched this biometric",
           fusionScore: result.fusion.fusionScore,
           faceMatchScore: result.fusion.faceMatchScore,
           fingerprintMatchScore: result.fusion.fingerprintMatchScore,
         });
       }
 
-      setSessionCookie(reply, result.sessionToken);
+      if (result.needsMasterApproval) {
+        return {
+          matched: true,
+          enrolled: false,
+          trustId: result.trustId,
+          accessLevel: result.accessLevel,
+          isMasterDevice: false,
+          needsMasterApproval: true,
+          approvalPollToken: result.approvalPollToken,
+          approvalRequestId: result.approvalRequestId,
+          offerSaveDeviceKey: result.offerSaveDeviceKey ?? true,
+          matchedModality: result.matchedModality,
+          isFaceMatched: result.isFaceMatched,
+          isFingerprintMatched: result.isFingerprintMatched,
+          fusionScore: result.fusionScore,
+          faceMatchScore: result.faceMatchScore,
+          fingerprintMatchScore: result.fingerprintMatchScore,
+        };
+      }
+
+      if (result.sessionToken) {
+        setSessionCookie(reply, result.sessionToken);
+      }
       return {
         matched: true,
         enrolled: result.enrolled,
         trustId: result.trustId,
         accessLevel: result.accessLevel,
         isMasterDevice: result.isMasterDevice,
+        needsMasterApproval: false,
+        offerSaveDeviceKey: result.offerSaveDeviceKey ?? false,
         matchedModality: result.matchedModality,
         isFaceMatched: result.isFaceMatched,
         isFingerprintMatched: result.isFingerprintMatched,

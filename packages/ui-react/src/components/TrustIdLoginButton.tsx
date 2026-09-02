@@ -288,14 +288,17 @@ export function TrustIdLoginButton({
         }>(`/device-approvals/poll/${encodeURIComponent(token)}`);
         setOobStatus(`Status: ${poll.status}`);
         if (poll.status === "approved" || poll.status === "temporary") {
-          const claim = await apiFetch<{ identity: import("../types.js").TrustIdIdentity }>(
-            "/device-approvals/claim",
-            {
-              method: "POST",
-              body: JSON.stringify({ pollToken: token }),
-            },
-          );
-          setIdentity(claim.identity);
+          const claim = await apiFetch<{
+            identity?: import("../types.js").TrustIdIdentity;
+            mode?: string;
+            sessionToken?: string;
+          }>("/device-approvals/claim", {
+            method: "POST",
+            body: JSON.stringify({ pollToken: token }),
+          });
+          if (claim.identity) {
+            setIdentity(claim.identity);
+          }
           await refresh();
           setOpen(false);
           onSuccess?.();

@@ -7,15 +7,17 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "build:web": "npm run build -w @trustid/web",
+    "build:web:device": "npm run build:device -w @trustid/web",
     "precap": "npm run build:web && npm run build",
     "cap:add:android": "npx cap add android",
     "cap:add:ios": "npx cap add ios",
     "cap:sync": "npm run build:web && npm run build && node ./scripts/sync-native.mjs && npx cap sync",
+    "cap:sync:device": "npm run build:web:device && npm run build && node ./scripts/sync-native.mjs && npx cap sync android",
     "cap:open:android": "npx cap open android",
     "cap:open:ios": "npx cap open ios",
     "android": "npm run cap:sync && npx cap open android",
     "ios": "npm run cap:sync && npx cap open ios",
-    "android:apk": "npm run cap:sync && cd android && gradlew.bat assembleDebug"
+    "android:apk": "npm run cap:sync:device && cd android && gradlew.bat assembleDebug"
   },
   "dependencies": {
     "@capacitor/android": "^6.2.0",

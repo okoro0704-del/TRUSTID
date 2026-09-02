@@ -1,5 +1,6 @@
 package com.trustid.device.plugins
 
+import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.ImageFormat
@@ -14,10 +15,13 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
+import com.getcapacitor.PermissionState
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
+import com.getcapacitor.annotation.Permission
+import com.getcapacitor.annotation.PermissionCallback
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -29,7 +33,12 @@ import kotlin.math.sqrt
  * Headless CameraX face capture — no preview, no disk storage.
  * Captures one frame via ImageAnalysis, vectorizes in memory, tears down immediately.
  */
-@CapacitorPlugin(name = "TrustIdSilentFaceCapture")
+@CapacitorPlugin(
+  name = "TrustIdSilentFaceCapture",
+  permissions = [
+    Permission(strings = [Manifest.permission.CAMERA], alias = "camera"),
+  ],
+)
 class SilentFaceCapturePlugin : Plugin() {
 
   @PluginMethod
@@ -42,6 +51,25 @@ class SilentFaceCapturePlugin : Plugin() {
 
   @PluginMethod
   fun captureFaceVector(call: PluginCall) {
+    if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
+      != PackageManager.PERMISSION_GRANTED
+    ) {
+      requestPermissionForAlias("camera", call, "cameraPermsCallback")
+      return
+    }
+    runCapture(call)
+  }
+
+  @PermissionCallback
+  private fun cameraPermsCallback(call: PluginCall) {
+    if (getPermissionState("camera") == PermissionState.GRANTED) {
+      runCapture(call)
+    } else {
+      call.reject("Camera permission denied")
+    }
+  }
+
+  private fun runCapture(call: PluginCall) {
     val activity = activity
     if (activity !is LifecycleOwner) {
       call.reject("Silent face capture requires a LifecycleOwner activity")
@@ -50,8 +78,21 @@ class SilentFaceCapturePlugin : Plugin() {
 
     val latch = CountDownLatch(1)
     val done = AtomicBoolean(false)
+    val settled = AtomicBoolean(false)
     val result = JSObject()
     val executor = Executors.newSingleThreadExecutor()
+
+    fun settleResolve(payload: JSObject) {
+      if (settled.compareAndSet(false, true)) {
+        call.resolve(payload)
+      }
+    }
+
+    fun settleReject(message: String) {
+      if (settled.compareAndSet(false, true)) {
+        call.reject(message)
+      }
+    }
 
     val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
     cameraProviderFuture.addListener({
@@ -79,13 +120,23 @@ class SilentFaceCapturePlugin : Plugin() {
             } catch (e: Exception) {
               result.put("confidence", 0.0)
               result.put("embedding", JSArray())
+              result.put("error", e.message ?: "vectorize_failed")
             } finally {
-              image.close()
-              cameraProvider.unbindAll()
+              try {
+                image.close()
+              } catch (_: Exception) {
+              }
+              try {
+                cameraProvider.unbindAll()
+              } catch (_: Exception) {
+              }
               latch.countDown()
             }
           } else {
-            image.close()
+            try {
+              image.close()
+            } catch (_: Exception) {
+            }
           }
         }
 
@@ -98,21 +149,27 @@ class SilentFaceCapturePlugin : Plugin() {
       } catch (e: Exception) {
         done.set(true)
         latch.countDown()
-        call.reject("Camera bind failed: ${e.message}")
+        settleReject("Camera bind failed: ${e.message}")
       }
     }, ContextCompat.getMainExecutor(context))
 
     Thread {
-      val ok = latch.await(5, TimeUnit.SECONDS)
-      if (!ok && done.compareAndSet(false, true)) {
-        call.reject("Silent face capture timed out")
-        return@Thread
+      try {
+        val ok = latch.await(5, TimeUnit.SECONDS)
+        if (!ok) {
+          done.compareAndSet(false, true)
+          settleReject("Silent face capture timed out")
+          return@Thread
+        }
+        if (settled.get()) return@Thread
+        if (result.length() == 0 || result.has("error")) {
+          settleReject(result.getString("error") ?: "No face frame captured")
+          return@Thread
+        }
+        settleResolve(result)
+      } catch (e: Exception) {
+        settleReject(e.message ?: "Silent face capture failed")
       }
-      if (result.length() == 0) {
-        call.reject("No face frame captured")
-        return@Thread
-      }
-      call.resolve(result)
     }.start()
   }
 
@@ -133,7 +190,7 @@ class SilentFaceCapturePlugin : Plugin() {
     yuv.compressToJpeg(Rect(0, 0, image.width, image.height), 80, out)
     val jpeg = out.toByteArray()
     val bmp = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
-      ?: return IntArray(image.width * image.height * 4)
+      ?: return IntArray(image.width * image.height)
     val scaled = Bitmap.createScaledBitmap(bmp, image.width, image.height, true)
     val pixels = IntArray(scaled.width * scaled.height)
     scaled.getPixels(pixels, 0, scaled.width, 0, 0, scaled.width, scaled.height)
@@ -180,7 +237,7 @@ class SilentFaceCapturePlugin : Plugin() {
     val pixelsCount = width * height
     val meanLuma = lumaSum / pixelsCount
     val variance = maxOf(0.0, lumaSq / pixelsCount - meanLuma * meanLuma)
-    val norm = sqrt(v.sum())
+    val norm = sqrt(v.sumOf { it * it })
     val embedding = if (norm > 0) DoubleArray(dims) { i -> v[i] / norm } else DoubleArray(dims)
 
     val brightnessScore =

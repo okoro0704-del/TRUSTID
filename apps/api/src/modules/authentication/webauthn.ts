@@ -246,6 +246,23 @@ export async function verifyRegistration(input: {
     throw Object.assign(new Error(message), { statusCode: 400 });
   }
 
+  // One passkey per Trust ID — additional devices use cloud biometric + master approval.
+  const existingPasskeyCount = await prisma.credential.count({
+    where: {
+      userId: input.userId,
+      status: { in: [DEVICE_STATUS.ACTIVE, DEVICE_STATUS.TRUSTED] },
+    },
+  });
+  if (existingPasskeyCount >= 1) {
+    await failRegistration(input.userId, "single_passkey_limit", input);
+    throw Object.assign(
+      new Error(
+        "This Trust ID already has a passkey. Sign in with face/fingerprint match, then ask your Master Device to approve this terminal.",
+      ),
+      { statusCode: 409 },
+    );
+  }
+
   let verification;
   try {
     verification = await verifyRegistrationResponse({
