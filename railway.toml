@@ -8,5 +8,7 @@ restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
 
 # Required Railway variables:
-# DATABASE_URL = Postgres plugin URL (postgresql://...)
+# DATABASE_URL = Postgres+pgvector service URL (template: https://railway.com/deploy/3jJFCA)
+#   Standard Railway Postgres does NOT include pgvector — use the pgvector template.
+# On boot, bootstrapPgVector() enables the extension, adds vector(512), and creates the ANN index.
 # COOKIE_SECRET, WEBAUTHN_RP_ID, WEBAUTHN_ORIGIN, WEBAUTHN_RP_NAME, CORS_ORIGINS
