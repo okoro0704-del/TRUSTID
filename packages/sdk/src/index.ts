@@ -17,12 +17,22 @@ import {
   supportsSilentFaceCapture,
 } from "./capture/silent-camera-capturer.js";
 import { promptFingerprintFallback } from "./capture/fingerprint-fallback.js";
+import {
+  AIVectorExtractor,
+  aiVectorExtractor,
+  projectTo512,
+} from "./capture/ai-vector-extractor.js";
 import { vectorizeFaceFromRgba } from "./capture/face-vectorizer.js";
 import type { CaptureHandlers, MultiModalBiometricPayload } from "./capture/types.js";
 
 export type BiometricPayload = {
   modality: BiometricModality;
-  embedding: number[];
+  /** Legacy variable-length embedding */
+  embedding?: number[];
+  /** On-device AI 512-D normalized vector (preferred) */
+  vector?: number[];
+  modelName?: string;
+  modelVersion?: number;
   deviceFingerprint?: string;
 };
 
@@ -298,6 +308,9 @@ export {
   supportsSilentFaceCapture,
   vectorizeFaceFromRgba,
   SilentCameraCapturer,
+  AIVectorExtractor,
+  aiVectorExtractor,
+  projectTo512,
 };
 export type {
   AmbientAuthenticateOptions,
@@ -312,3 +325,4 @@ export type {
 export type { SilentFaceCaptureBridge } from "./capture/silent-camera-native.js";
 export type { FingerprintFallbackHandlers } from "./capture/fingerprint-fallback.js";
 export type { FaceVectorResult } from "./capture/face-vectorizer.js";
+export type { AIVectorPayload, AIVectorExtractorOptions } from "./capture/ai-vector-extractor.js";

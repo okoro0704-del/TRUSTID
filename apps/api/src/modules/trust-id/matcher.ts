@@ -1,5 +1,6 @@
 import {
   AUDIT_EVENTS,
+  BIOMETRIC_AI_EMBEDDING_DIMS,
   TRUST_ID_ACCESS_LEVELS,
   type BiometricModality,
   type TrustIdAccessLevel,
@@ -13,16 +14,19 @@ import {
 } from "../../lib/crypto.js";
 import { recordAudit } from "../audit/service.js";
 import type { BiometricPayload } from "./schemas.js";
+import { isAiVectorPayload, pgVectorMatcher } from "./vector-matcher.js";
 
-/** Default cosine similarity threshold for 1:N match (tune per modality). */
-const MATCH_THRESHOLD = 0.82;
+/** Legacy cosine similarity threshold for short embeddings */
+const LEGACY_MATCH_THRESHOLD = 0.82;
 
 export type BiometricMatchResult = {
   matched: boolean;
   userId?: string;
   trustId?: string;
   similarity?: number;
+  distance?: number;
   templateId?: string;
+  embeddingId?: string;
   accessLevel: TrustIdAccessLevel;
   isMasterDevice: boolean;
 };
@@ -56,17 +60,40 @@ async function isMasterTerminal(userId: string, deviceFingerprint?: string) {
 
 /**
  * Identity-first 1:N biometric matcher.
- * Answers: "Who in the database does this biometric belong to?"
+ * Routes 512-D AI vectors to pgvector; legacy embeddings use sealed-template scan.
  */
 export class BiometricMatcherService {
-  /** Enroll an encrypted embedding for server-side 1:N lookup. */
   async enrollTemplate(input: {
     userId: string;
+    trustId?: string;
     biometric: BiometricPayload;
     ip?: string;
     userAgent?: string;
   }) {
+    if (isAiVectorPayload(input.biometric)) {
+      const user = input.trustId
+        ? { trustId: input.trustId }
+        : await prisma.user.findUniqueOrThrow({
+            where: { id: input.userId },
+            select: { trustId: true },
+          });
+      return pgVectorMatcher.enrollEmbedding({
+        userId: input.userId,
+        trustId: user.trustId,
+        biometric: input.biometric,
+        modelName: input.biometric.modelName,
+        modelVersion: input.biometric.modelVersion,
+        ip: input.ip,
+        userAgent: input.userAgent,
+      });
+    }
+
     const { modality, embedding } = input.biometric;
+    if (!embedding) {
+      throw Object.assign(new Error("Legacy enroll requires embedding array"), {
+        statusCode: 400,
+      });
+    }
     const normalized = normalizeEmbedding(embedding);
     const templateHash = biometricTemplateHash(modality, normalized);
     const embeddingSeal = sealJson(normalized);
@@ -107,17 +134,34 @@ export class BiometricMatcherService {
     return { templateId: row.id, modality };
   }
 
-  /**
-   * Execute 1:N identity lookup across all active templates for a modality.
-   * Returns the best match above threshold, with access tier evaluation.
-   */
   async matchOneToMany(input: {
     biometric: BiometricPayload;
     requireMasterAccess?: boolean;
     ip?: string;
     userAgent?: string;
   }): Promise<BiometricMatchResult> {
+    if (isAiVectorPayload(input.biometric)) {
+      const ai = await pgVectorMatcher.matchOneToMany(input);
+      return {
+        matched: ai.matched,
+        userId: ai.userId,
+        trustId: ai.trustId,
+        similarity: ai.similarity,
+        distance: ai.distance,
+        embeddingId: ai.embeddingId,
+        accessLevel: ai.accessLevel,
+        isMasterDevice: ai.isMasterDevice,
+      };
+    }
+
     const { modality, embedding, deviceFingerprint } = input.biometric;
+    if (!embedding) {
+      return {
+        matched: false,
+        accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
+        isMasterDevice: false,
+      };
+    }
     const probe = normalizeEmbedding(embedding);
 
     const candidates = await prisma.biometricTemplate.findMany({
@@ -135,7 +179,7 @@ export class BiometricMatcherService {
     for (const c of candidates) {
       const stored = openJson<number[]>(c.embeddingSeal);
       const sim = cosineSimilarity(probe, stored);
-      if (sim >= MATCH_THRESHOLD && (!best || sim > best.similarity)) {
+      if (sim >= LEGACY_MATCH_THRESHOLD && (!best || sim > best.similarity)) {
         best = {
           similarity: sim,
           templateId: c.id,
@@ -201,7 +245,6 @@ export class BiometricMatcherService {
 
 export const biometricMatcher = new BiometricMatcherService();
 
-/** Convenience export for modality validation */
 export function assertModality(m: string): asserts m is BiometricModality {
   if (m !== "face" && m !== "fingerprint") {
     throw Object.assign(new Error("Invalid biometric modality"), {
@@ -209,3 +252,5 @@ export function assertModality(m: string): asserts m is BiometricModality {
     });
   }
 }
+
+export { BIOMETRIC_AI_EMBEDDING_DIMS };

@@ -45,6 +45,7 @@ model User {
   bbsStepUpChallenges     BbsStepUpChallenge[]
   silentDeviceKeys        SilentDeviceKey[]
   biometricTemplates      BiometricTemplate[]
+  biometricEmbeddings     BiometricEmbedding[]
   masterDevices           MasterDevice[]
   masterAuthChallenges    MasterAuthChallenge[]
 
@@ -840,6 +841,30 @@ model BiometricTemplate {
   @@index([modality, status])
   @@index([templateHash])
   @@map("biometric_templates")
+}
+
+/// AI biometric embedding for pgvector 1:N identity matching (512-D).
+/// Raw biometrics never stored — only normalized on-device AI vectors.
+model BiometricEmbedding {
+  id            String    @id @default(cuid())
+  userId        String    @map("user_id")
+  trustId       String    @map("trust_id")
+  /// face | fingerprint
+  modality      String
+  /// JSON-serialized 512-D normalized vector (all providers)
+  embeddingJson String    @map("embedding_json")
+  modelName     String    @default("mobile_facenet_v1") @map("model_name")
+  modelVersion  Int       @default(1) @map("model_version")
+  status        String    @default("active")
+  lastMatchedAt DateTime? @map("last_matched_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, modality])
+  @@index([modality, status])
+  @@index([trustId])
+  @@map("biometric_embeddings")
 }
 
 /// Master Device binding — secondary security key for elevated operations.

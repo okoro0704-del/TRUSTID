@@ -389,5 +389,14 @@ export const BIOMETRIC_SINGLE_MODALITY_THRESHOLD = 0.82;
 /** Normalized facial embedding dimension for silent background capture */
 export const BIOMETRIC_FACE_EMBEDDING_DIMS = 128;
 
+/** On-device AI embedding dimension (MobileFaceNet / pgvector) */
+export const BIOMETRIC_AI_EMBEDDING_DIMS = 512;
+
+/** Default ONNX / face-api model identifier */
+export const BIOMETRIC_AI_MODEL_NAME = "mobile_facenet_v1";
+
+/** pgvector cosine distance threshold for high-confidence AI match */
+export const BIOMETRIC_PGVECTOR_MAX_DISTANCE = 0.35;
+
 /** Minimum local confidence score before fingerprint fallback is invoked */
 export const BIOMETRIC_FACE_CAPTURE_MIN_CONFIDENCE = 0.35;

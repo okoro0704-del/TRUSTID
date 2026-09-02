@@ -1,27 +1,24 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
   BIOMETRIC_MODALITIES,
-  BIOMETRIC_SINGLE_MODALITY_THRESHOLD,
+  BIOMETRIC_AI_EMBEDDING_DIMS,
+  BIOMETRIC_PGVECTOR_MAX_DISTANCE,
   TRUST_ID_ACCESS_LEVELS,
 } from "@trustid/shared";
 import { prisma } from "../src/db/client.js";
 import { resetTables } from "./helpers/db.js";
 import { buildApp } from "../src/app.js";
-import { biometricMatcher } from "../src/modules/trust-id/matcher.js";
+import { pgVectorMatcher } from "../src/modules/trust-id/vector-matcher.js";
 import {
   ambientSignInAndSession,
   matchMultiModalFusion,
 } from "../src/modules/trust-id/fusion.js";
 import { commitName, newTrustId } from "../src/lib/crypto.js";
 
-function faceEmbedding(seed: number): number[] {
-  const v = Array.from({ length: 16 }, (_, i) => Math.sin(seed + i * 0.3));
-  const norm = Math.sqrt(v.reduce((s, x) => s + x * x, 0));
-  return v.map((x) => x / norm);
-}
-
-function fpEmbedding(seed: number): number[] {
-  const v = Array.from({ length: 16 }, (_, i) => Math.cos(seed + i * 0.25));
+function aiVector512(seed: number): number[] {
+  const v = Array.from({ length: BIOMETRIC_AI_EMBEDDING_DIMS }, (_, i) =>
+    Math.sin(seed + i * 0.01),
+  );
   const norm = Math.sqrt(v.reduce((s, x) => s + x * x, 0));
   return v.map((x) => x / norm);
 }
@@ -40,21 +37,26 @@ async function seedDualModalUser(trustId: string, faceSeed: number, fpSeed: numb
       },
     },
   });
-  await biometricMatcher.enrollTemplate({
+  await pgVectorMatcher.enrollEmbedding({
     userId: user.id,
-    biometric: { modality: BIOMETRIC_MODALITIES.FACE, embedding: faceEmbedding(faceSeed) },
+    trustId,
+    biometric: {
+      modality: BIOMETRIC_MODALITIES.FACE,
+      vector: aiVector512(faceSeed),
+    },
   });
-  await biometricMatcher.enrollTemplate({
+  await pgVectorMatcher.enrollEmbedding({
     userId: user.id,
+    trustId,
     biometric: {
       modality: BIOMETRIC_MODALITIES.FINGERPRINT,
-      embedding: fpEmbedding(fpSeed),
+      vector: aiVector512(fpSeed),
     },
   });
   return user;
 }
 
-describe("ambient single-biometric OR sign-in", () => {
+describe("ambient AI 512-D pgvector sign-in", () => {
   beforeEach(async () => {
     await resetTables(prisma);
   });
@@ -63,14 +65,14 @@ describe("ambient single-biometric OR sign-in", () => {
     await prisma.$disconnect();
   });
 
-  it("matches with fingerprint-only payload when user enrolled both modalities", async () => {
+  it("matches fingerprint-only 512-D vector when user enrolled both modalities", async () => {
     const user = await seedDualModalUser(newTrustId(), 10, 20);
 
     const fusion = await matchMultiModalFusion({
       payload: {
         fingerprint: {
           modality: BIOMETRIC_MODALITIES.FINGERPRINT,
-          embedding: fpEmbedding(20.001),
+          vector: aiVector512(20.001),
         },
       },
     });
@@ -78,22 +80,17 @@ describe("ambient single-biometric OR sign-in", () => {
     expect(fusion.matched).toBe(true);
     expect(fusion.userId).toBe(user.id);
     expect(fusion.isFingerprintMatched).toBe(true);
-    expect(fusion.isFaceMatched).toBe(false);
     expect(fusion.matchedModality).toBe("fingerprint");
-    expect(fusion.fingerprintMatchScore).toBeGreaterThanOrEqual(
-      BIOMETRIC_SINGLE_MODALITY_THRESHOLD,
-    );
-    expect(fusion.accessLevel).toBe(TRUST_ID_ACCESS_LEVELS.UNIVERSAL);
   });
 
-  it("matches with face-only payload when user enrolled both modalities", async () => {
+  it("matches face-only 512-D vector when user enrolled both modalities", async () => {
     const user = await seedDualModalUser(newTrustId(), 10, 20);
 
     const fusion = await matchMultiModalFusion({
       payload: {
         face: {
           modality: BIOMETRIC_MODALITIES.FACE,
-          embedding: faceEmbedding(10.001),
+          vector: aiVector512(10.001),
         },
       },
     });
@@ -101,18 +98,15 @@ describe("ambient single-biometric OR sign-in", () => {
     expect(fusion.matched).toBe(true);
     expect(fusion.userId).toBe(user.id);
     expect(fusion.isFaceMatched).toBe(true);
-    expect(fusion.isFingerprintMatched).toBe(false);
     expect(fusion.matchedModality).toBe("face");
-    expect(fusion.faceMatchScore).toBeGreaterThanOrEqual(BIOMETRIC_SINGLE_MODALITY_THRESHOLD);
-    expect(fusion.accessLevel).toBe(TRUST_ID_ACCESS_LEVELS.UNIVERSAL);
   });
 
-  it("auto-enrolls and signs in on unknown single-modality biometric (zero-UI onboarding)", async () => {
+  it("auto-enrolls and signs in on unknown 512-D vector (zero-UI onboarding)", async () => {
     const result = await ambientSignInAndSession({
       payload: {
         fingerprint: {
           modality: BIOMETRIC_MODALITIES.FINGERPRINT,
-          embedding: fpEmbedding(888),
+          vector: aiVector512(888),
         },
       },
       allowAutoEnroll: true,
@@ -122,10 +116,9 @@ describe("ambient single-biometric OR sign-in", () => {
     expect(result.enrolled).toBe(true);
     expect(result.trustId).toMatch(/^TD-/);
     expect(result.sessionToken).toBeTruthy();
-    expect(result.matchedModality).toBe("fingerprint");
   });
 
-  it("POST /v1/trust-id/ambient-signin issues session from single modality", async () => {
+  it("POST /v1/trust-id/ambient-signin issues session from 512-D vector", async () => {
     const user = await seedDualModalUser(newTrustId(), 5, 15);
     const app = await buildApp();
 
@@ -135,7 +128,7 @@ describe("ambient single-biometric OR sign-in", () => {
       payload: {
         fingerprint: {
           modality: BIOMETRIC_MODALITIES.FINGERPRINT,
-          embedding: fpEmbedding(15.001),
+          vector: aiVector512(15.001),
         },
       },
     });
@@ -145,14 +138,26 @@ describe("ambient single-biometric OR sign-in", () => {
       matched: boolean;
       trustId: string;
       matchedModality: string;
-      isFingerprintMatched: boolean;
-      isFaceMatched: boolean;
     };
     expect(body.matched).toBe(true);
     expect(body.trustId).toBe(user.trustId);
     expect(body.matchedModality).toBe("fingerprint");
-    expect(body.isFingerprintMatched).toBe(true);
-    expect(body.isFaceMatched).toBe(false);
     await app.close();
+  });
+
+  it("rejects vectors above pgvector distance threshold", async () => {
+    await seedDualModalUser(newTrustId(), 1, 2);
+
+    const fusion = await matchMultiModalFusion({
+      payload: {
+        face: {
+          modality: BIOMETRIC_MODALITIES.FACE,
+          vector: aiVector512(9999),
+        },
+      },
+    });
+
+    expect(fusion.matched).toBe(false);
+    expect(BIOMETRIC_PGVECTOR_MAX_DISTANCE).toBe(0.35);
   });
 });

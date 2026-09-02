@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import {
   BIOMETRIC_FACE_EMBEDDING_DIMS,
+  BIOMETRIC_AI_EMBEDDING_DIMS,
   BIOMETRIC_MODALITIES,
 } from "@trustid/shared";
 import { vectorizeFaceFromRgba } from "../src/capture/face-vectorizer.js";
@@ -74,7 +75,7 @@ describe("silent-camera-web", () => {
 
     const result = await captureSilentFaceFromWebCamera(getStream);
     expect(result?.payload.modality).toBe(BIOMETRIC_MODALITIES.FACE);
-    expect(result?.payload.embedding).toHaveLength(BIOMETRIC_FACE_EMBEDDING_DIMS);
+    expect(result?.payload.vector).toHaveLength(BIOMETRIC_AI_EMBEDDING_DIMS);
     expect(stop).toHaveBeenCalledTimes(1);
     expect(video.remove).toHaveBeenCalled();
   });

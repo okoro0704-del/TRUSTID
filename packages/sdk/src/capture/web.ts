@@ -1,4 +1,4 @@
-import { BIOMETRIC_MODALITIES } from "@trustid/shared";
+import { BIOMETRIC_AI_EMBEDDING_DIMS, BIOMETRIC_MODALITIES } from "@trustid/shared";
 import type { BiometricPayload } from "../index.js";
 import { embeddingFromBytes } from "./embedding.js";
 
@@ -8,10 +8,11 @@ type WebAuthnFetcher = () => Promise<{
   response?: { authenticatorData?: string; signature?: string };
 } | null>;
 
-/**
- * PWA fingerprint capture via WebAuthn assertion bytes.
- * OS biometric sheet is the only UI — no Trust ID forms.
- */
+function toAiVector(material: string): number[] {
+  return embeddingFromBytes(material, BIOMETRIC_AI_EMBEDDING_DIMS);
+}
+
+/** PWA fingerprint capture via WebAuthn assertion bytes ? 512-D AI vector. */
 export async function captureWebFingerprint(
   runWebAuthn: WebAuthnFetcher,
 ): Promise<BiometricPayload | null> {
@@ -23,16 +24,17 @@ export async function captureWebFingerprint(
     assertion.response?.authenticatorData ?? "",
     assertion.response?.signature ?? "",
   ].join(":");
+  const vector = toAiVector(material);
   return {
     modality: BIOMETRIC_MODALITIES.FINGERPRINT,
-    embedding: embeddingFromBytes(material, 32),
+    vector,
+    embedding: vector,
+    modelName: "webauthn_proxy_v1",
+    modelVersion: 1,
   };
 }
 
-/**
- * PWA face proxy — derives embedding from WebAuthn userHandle when present.
- * Native apps should override with real liveness-verified face vectors.
- */
+/** PWA face proxy — derives 512-D vector from WebAuthn userHandle when present. */
 export async function captureWebFaceProxy(
   runWebAuthn: WebAuthnFetcher,
 ): Promise<BiometricPayload | null> {
@@ -41,8 +43,12 @@ export async function captureWebFaceProxy(
   const handle =
     (assertion.response as { userHandle?: string } | undefined)?.userHandle ??
     assertion.id;
+  const vector = toAiVector(handle);
   return {
     modality: BIOMETRIC_MODALITIES.FACE,
-    embedding: embeddingFromBytes(handle, 32),
+    vector,
+    embedding: vector,
+    modelName: "webauthn_proxy_v1",
+    modelVersion: 1,
   };
 }

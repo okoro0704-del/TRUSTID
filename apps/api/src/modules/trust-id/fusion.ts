@@ -1,5 +1,6 @@
 import {
   AUDIT_EVENTS,
+  BIOMETRIC_PGVECTOR_MAX_DISTANCE,
   BIOMETRIC_SINGLE_MODALITY_THRESHOLD,
   TRUST_ID_ACCESS_LEVELS,
   type TrustIdAccessLevel,
@@ -11,7 +12,9 @@ import { assertInstallAvailableForNewTrustId } from "../authentication/device-in
 import { getDashboardIdentity } from "../identity/service.js";
 import { createSession } from "../sessions/service.js";
 import { biometricMatcher } from "./matcher.js";
+import type { BiometricMatchResult } from "./matcher.js";
 import type { BiometricPayload } from "./schemas.js";
+import { isAiVectorPayload } from "./vector-matcher.js";
 
 export type MultiModalPayload = {
   face?: BiometricPayload;
@@ -40,6 +43,25 @@ async function evaluateMaster(userId: string, deviceFingerprint?: string) {
     where: { userId, deviceFingerprint: hash, isMasterDevice: true, status: "active" },
   });
   return Boolean(row);
+}
+
+function modalityMatched(
+  result: BiometricMatchResult | null,
+  payload?: BiometricPayload,
+): boolean {
+  if (!result?.matched) return false;
+  if (payload && isAiVectorPayload(payload)) return true;
+  return (result.similarity ?? 0) >= BIOMETRIC_SINGLE_MODALITY_THRESHOLD;
+}
+
+function modalityScore(result: BiometricMatchResult | null, payload?: BiometricPayload): number {
+  if (!result?.matched) return 0;
+  if (payload && isAiVectorPayload(payload)) {
+    return result.distance != null
+      ? Math.max(0, 1 - result.distance / BIOMETRIC_PGVECTOR_MAX_DISTANCE)
+      : (result.similarity ?? 0);
+  }
+  return result.similarity ?? 0;
 }
 
 /**
@@ -73,15 +95,11 @@ export async function matchMultiModalFusion(input: {
       : Promise.resolve(null),
   ]);
 
-  const isFaceMatched =
-    Boolean(faceResult?.matched) &&
-    (faceResult?.similarity ?? 0) >= BIOMETRIC_SINGLE_MODALITY_THRESHOLD;
-  const isFingerprintMatched =
-    Boolean(fpResult?.matched) &&
-    (fpResult?.similarity ?? 0) >= BIOMETRIC_SINGLE_MODALITY_THRESHOLD;
+  const isFaceMatched = modalityMatched(faceResult, face);
+  const isFingerprintMatched = modalityMatched(fpResult, fingerprint);
 
-  const faceScore = isFaceMatched ? (faceResult?.similarity ?? 0) : 0;
-  const fpScore = isFingerprintMatched ? (fpResult?.similarity ?? 0) : 0;
+  const faceScore = modalityScore(faceResult, face);
+  const fpScore = modalityScore(fpResult, fingerprint);
 
   if (isFaceMatched && isFingerprintMatched) {
     if (faceResult!.userId !== fpResult!.userId) {
@@ -215,6 +233,7 @@ export async function autoEnrollFromBiometrics(input: {
   if (input.payload.face) {
     await biometricMatcher.enrollTemplate({
       userId: user.id,
+      trustId: user.trustId,
       biometric: input.payload.face,
       ip: input.ip,
       userAgent: input.userAgent,
@@ -223,6 +242,7 @@ export async function autoEnrollFromBiometrics(input: {
   if (input.payload.fingerprint) {
     await biometricMatcher.enrollTemplate({
       userId: user.id,
+      trustId: user.trustId,
       biometric: input.payload.fingerprint,
       ip: input.ip,
       userAgent: input.userAgent,

@@ -1,6 +1,6 @@
 import { BIOMETRIC_MODALITIES } from "@trustid/shared";
 import type { BiometricPayload } from "../index.js";
-import { vectorizeFaceFromRgba } from "./face-vectorizer.js";
+import { getSharedAIVectorExtractor } from "./ai-vector-extractor.js";
 
 export type SilentWebCaptureResult = {
   payload: BiometricPayload;
@@ -49,8 +49,8 @@ function waitForFrame(video: HTMLVideoElement, timeoutMs = 3000): Promise<void> 
 }
 
 /**
- * Off-screen single-frame capture via hidden video element.
- * All camera tracks are stopped immediately after vectorization.
+ * Off-screen single-frame capture via hidden video element + on-device AI vectorization.
+ * All camera tracks are stopped immediately after inference; no frames persisted to disk.
  */
 export async function captureSilentFaceFromWebCamera(
   getStream?: MediaStreamFactory,
@@ -85,29 +85,17 @@ export async function captureSilentFaceFromWebCamera(
     await video.play();
     await waitForFrame(video);
 
-    const width = video.videoWidth;
-    const height = video.videoHeight;
-    if (width <= 0 || height <= 0) return null;
-
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) return null;
-
-    ctx.drawImage(video, 0, 0, width, height);
-    const imageData = ctx.getImageData(0, 0, width, height);
-    const { embedding, confidence } = vectorizeFaceFromRgba(
-      imageData.data,
-      width,
-      height,
-    );
+    const extractor = await getSharedAIVectorExtractor();
+    const ai = await extractor.fromCameraStream(video);
+    if (!ai) return null;
 
     return {
-      confidence,
+      confidence: ai.confidence,
       payload: {
         modality: BIOMETRIC_MODALITIES.FACE,
-        embedding,
+        vector: ai.vector,
+        modelName: ai.modelName,
+        modelVersion: ai.modelVersion,
       },
     };
   } catch {

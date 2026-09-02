@@ -1,22 +1,34 @@
 import { z } from "zod";
-import { BIOMETRIC_MODALITIES, MASTER_STEP_UP_ACTIONS } from "@trustid/shared";
+import {
+  BIOMETRIC_AI_EMBEDDING_DIMS,
+  BIOMETRIC_MODALITIES,
+  MASTER_STEP_UP_ACTIONS,
+} from "@trustid/shared";
 
 export const biometricModalitySchema = z.enum([
   BIOMETRIC_MODALITIES.FACE,
   BIOMETRIC_MODALITIES.FINGERPRINT,
 ]);
 
-export const biometricPayloadSchema = z.object({
-  modality: biometricModalitySchema,
-  /** Normalized embedding vector from client capture pipeline */
-  embedding: z.array(z.number()).min(8).max(2048),
-  /** Optional hardware fingerprint of the capturing terminal */
-  deviceFingerprint: z.string().min(8).max(256).optional(),
-});
+const vectorSchema = z.array(z.number()).length(BIOMETRIC_AI_EMBEDDING_DIMS);
+
+export const biometricPayloadSchema = z
+  .object({
+    modality: biometricModalitySchema,
+    /** Legacy variable-length embedding (pre-AI pipeline) */
+    embedding: z.array(z.number()).min(8).max(2048).optional(),
+    /** On-device AI 512-D normalized vector (preferred) */
+    vector: vectorSchema.optional(),
+    modelName: z.string().max(64).optional(),
+    modelVersion: z.number().int().positive().optional(),
+    deviceFingerprint: z.string().min(8).max(256).optional(),
+  })
+  .refine((b) => b.vector || b.embedding, {
+    message: "Either vector (512-D) or embedding is required",
+  });
 
 export const verifyBiometricRequestSchema = z.object({
   biometric: biometricPayloadSchema,
-  /** When true, also evaluate Master Device binding on this terminal */
   requireMasterAccess: z.boolean().optional().default(false),
 });
 
