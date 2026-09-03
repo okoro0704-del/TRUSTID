@@ -12,6 +12,7 @@
   "dependencies": {
     "@simplewebauthn/browser": "^13.1.0",
     "@trustid/device-security": "*",
+    "@trustid/sdk": "*",
     "@trustid/shared": "*",
     "@trustid/sovereign-crypto": "*",
     "@trustid/ui-react": "*",
