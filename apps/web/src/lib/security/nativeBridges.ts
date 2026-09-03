@@ -44,6 +44,13 @@ export function injectCapacitorSecurityBridges(): boolean {
         >,
       authenticate: (options) =>
         bio.authenticate(options) as Promise<{ ok: boolean; method: string }>,
+      captureFingerprintTemplate: (options) =>
+        bio.captureFingerprintTemplate?.(options) as Promise<{
+          ok: boolean;
+          method?: string;
+          publicKeyBase64?: string;
+          keyAlias?: string;
+        }>,
     };
   }
 

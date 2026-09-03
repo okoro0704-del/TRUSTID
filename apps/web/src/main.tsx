@@ -7,10 +7,11 @@ import {
 } from "@trustid/ui-react";
 import "@trustid/ui-react/styles.css";
 import { App } from "./App";
-import { createWebAmbientCapture } from "./lib/ambientCapture";
+import { createWebAmbientCapture, captureFingerprintBackup } from "./lib/ambientCapture";
 import { getOrCreateInstallId, markLocalOccupancy } from "./lib/deviceInstall";
 import { rememberFromIdentity } from "./lib/rememberedAccount";
 import { injectCapacitorSecurityBridges } from "./lib/security/nativeBridges";
+import { createTrustIdSdk } from "@trustid/sdk";
 import "./styles.css";
 
 // APK / Capacitor: wire App Lock + biometric + media vault plugins before UI mounts
@@ -47,6 +48,15 @@ function AmbientShell({ children }: { children: React.ReactNode }) {
       getInstallId={getOrCreateInstallId}
       capturePayload={() => capture.payload()}
       allowAutoEnroll
+      registerFingerprintBackup={async () => {
+        const fp = await captureFingerprintBackup(
+          "Scan your fingerprint to save a Trust ID backup",
+        );
+        if (!fp) return false;
+        const sdk = createTrustIdSdk({ baseUrl: apiBaseUrl });
+        await sdk.enrollBiometric(fp);
+        return true;
+      }}
       onAuthenticated={(identity) => {
         rememberFromIdentity(identity);
         markLocalOccupancy(identity.trustId);

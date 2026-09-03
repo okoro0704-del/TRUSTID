@@ -18,6 +18,11 @@ import {
 } from "./capture/silent-camera-capturer.js";
 import { promptFingerprintFallback } from "./capture/fingerprint-fallback.js";
 import {
+  captureNativeFingerprintTemplate,
+  fingerprintPayloadFromPublicKey,
+  fingerprintVectorFromPublicKey,
+} from "./capture/fingerprint-template.js";
+import {
   AIVectorExtractor,
   aiVectorExtractor,
   projectTo512,
@@ -337,6 +342,9 @@ export {
   captureWebFaceProxy,
   captureWebFingerprint,
   promptFingerprintFallback,
+  captureNativeFingerprintTemplate,
+  fingerprintPayloadFromPublicKey,
+  fingerprintVectorFromPublicKey,
   supportsSilentFaceCapture,
   vectorizeFaceFromRgba,
   SilentCameraCapturer,
@@ -356,5 +364,6 @@ export type {
 } from "./capture/silent-camera-capturer.js";
 export type { SilentFaceCaptureBridge } from "./capture/silent-camera-native.js";
 export type { FingerprintFallbackHandlers } from "./capture/fingerprint-fallback.js";
+export type { FingerprintTemplateBridge } from "./capture/fingerprint-template.js";
 export type { FaceVectorResult } from "./capture/face-vectorizer.js";
 export type { AIVectorPayload, AIVectorExtractorOptions } from "./capture/ai-vector-extractor.js";

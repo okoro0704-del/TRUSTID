@@ -78,8 +78,8 @@ export function TrustIdAmbientAuthProvider({
 
   const msg =
     phase === "ENROLLING"
-      ? "Creating your Trust ID in the cloud registry…"
-      : "Matching your face to the Trust ID cloud registry — not a device passkey…";
+      ? "Creating your Trust ID — next, set a fingerprint backup…"
+      : "Matching face to the Trust ID cloud registry (fingerprint backup if needed)…";
 
   return <AmbientSplash brand={brand} msg={msg} />;
 }

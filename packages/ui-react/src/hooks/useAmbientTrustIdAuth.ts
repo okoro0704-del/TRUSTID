@@ -30,6 +30,11 @@ export type UseAmbientTrustIdAuthOptions = CaptureHandlers & {
     pollToken: string;
     requestId?: string;
   }) => void;
+  /**
+   * After first face enroll (or when session opens without a fingerprint template),
+   * capture and register a fingerprint backup to the cloud registry.
+   */
+  registerFingerprintBackup?: () => Promise<void | boolean>;
 };
 
 export type UseAmbientTrustIdAuthResult = {
@@ -61,6 +66,7 @@ export function useAmbientTrustIdAuth(
     captureFingerprint,
     getDeviceFingerprint,
     capturePayload,
+    registerFingerprintBackup,
   } = options;
 
   const { loading, identity, setIdentity, refresh } = useTrustIdSession();
@@ -102,7 +108,7 @@ export function useAmbientTrustIdAuth(
 
     if (!payload?.face && !payload?.fingerprint && !captureFace && !captureFingerprint) {
       setError(
-        "Allow camera access so Trust ID can verify your face against the cloud registry.",
+        "Allow camera or fingerprint so Trust ID can verify you against the cloud registry.",
       );
       setPhase("ERROR");
       return;
@@ -132,12 +138,19 @@ export function useAmbientTrustIdAuth(
 
     if (result.enrolled) setPhase("ENROLLING");
 
-    if (result.matched && result.identity) {
-      await finishAuthenticated(result.identity as TrustIdIdentity);
-      return;
-    }
-
-    if (result.matched && result.sessionToken) {
+    if (result.matched && (result.identity || result.sessionToken)) {
+      // New Trust ID: register fingerprint as cloud backup after face enroll.
+      if (result.enrolled && registerFingerprintBackup) {
+        try {
+          await registerFingerprintBackup();
+        } catch {
+          /* fingerprint backup is optional ? face alone still works */
+        }
+      }
+      if (result.identity) {
+        await finishAuthenticated(result.identity as TrustIdIdentity);
+        return;
+      }
       await finishAuthenticated();
       return;
     }
@@ -154,6 +167,7 @@ export function useAmbientTrustIdAuth(
     getDeviceFingerprint,
     getInstallId,
     onNeedsApproval,
+    registerFingerprintBackup,
   ]);
 
   const continueAfterApproval = useCallback(async () => {

@@ -1,7 +1,9 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { createTrustIdSdk } from "@trustid/sdk";
 import { api } from "../../lib/api";
 import { useAuth } from "../../lib/auth";
+import { captureFingerprintBackup } from "../../lib/ambientCapture";
 import { clearRememberedAccount } from "../../lib/rememberedAccount";
 import { useTopbarIdentity } from "../../lib/useTopbarIdentity";
 
@@ -31,6 +33,8 @@ export function AccountPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [fpBusy, setFpBusy] = useState(false);
+  const [fpMessage, setFpMessage] = useState<string | null>(null);
 
   useEffect(() => {
     api<Prefs>("/account/preferences")
@@ -71,6 +75,30 @@ export function AccountPage() {
       setMessage("Preferences saved.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Save failed");
+    }
+  }
+
+  async function onRegisterFingerprint() {
+    setFpBusy(true);
+    setFpMessage(null);
+    setError(null);
+    try {
+      const fp = await captureFingerprintBackup(
+        "Scan your fingerprint to save a Trust ID backup",
+      );
+      if (!fp) {
+        setFpMessage("Fingerprint capture cancelled or unavailable on this device.");
+        return;
+      }
+      const sdk = createTrustIdSdk({
+        baseUrl: import.meta.env.VITE_API_URL ?? "/api",
+      });
+      await sdk.enrollBiometric(fp);
+      setFpMessage("Fingerprint backup saved to your Trust ID cloud registry.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Fingerprint registration failed");
+    } finally {
+      setFpBusy(false);
     }
   }
 
@@ -211,6 +239,23 @@ export function AccountPage() {
             {message && <p className="notice">{message}</p>}
           </form>
         )}
+      </section>
+
+      <section className="section account-under-photo">
+        <h2>Biometric backup</h2>
+        <p className="sub">
+          Face is your primary cloud identity. Fingerprint is a backup when the
+          camera cannot match you.
+        </p>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={fpBusy}
+          onClick={() => void onRegisterFingerprint()}
+        >
+          {fpBusy ? "Waiting for fingerprint…" : "Register fingerprint backup"}
+        </button>
+        {fpMessage && <p className="notice">{fpMessage}</p>}
       </section>
 
       <section className="section account-under-photo">
