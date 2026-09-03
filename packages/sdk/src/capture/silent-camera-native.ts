@@ -67,13 +67,16 @@ export async function captureSilentFaceFromNative(
         const extractor = await getSharedAIVectorExtractor();
         const ai = await extractor.fromImageData(imageData);
         if (!ai) return null;
+        // Prefer JS presence/quality — never inflate with a loose native score.
+        const confidence = Math.min(result.confidence, ai.confidence);
         return {
-          confidence: Math.max(result.confidence, ai.confidence),
+          confidence,
           payload: {
             modality: BIOMETRIC_MODALITIES.FACE,
             vector: ai.vector,
             modelName: ai.modelName,
             modelVersion: ai.modelVersion,
+            confidence,
           },
         };
       } finally {

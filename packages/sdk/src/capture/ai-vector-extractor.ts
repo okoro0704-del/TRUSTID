@@ -1,8 +1,5 @@
-import {
-  BIOMETRIC_AI_EMBEDDING_DIMS,
-  BIOMETRIC_AI_MODEL_NAME,
-  BIOMETRIC_MODALITIES,
-} from "@trustid/shared";
+import { BIOMETRIC_AI_EMBEDDING_DIMS, BIOMETRIC_AI_MODEL_NAME, BIOMETRIC_MODALITIES } from "@trustid/shared";
+import { detectFacePresence } from "./face-presence.js";
 import { vectorizeFaceFromRgba } from "./face-vectorizer.js";
 
 export type AIVectorPayload = {
@@ -135,16 +132,24 @@ export class AIVectorExtractor {
   }
 
   async fromCameraStream(video: HTMLVideoElement): Promise<AIVectorPayload | null> {
-    const imageData = captureFrameFromVideo(video);
-    if (!imageData) return null;
-
-    try {
-      if (this.onnxSession) return await this.inferOnnx(imageData);
-      if (this.faceApiReady && this.faceApi) return await this.inferFaceApi(imageData);
-      return this.inferSpatial(imageData);
-    } finally {
-      imageData.data.fill(0);
+    // Retry a few frames so autofocus / exposure can settle — never accept an empty spin.
+    for (let attempt = 0; attempt < 6; attempt++) {
+      if (attempt > 0) {
+        await new Promise((r) => setTimeout(r, 180 + attempt * 80));
+      }
+      const imageData = captureFrameFromVideo(video);
+      if (!imageData) continue;
+      try {
+        let result: AIVectorPayload | null = null;
+        if (this.onnxSession) result = await this.inferOnnx(imageData);
+        else if (this.faceApiReady && this.faceApi) result = await this.inferFaceApi(imageData);
+        else result = this.inferSpatial(imageData);
+        if (result && result.confidence >= 0.42) return result;
+      } finally {
+        imageData.data.fill(0);
+      }
     }
+    return null;
   }
 
   async fromImageData(imageData: ImageData): Promise<AIVectorPayload | null> {
@@ -157,19 +162,29 @@ export class AIVectorExtractor {
     }
   }
 
-  private inferSpatial(imageData: ImageData): AIVectorPayload {
+  private inferSpatial(imageData: ImageData): AIVectorPayload | null {
+    const presence = detectFacePresence(
+      imageData.data,
+      imageData.width,
+      imageData.height,
+    );
+    if (!presence.present) return null;
+
     const { embedding, confidence } = vectorizeFaceFromRgba(
       imageData.data,
       imageData.width,
       imageData.height,
       BIOMETRIC_AI_EMBEDDING_DIMS,
     );
+    const score = Math.min(confidence, presence.confidence);
+    if (score < 0.42) return null;
+
     return {
       modality: BIOMETRIC_MODALITIES.FACE,
       vector: embedding,
       modelName: "spatial_fallback_v1",
       modelVersion: 1,
-      confidence,
+      confidence: score,
     };
   }
 
@@ -192,12 +207,14 @@ export class AIVectorExtractor {
     if (!detection) return this.inferSpatial(imageData);
 
     const descriptor = Array.from(detection.descriptor as ArrayLike<number>);
+    const score = detection.detection.score;
+    if (score < 0.5) return null;
     return {
       modality: BIOMETRIC_MODALITIES.FACE,
       vector: projectTo512(descriptor),
       modelName: BIOMETRIC_AI_MODEL_NAME,
       modelVersion: 1,
-      confidence: detection.detection.score,
+      confidence: score,
     };
   }
 

@@ -30,11 +30,49 @@ export function TrustIdAmbientAuthProvider({
   brand = "TrustID",
   ...options
 }: TrustIdAmbientAuthProviderProps) {
-  const { phase, error, retry, continueAfterApproval, lastResult } =
-    useAmbientTrustIdAuth(options);
+  const {
+    phase,
+    error,
+    retry,
+    confirmSwitchAccount,
+    continueAfterApproval,
+    lastResult,
+    previousTrustId,
+  } = useAmbientTrustIdAuth(options);
 
   if (phase === "AUTHENTICATED") {
     return <>{children}</>;
+  }
+
+  if (phase === "SWITCH_ACCOUNT") {
+    return (
+      <div className="tid-ambient-splash" role="status">
+        <div className="tid-ambient-splash-panel">
+          <h1 className="tid-silent-splash-brand">{brand}</h1>
+          <p className="tid-ambient-splash-msg">
+            Not the previous Trust ID
+            {previousTrustId ? ` (${previousTrustId})` : ""} that signed in on
+            this device.
+          </p>
+          <p className="tid-ambient-splash-msg">
+            Continue as{" "}
+            <strong>{lastResult?.trustId ?? "another account"}</strong>?
+          </p>
+          <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", justifyContent: "center" }}>
+            <button
+              type="button"
+              className="tid-btn tid-btn-primary"
+              onClick={confirmSwitchAccount}
+            >
+              Continue as this face
+            </button>
+            <button type="button" className="tid-btn" onClick={retry}>
+              Retry face
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   if (phase === "NEEDS_APPROVAL") {
@@ -79,7 +117,7 @@ export function TrustIdAmbientAuthProvider({
   const msg =
     phase === "ENROLLING"
       ? "Creating your Trust ID — next, set a fingerprint backup…"
-      : "Matching face to the Trust ID cloud registry (fingerprint backup if needed)…";
+      : "Looking at your face and matching the Trust ID cloud registry…";
 
   return <AmbientSplash brand={brand} msg={msg} />;
 }

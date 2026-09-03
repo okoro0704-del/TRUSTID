@@ -96,6 +96,7 @@ export async function captureSilentFaceFromWebCamera(
         vector: ai.vector,
         modelName: ai.modelName,
         modelVersion: ai.modelVersion,
+        confidence: ai.confidence,
       },
     };
   } catch {

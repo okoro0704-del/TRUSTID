@@ -32,6 +32,7 @@ import {
   aiVectorExtractor,
   projectTo512,
 } from "./capture/ai-vector-extractor.js";
+import { detectFacePresence } from "./capture/face-presence.js";
 import { vectorizeFaceFromRgba } from "./capture/face-vectorizer.js";
 import type { CaptureHandlers, MultiModalBiometricPayload } from "./capture/types.js";
 
@@ -44,6 +45,8 @@ export type BiometricPayload = {
   modelName?: string;
   modelVersion?: number;
   deviceFingerprint?: string;
+  /** Local face-presence / capture quality 0–1 */
+  confidence?: number;
 };
 
 export type ScanAndIdentifyResult = {
@@ -359,6 +362,7 @@ export {
   AIVectorExtractor,
   aiVectorExtractor,
   projectTo512,
+  detectFacePresence,
 };
 export type {
   AmbientAuthenticateOptions,
@@ -375,3 +379,4 @@ export type { FingerprintFallbackHandlers } from "./capture/fingerprint-fallback
 export type { FingerprintTemplateBridge } from "./capture/fingerprint-template.js";
 export type { FaceVectorResult } from "./capture/face-vectorizer.js";
 export type { AIVectorPayload, AIVectorExtractorOptions } from "./capture/ai-vector-extractor.js";
+export type { FacePresenceResult } from "./capture/face-presence.js";

@@ -22,6 +22,8 @@ export const biometricPayloadSchema = z
     modelName: z.string().max(64).optional(),
     modelVersion: z.number().int().positive().optional(),
     deviceFingerprint: z.string().min(8).max(256).optional(),
+    /** Client face-presence / quality score */
+    confidence: z.number().min(0).max(1).optional(),
   })
   .refine((b) => b.vector || b.embedding, {
     message: "Either vector (512-D) or embedding is required",

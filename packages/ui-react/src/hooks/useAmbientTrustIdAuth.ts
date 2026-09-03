@@ -13,6 +13,7 @@ export type AmbientAuthPhase =
   | "CHECKING"
   | "PROMPTING"
   | "ENROLLING"
+  | "SWITCH_ACCOUNT"
   | "NEEDS_APPROVAL"
   | "AUTHENTICATED"
   | "ERROR";
@@ -22,6 +23,8 @@ export type UseAmbientTrustIdAuthOptions = CaptureHandlers & {
   apiBaseUrl?: string;
   getInstallId?: () => Promise<string>;
   allowAutoEnroll?: boolean;
+  /** Last Trust ID that used this device (local memory only). */
+  getLastTrustId?: () => string | null;
   /** Pre-built multi-modal payload (cloud biometric only ? no device passkey probe) */
   capturePayload?: () => Promise<MultiModalBiometricPayload>;
   onAuthenticated?: (identity: TrustIdIdentity) => void;
@@ -42,8 +45,12 @@ export type UseAmbientTrustIdAuthResult = {
   identity: TrustIdIdentity | null;
   error: string | null;
   lastResult: AmbientSignInResult | null;
+  /** Previous local Trust ID when switching accounts */
+  previousTrustId: string | null;
   approvalPollToken: string | null;
   retry: () => void;
+  /** User confirms login as a different face than the last local user */
+  confirmSwitchAccount: () => void;
   /** Poll + claim master approval without re-running face capture */
   continueAfterApproval: () => void;
 };
@@ -59,6 +66,7 @@ export function useAmbientTrustIdAuth(
     enabled = true,
     apiBaseUrl = "/api",
     getInstallId,
+    getLastTrustId,
     onAuthenticated,
     onNeedsApproval,
     allowAutoEnroll = true,
@@ -73,10 +81,12 @@ export function useAmbientTrustIdAuth(
   const [phase, setPhase] = useState<AmbientAuthPhase>("CHECKING");
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<AmbientSignInResult | null>(null);
+  const [previousTrustId, setPreviousTrustId] = useState<string | null>(null);
   const [approvalPollToken, setApprovalPollToken] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
   const startedRef = useRef(false);
   const pollAbortRef = useRef(false);
+  const pendingResultRef = useRef<AmbientSignInResult | null>(null);
 
   const finishAuthenticated = useCallback(
     async (id?: TrustIdIdentity | null) => {
@@ -90,10 +100,49 @@ export function useAmbientTrustIdAuth(
     [onAuthenticated, refresh, setIdentity],
   );
 
+  const applyMatchedResult = useCallback(
+    async (result: AmbientSignInResult) => {
+      if (result.needsMasterApproval && result.approvalPollToken && result.trustId) {
+        setApprovalPollToken(result.approvalPollToken);
+        setPhase("NEEDS_APPROVAL");
+        onNeedsApproval?.({
+          trustId: result.trustId,
+          pollToken: result.approvalPollToken,
+          requestId: result.approvalRequestId,
+        });
+        return;
+      }
+
+      if (result.enrolled) setPhase("ENROLLING");
+
+      if (result.matched && (result.identity || result.sessionToken)) {
+        if (result.enrolled && registerFingerprintBackup) {
+          try {
+            await registerFingerprintBackup();
+          } catch {
+            /* fingerprint backup is optional ? face alone still works */
+          }
+        }
+        if (result.identity) {
+          await finishAuthenticated(result.identity as TrustIdIdentity);
+          return;
+        }
+        await finishAuthenticated();
+        return;
+      }
+
+      setError(result.error ?? "Biometric recognition failed");
+      setPhase("ERROR");
+    },
+    [finishAuthenticated, onNeedsApproval, registerFingerprintBackup],
+  );
+
   const runAmbient = useCallback(async () => {
     setPhase("PROMPTING");
     setError(null);
     setApprovalPollToken(null);
+    setPreviousTrustId(null);
+    pendingResultRef.current = null;
     clearStaleAuthCaches();
 
     const sdk = createTrustIdSdk({ baseUrl: apiBaseUrl });
@@ -106,9 +155,9 @@ export function useAmbientTrustIdAuth(
       payload = undefined;
     }
 
-    if (!payload?.face && !payload?.fingerprint && !captureFace && !captureFingerprint) {
+    if (!payload?.face) {
       setError(
-        "Allow camera or fingerprint so Trust ID can verify you against the cloud registry.",
+        "No face detected. Look straight at the camera so Trust ID can verify you.",
       );
       setPhase("ERROR");
       return;
@@ -125,50 +174,48 @@ export function useAmbientTrustIdAuth(
 
     setLastResult(result);
 
-    if (result.needsMasterApproval && result.approvalPollToken && result.trustId) {
-      setApprovalPollToken(result.approvalPollToken);
-      setPhase("NEEDS_APPROVAL");
-      onNeedsApproval?.({
-        trustId: result.trustId,
-        pollToken: result.approvalPollToken,
-        requestId: result.approvalRequestId,
-      });
+    if (!result.matched && result.error) {
+      setError(result.error);
+      setPhase("ERROR");
       return;
     }
 
-    if (result.enrolled) setPhase("ENROLLING");
-
-    if (result.matched && (result.identity || result.sessionToken)) {
-      // New Trust ID: register fingerprint as cloud backup after face enroll.
-      if (result.enrolled && registerFingerprintBackup) {
-        try {
-          await registerFingerprintBackup();
-        } catch {
-          /* fingerprint backup is optional ? face alone still works */
-        }
-      }
-      if (result.identity) {
-        await finishAuthenticated(result.identity as TrustIdIdentity);
-        return;
-      }
-      await finishAuthenticated();
+    const lastLocal = getLastTrustId?.() ?? null;
+    if (
+      result.matched &&
+      result.trustId &&
+      lastLocal &&
+      lastLocal !== result.trustId
+    ) {
+      pendingResultRef.current = result;
+      setPreviousTrustId(lastLocal);
+      setPhase("SWITCH_ACCOUNT");
       return;
     }
 
-    setError(result.error ?? "Biometric recognition failed");
-    setPhase("ERROR");
+    await applyMatchedResult(result);
   }, [
     allowAutoEnroll,
     apiBaseUrl,
+    applyMatchedResult,
     captureFace,
     captureFingerprint,
     capturePayload,
-    finishAuthenticated,
     getDeviceFingerprint,
     getInstallId,
-    onNeedsApproval,
-    registerFingerprintBackup,
+    getLastTrustId,
   ]);
+
+  const confirmSwitchAccount = useCallback(() => {
+    const pending = pendingResultRef.current;
+    if (!pending) {
+      startedRef.current = false;
+      setNonce((n) => n + 1);
+      return;
+    }
+    pendingResultRef.current = null;
+    void applyMatchedResult(pending);
+  }, [applyMatchedResult]);
 
   const continueAfterApproval = useCallback(async () => {
     const token = approvalPollToken;
@@ -296,6 +343,7 @@ export function useAmbientTrustIdAuth(
 
   const retry = useCallback(() => {
     startedRef.current = false;
+    pendingResultRef.current = null;
     clearStaleAuthCaches();
     setNonce((n) => n + 1);
   }, []);
@@ -305,8 +353,10 @@ export function useAmbientTrustIdAuth(
     identity,
     error,
     lastResult,
+    previousTrustId,
     approvalPollToken,
     retry,
+    confirmSwitchAccount,
     continueAfterApproval: () => {
       void continueAfterApproval();
     },

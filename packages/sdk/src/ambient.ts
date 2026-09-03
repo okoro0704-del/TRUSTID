@@ -50,8 +50,21 @@ export async function ambientAuthenticate(
       getDeviceFingerprint: options.getDeviceFingerprint,
     }));
 
-  if (!payload.face && !payload.fingerprint) {
-    return { matched: false, error: "No biometric sensor available for this device" };
+  if (!payload.face?.vector && !payload.face?.embedding) {
+    return {
+      matched: false,
+      error:
+        "No face detected. Look straight at the camera so Trust ID can verify you.",
+    };
+  }
+
+  const faceConfidence = payload.face.confidence;
+  if (faceConfidence != null && faceConfidence < 0.5) {
+    return {
+      matched: false,
+      error:
+        "Face signal too weak. Hold still and look at the camera.",
+    };
   }
 
   try {

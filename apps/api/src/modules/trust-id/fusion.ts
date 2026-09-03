@@ -313,6 +313,23 @@ export async function ambientSignInAndSession(input: {
   ip?: string;
   userAgent?: string;
 }) {
+  // Face is mandatory for ambient identity — fingerprint alone cannot mint or match.
+  const hasFace = Boolean(
+    input.payload.face?.vector || input.payload.face?.embedding,
+  );
+  if (!hasFace) {
+    return {
+      matched: false as const,
+      fusion: {
+        matched: false,
+        accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
+        isMasterDevice: false,
+      },
+      error:
+        "No face detected. Look straight at the camera so Trust ID can verify you.",
+    };
+  }
+
   let fusion = await matchMultiModalFusion({
     payload: input.payload,
     installId: input.installId,
@@ -322,7 +339,37 @@ export async function ambientSignInAndSession(input: {
 
   let enrolled = false;
 
+  // Refuse to mint a Trust ID from a blank / no-face camera frame.
+  const faceConfidence = input.payload.face?.confidence;
+  const faceOk =
+    hasFace && (faceConfidence == null || faceConfidence >= 0.5);
+
   if (!fusion.matched && input.allowAutoEnroll) {
+    if (!faceOk) {
+      return {
+        matched: false as const,
+        fusion,
+        error:
+          "No face detected. Look straight at the camera so Trust ID can verify you.",
+      };
+    }
+
+    // Same phone already bound to someone — do not silently create a second identity.
+    if (input.installId) {
+      try {
+        const occ = await getInstallOccupancy(input.installId);
+        if (occ.occupied) {
+          return {
+            matched: false as const,
+            fusion,
+            error: `Face not recognized as ${occ.trustId}. Position the correct face, or clear this device to enroll a new Trust ID.`,
+          };
+        }
+      } catch {
+        /* invalid install id — continue */
+      }
+    }
+
     const created = await autoEnrollFromBiometrics({
       payload: input.payload,
       installId: input.installId,
@@ -334,8 +381,8 @@ export async function ambientSignInAndSession(input: {
       userId: created.userId,
       trustId: created.trustId,
       fusionScore: 1,
-      matchedModality: input.payload.face ? "face" : "fingerprint",
-      isFaceMatched: Boolean(input.payload.face),
+      matchedModality: "face",
+      isFaceMatched: true,
       isFingerprintMatched: Boolean(input.payload.fingerprint),
       accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
       isMasterDevice: false,

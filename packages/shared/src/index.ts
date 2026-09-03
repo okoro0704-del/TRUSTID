@@ -398,5 +398,5 @@ export const BIOMETRIC_AI_MODEL_NAME = "mobile_facenet_v1";
 /** pgvector cosine distance threshold for high-confidence AI match */
 export const BIOMETRIC_PGVECTOR_MAX_DISTANCE = 0.35;
 
-/** Minimum local confidence score before fingerprint fallback is invoked */
-export const BIOMETRIC_FACE_CAPTURE_MIN_CONFIDENCE = 0.35;
+/** Minimum local confidence + face-presence score before login/enroll */
+export const BIOMETRIC_FACE_CAPTURE_MIN_CONFIDENCE = 0.55;

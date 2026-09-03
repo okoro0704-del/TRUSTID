@@ -9,7 +9,7 @@ import "@trustid/ui-react/styles.css";
 import { App } from "./App";
 import { createWebAmbientCapture, captureFingerprintBackup } from "./lib/ambientCapture";
 import { getOrCreateInstallId, markLocalOccupancy } from "./lib/deviceInstall";
-import { rememberFromIdentity } from "./lib/rememberedAccount";
+import { getRememberedAccount, rememberFromIdentity } from "./lib/rememberedAccount";
 import { injectCapacitorSecurityBridges } from "./lib/security/nativeBridges";
 import { createTrustIdSdk } from "@trustid/sdk";
 import "./styles.css";
@@ -46,6 +46,7 @@ function AmbientShell({ children }: { children: React.ReactNode }) {
     <TrustIdAmbientAuthProvider
       apiBaseUrl={apiBaseUrl}
       getInstallId={getOrCreateInstallId}
+      getLastTrustId={() => getRememberedAccount()?.trustId ?? null}
       capturePayload={() => capture.payload()}
       allowAutoEnroll
       registerFingerprintBackup={async () => {
