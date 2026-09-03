@@ -13,6 +13,7 @@ import {
   verifyBiometricRequestSchema,
   verifyMasterDeviceSchema,
   ambientSignInRequestSchema,
+  faceLookupRequestSchema,
 } from "../modules/trust-id/schemas.js";
 import {
   approveMasterChallenge,
@@ -23,6 +24,7 @@ import {
   verifyBiometricAndSession,
   verifyMasterDeviceBinding,
 } from "../modules/trust-id/index.js";
+import { BIOMETRIC_MODALITIES } from "@trustid/shared";
 
 function httpError(err: unknown, reply: import("fastify").FastifyReply) {
   const e = err as { statusCode?: number; message?: string; code?: string };
@@ -41,6 +43,94 @@ function sessionBody(token: string | undefined) {
 }
 
 export async function trustIdRoutes(app: FastifyInstance) {
+  /**
+   * Launch lookup only — never enrolls.
+   * MATCH_FOUND may issue a session (or master-approval pending).
+   * NOT_FOUND requires explicit client consent before ambient enroll.
+   */
+  app.post("/v1/identity/face-lookup", async (req, reply) => {
+    const body = faceLookupRequestSchema.parse(req.body ?? {});
+    const face = body.face ?? {
+      modality: BIOMETRIC_MODALITIES.FACE,
+      vector: body.faceVector,
+      confidence: body.confidence,
+      modelName: body.modelName,
+      modelVersion: body.modelVersion,
+      deviceFingerprint: body.deviceFingerprint,
+    };
+
+    if (!face.vector && !("embedding" in face && face.embedding)) {
+      return reply.code(400).send({
+        error: "invalid_request",
+        message: "Biometric vector payload missing.",
+      });
+    }
+
+    try {
+      const result = await ambientSignInAndSession({
+        payload: {
+          face: {
+            modality: BIOMETRIC_MODALITIES.FACE,
+            vector: face.vector,
+            embedding: "embedding" in face ? face.embedding : undefined,
+            confidence: face.confidence,
+            modelName: face.modelName,
+            modelVersion: face.modelVersion,
+            deviceFingerprint: face.deviceFingerprint ?? body.deviceFingerprint,
+          },
+        },
+        allowAutoEnroll: false,
+        installId: body.installId,
+        ...clientMeta(req),
+      });
+
+      if (!result.matched) {
+        if (result.error && /no face/i.test(result.error)) {
+          return reply.code(400).send({
+            error: "no_face",
+            message: result.error,
+          });
+        }
+        return {
+          status: "NOT_FOUND" as const,
+          message: "No Trust ID record matches this facial scan.",
+          canRegister: true,
+        };
+      }
+
+      if (result.needsMasterApproval) {
+        return {
+          status: "PENDING_MASTER_APPROVAL" as const,
+          trustId: result.trustId,
+          approvalPollToken: result.approvalPollToken,
+          approvalRequestId: result.approvalRequestId,
+          user: result.trustId
+            ? { trustId: result.trustId, displayName: result.trustId }
+            : undefined,
+        };
+      }
+
+      if (result.sessionToken) {
+        setSessionCookie(reply, result.sessionToken);
+      }
+
+      return {
+        status: "MATCH_FOUND" as const,
+        trustId: result.trustId,
+        user: {
+          trustId: result.trustId,
+          displayName: result.trustId,
+        },
+        identity: result.identity,
+        isMasterDevice: result.isMasterDevice,
+        ...sessionBody(result.sessionToken),
+        token: config.exposeSessionTokenInBody ? result.sessionToken : undefined,
+      };
+    } catch (err) {
+      return httpError(err, reply);
+    }
+  });
+
   /** Zero-UI ambient multi-modal sign-in with fusion matching. */
   app.post("/v1/trust-id/ambient-signin", async (req, reply) => {
     const body = ambientSignInRequestSchema.parse(req.body ?? {});

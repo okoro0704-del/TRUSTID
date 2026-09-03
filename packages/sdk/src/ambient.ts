@@ -29,6 +29,21 @@ export type AmbientSignInResult = {
   error?: string;
 };
 
+export type FaceLookupResult = {
+  status: "MATCH_FOUND" | "NOT_FOUND" | "PENDING_MASTER_APPROVAL";
+  message?: string;
+  canRegister?: boolean;
+  trustId?: string;
+  user?: { trustId?: string; displayName?: string };
+  identity?: unknown;
+  sessionToken?: string;
+  token?: string;
+  isMasterDevice?: boolean;
+  needsMasterApproval?: boolean;
+  approvalPollToken?: string;
+  approvalRequestId?: string;
+};
+
 type AmbientSdkLike = {
   ambientSignIn(
     payload: MultiModalBiometricPayload & {

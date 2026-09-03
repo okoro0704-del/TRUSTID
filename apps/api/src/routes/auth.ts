@@ -6,6 +6,7 @@ import {
   clientMeta,
   requireSession,
   setSessionCookie,
+  tryResolveSession,
 } from "../lib/auth-context.js";
 import { registerIdentity, verifyContact } from "../modules/authentication/service.js";
 import {
@@ -366,8 +367,30 @@ export async function authRoutes(app: FastifyInstance) {
     return { authenticated: true, identity, sessionId: req.auth!.sessionId };
   });
 
-  app.post("/auth/logout", { preHandler: requireSession }, async (req, reply) => {
-    await revokeSession(req.auth!.sessionId!, req.auth!.userId, clientMeta(req));
+  app.post("/auth/logout", async (req, reply) => {
+    // Instant logout: revoke if possible, always clear cookie — no biometric gate.
+    const auth = await tryResolveSession(req);
+    if (auth?.sessionId) {
+      try {
+        await revokeSession(auth.sessionId, auth.userId, clientMeta(req));
+      } catch {
+        /* ignore revoke races */
+      }
+    }
+    clearSessionCookie(reply);
+    return { ok: true };
+  });
+
+  /** Alias for clients that call /v1/auth/logout */
+  app.post("/v1/auth/logout", async (req, reply) => {
+    const auth = await tryResolveSession(req);
+    if (auth?.sessionId) {
+      try {
+        await revokeSession(auth.sessionId, auth.userId, clientMeta(req));
+      } catch {
+        /* ignore revoke races */
+      }
+    }
     clearSessionCookie(reply);
     return { ok: true };
   });

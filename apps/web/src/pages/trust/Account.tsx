@@ -105,19 +105,15 @@ export function AccountPage() {
   async function onLogout() {
     setLoggingOut(true);
     setError(null);
+    clearRememberedAccount();
     try {
-      clearRememberedAccount();
-      try {
-        sessionStorage.setItem("trustid.explicitLogout", "1");
-      } catch {
-        /* ignore */
-      }
-      await logout();
-      navigate("/dashboard", { replace: true });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Sign out failed");
-      setLoggingOut(false);
+      sessionStorage.setItem("trustid.explicitLogout", "1");
+    } catch {
+      /* ignore */
     }
+    // Instant — no face scan; navigate immediately while revoke runs in background.
+    void logout();
+    navigate("/dashboard", { replace: true });
   }
 
   const displayName =

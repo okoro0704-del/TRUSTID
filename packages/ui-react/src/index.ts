@@ -33,6 +33,8 @@ export type { TrustIdSmartAuthGuardProps } from "./components/TrustIdSmartAuthGu
 
 export { TrustIdAmbientAuthProvider } from "./components/TrustIdAmbientAuthProvider.js";
 export type { TrustIdAmbientAuthProviderProps } from "./components/TrustIdAmbientAuthProvider.js";
+export { RegistrationPromptModal } from "./components/RegistrationPromptModal.js";
+export type { RegistrationPromptModalProps } from "./components/RegistrationPromptModal.js";
 
 export {
   useAmbientTrustIdAuth,

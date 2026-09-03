@@ -13,6 +13,7 @@ import {
   resolveRealtimeUrl,
   type TrustIdApiClient,
 } from "../api/client.js";
+import { clearStaleAuthCaches } from "../lib/silentAuth.js";
 import type {
   DeviceApprovalEvent,
   RealtimeConnectionState,
@@ -76,17 +77,23 @@ export function TrustIdAuthProvider({
     }
   }, [apiClient, setIdentity]);
 
-  const logout = useCallback(async () => {
-    try {
-      await apiClient.fetch("/auth/logout", { method: "POST" });
-    } finally {
-      setIdentity(null);
-    }
-  }, [apiClient, setIdentity]);
-
   const clearApprovalEvents = useCallback(() => {
     setApprovalEvents([]);
   }, []);
+
+  const logout = useCallback(async () => {
+    // Instant facial-free logout: clear local session state first, revoke in background.
+    setIdentity(null);
+    clearApprovalEvents();
+    try {
+      clearStaleAuthCaches();
+    } catch {
+      /* ignore */
+    }
+    void apiClient.fetch("/auth/logout", { method: "POST" }).catch(() => {
+      /* background revoke — local clear already done */
+    });
+  }, [apiClient, clearApprovalEvents, setIdentity]);
 
   useEffect(() => {
     refresh().finally(() => setLoading(false));

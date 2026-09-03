@@ -5,7 +5,7 @@ import {
   type TrustIdAccessLevel,
 } from "@trustid/shared";
 import { ambientAuthenticate } from "./ambient.js";
-import type { AmbientAuthenticateOptions, AmbientSignInResult } from "./ambient.js";
+import type { AmbientAuthenticateOptions, AmbientSignInResult, FaceLookupResult } from "./ambient.js";
 import { captureSingleBiometric } from "./capture/single-modal.js";
 import { captureMultiModal } from "./capture/multi-modal.js";
 import { detectDeviceBiometricContext } from "./capture/device-context.js";
@@ -170,6 +170,25 @@ export class TrustIdSdk {
       approvalRequestId: data.approvalRequestId,
       offerSaveDeviceKey: data.offerSaveDeviceKey,
     };
+  }
+
+  /**
+   * Launch-time face lookup — never creates an account.
+   * NOT_FOUND requires explicit user consent before ambient enroll.
+   */
+  async faceLookup(input: {
+    face: MultiModalBiometricPayload["face"];
+    installId?: string;
+    deviceFingerprint?: string;
+  }): Promise<import("./ambient.js").FaceLookupResult> {
+    return this.api("/v1/identity/face-lookup", {
+      method: "POST",
+      body: JSON.stringify({
+        face: input.face,
+        installId: input.installId,
+        deviceFingerprint: input.deviceFingerprint,
+      }),
+    });
   }
 
   async pollDeviceApproval(pollToken: string): Promise<{
@@ -367,6 +386,7 @@ export {
 export type {
   AmbientAuthenticateOptions,
   AmbientSignInResult,
+  FaceLookupResult,
 } from "./ambient.js";
 export type { CaptureHandlers, MultiModalBiometricPayload } from "./capture/types.js";
 export type { DeviceBiometricContext, DevicePlatform } from "./capture/device-context.js";

@@ -13,6 +13,7 @@ import type { TrustIdIdentity } from "../types.js";
 export type AmbientAuthPhase =
   | "CHECKING"
   | "PROMPTING"
+  | "OFFER_CREATE"
   | "ENROLLING"
   | "SWITCH_ACCOUNT"
   | "NEEDS_APPROVAL"
@@ -23,10 +24,12 @@ export type UseAmbientTrustIdAuthOptions = CaptureHandlers & {
   enabled?: boolean;
   apiBaseUrl?: string;
   getInstallId?: () => Promise<string>;
+  /**
+   * When true, boot may auto-create without consent (legacy).
+   * Default false — NOT_FOUND shows an explicit create prompt first.
+   */
   allowAutoEnroll?: boolean;
-  /** Last Trust ID that used this device (local memory only). */
   getLastTrustId?: () => string | null;
-  /** Pre-built multi-modal payload (cloud biometric only ? no device passkey probe) */
   capturePayload?: () => Promise<MultiModalBiometricPayload>;
   onAuthenticated?: (identity: TrustIdIdentity) => void;
   onNeedsApproval?: (info: {
@@ -34,10 +37,6 @@ export type UseAmbientTrustIdAuthOptions = CaptureHandlers & {
     pollToken: string;
     requestId?: string;
   }) => void;
-  /**
-   * After first face enroll (or when session opens without a fingerprint template),
-   * capture and register a fingerprint backup to the cloud registry.
-   */
   registerFingerprintBackup?: () => Promise<void | boolean>;
 };
 
@@ -46,19 +45,19 @@ export type UseAmbientTrustIdAuthResult = {
   identity: TrustIdIdentity | null;
   error: string | null;
   lastResult: AmbientSignInResult | null;
-  /** Previous local Trust ID when switching accounts */
   previousTrustId: string | null;
   approvalPollToken: string | null;
   retry: () => void;
-  /** User confirms login as a different face than the last local user */
   confirmSwitchAccount: () => void;
-  /** Poll + claim master approval without re-running face capture */
+  /** User accepted "create new Trust ID" after NOT_FOUND lookup */
+  confirmCreateAccount: () => void;
+  /** User declined create prompt */
+  declineCreateAccount: () => void;
   continueAfterApproval: () => void;
 };
 
 /**
- * Identity-first ambient auth ? cloud biometric match before any device key.
- * Does not probe local passkeys on boot.
+ * Identity-first ambient auth — lookup on boot, enroll only after explicit consent.
  */
 export function useAmbientTrustIdAuth(
   options: UseAmbientTrustIdAuthOptions = {},
@@ -70,7 +69,7 @@ export function useAmbientTrustIdAuth(
     getLastTrustId,
     onAuthenticated,
     onNeedsApproval,
-    allowAutoEnroll = true,
+    allowAutoEnroll = false,
     captureFace,
     captureFingerprint,
     getDeviceFingerprint,
@@ -88,6 +87,8 @@ export function useAmbientTrustIdAuth(
   const startedRef = useRef(false);
   const pollAbortRef = useRef(false);
   const pendingResultRef = useRef<AmbientSignInResult | null>(null);
+  const pendingPayloadRef = useRef<MultiModalBiometricPayload | null>(null);
+  const pendingInstallRef = useRef<string | undefined>(undefined);
 
   const finishAuthenticated = useCallback(
     async (id?: TrustIdIdentity | null) => {
@@ -121,7 +122,7 @@ export function useAmbientTrustIdAuth(
           try {
             await registerFingerprintBackup();
           } catch {
-            /* fingerprint backup is optional ? face alone still works */
+            /* optional */
           }
         }
         if (result.identity) {
@@ -144,10 +145,12 @@ export function useAmbientTrustIdAuth(
     setApprovalPollToken(null);
     setPreviousTrustId(null);
     pendingResultRef.current = null;
-    clearStaleAuthCaches();
+    pendingPayloadRef.current = null;
+    // Do not clear remembered account on every boot probe — only on logout.
 
     const sdk = createTrustIdSdk({ baseUrl: apiBaseUrl });
     const installId = getInstallId ? await getInstallId() : undefined;
+    pendingInstallRef.current = installId;
 
     let payload: MultiModalBiometricPayload | undefined;
     try {
@@ -164,22 +167,56 @@ export function useAmbientTrustIdAuth(
       return;
     }
 
-    const result = await sdk.ambientAuthenticate({
-      captureFace,
-      captureFingerprint,
-      getDeviceFingerprint,
-      payload,
-      allowAutoEnroll,
+    pendingPayloadRef.current = payload;
+
+    // Lookup-only first — never writes a new Trust ID until user consents.
+    const lookup = await sdk.faceLookup({
+      face: payload.face,
       installId,
+      deviceFingerprint: payload.deviceFingerprint,
     });
 
-    setLastResult(result);
-
-    if (!result.matched && result.error) {
-      setError(result.error);
-      setPhase("ERROR");
+    if (lookup.status === "NOT_FOUND") {
+      if (allowAutoEnroll) {
+        const result = await sdk.ambientAuthenticate({
+          captureFace,
+          captureFingerprint,
+          getDeviceFingerprint,
+          payload,
+          allowAutoEnroll: true,
+          installId,
+        });
+        setLastResult(result);
+        await applyMatchedResult(result);
+        return;
+      }
+      setPhase("OFFER_CREATE");
       return;
     }
+
+    if (lookup.status === "PENDING_MASTER_APPROVAL") {
+      const result: AmbientSignInResult = {
+        matched: true,
+        trustId: lookup.trustId,
+        needsMasterApproval: true,
+        approvalPollToken: lookup.approvalPollToken,
+        approvalRequestId: lookup.approvalRequestId,
+        identity: lookup.identity,
+      };
+      setLastResult(result);
+      await applyMatchedResult(result);
+      return;
+    }
+
+    // MATCH_FOUND
+    const result: AmbientSignInResult = {
+      matched: true,
+      trustId: lookup.trustId ?? lookup.user?.trustId,
+      identity: lookup.identity,
+      sessionToken: lookup.sessionToken ?? lookup.token,
+      isMasterDevice: lookup.isMasterDevice,
+    };
+    setLastResult(result);
 
     const lastLocal = getLastTrustId?.() ?? null;
     if (
@@ -206,6 +243,45 @@ export function useAmbientTrustIdAuth(
     getInstallId,
     getLastTrustId,
   ]);
+
+  const confirmCreateAccount = useCallback(() => {
+    const payload = pendingPayloadRef.current;
+    if (!payload?.face) {
+      startedRef.current = false;
+      setNonce((n) => n + 1);
+      return;
+    }
+    setPhase("ENROLLING");
+    setError(null);
+    void (async () => {
+      const sdk = createTrustIdSdk({ baseUrl: apiBaseUrl });
+      const result = await sdk.ambientAuthenticate({
+        captureFace,
+        captureFingerprint,
+        getDeviceFingerprint,
+        payload,
+        allowAutoEnroll: true,
+        installId: pendingInstallRef.current,
+      });
+      setLastResult(result);
+      await applyMatchedResult(result);
+    })().catch((e) => {
+      setError(e instanceof Error ? e.message : "Could not create Trust ID");
+      setPhase("ERROR");
+    });
+  }, [
+    apiBaseUrl,
+    applyMatchedResult,
+    captureFace,
+    captureFingerprint,
+    getDeviceFingerprint,
+  ]);
+
+  const declineCreateAccount = useCallback(() => {
+    pendingPayloadRef.current = null;
+    setError("No Trust ID was created. Scan again when you are ready.");
+    setPhase("ERROR");
+  }, []);
 
   const confirmSwitchAccount = useCallback(() => {
     const pending = pendingResultRef.current;
@@ -274,7 +350,6 @@ export function useAmbientTrustIdAuth(
       return;
     }
 
-    // After logout identity is null ? clear stale AUTHENTICATED and re-run cloud match.
     if (phase === "AUTHENTICATED") {
       setPhase("PROMPTING");
       startedRef.current = false;
@@ -283,7 +358,6 @@ export function useAmbientTrustIdAuth(
     if (startedRef.current && nonce === 0) return;
     startedRef.current = true;
 
-    // Brief delay so Android WebView / permissions settle before camera.
     const t = window.setTimeout(() => {
       void runAmbient().catch((e) => {
         setError(e instanceof Error ? e.message : "Ambient auth failed");
@@ -294,7 +368,6 @@ export function useAmbientTrustIdAuth(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, loading, identity, nonce]);
 
-  // Auto-poll while waiting for master approval (+ guest WebSocket fallback)
   useEffect(() => {
     if (phase !== "NEEDS_APPROVAL" || !approvalPollToken) return;
     pollAbortRef.current = false;
@@ -346,7 +419,6 @@ export function useAmbientTrustIdAuth(
       }
     };
 
-    // Guest WS for instant LOGIN_APPROVAL_RESULT (HTTP poll remains fallback)
     if (typeof WebSocket !== "undefined") {
       try {
         guestWs = new WebSocket(
@@ -378,7 +450,7 @@ export function useAmbientTrustIdAuth(
           }
         };
       } catch {
-        /* guest ws optional */
+        /* optional */
       }
     }
 
@@ -393,7 +465,7 @@ export function useAmbientTrustIdAuth(
   const retry = useCallback(() => {
     startedRef.current = false;
     pendingResultRef.current = null;
-    clearStaleAuthCaches();
+    pendingPayloadRef.current = null;
     setNonce((n) => n + 1);
   }, []);
 
@@ -406,6 +478,8 @@ export function useAmbientTrustIdAuth(
     approvalPollToken,
     retry,
     confirmSwitchAccount,
+    confirmCreateAccount,
+    declineCreateAccount,
     continueAfterApproval: () => {
       void continueAfterApproval();
     },

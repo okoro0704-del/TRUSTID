@@ -87,5 +87,19 @@ export const ambientSignInRequestSchema = multiModalPayloadSchema
     message: "At least one biometric modality (face or fingerprint) is required",
   });
 
+/** Lookup-only face scan — never creates an account. */
+export const faceLookupRequestSchema = z.object({
+  face: biometricPayloadSchema.optional(),
+  faceVector: vectorSchema.optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  modelName: z.string().max(64).optional(),
+  modelVersion: z.number().int().positive().optional(),
+  installId: z.string().min(1).max(80).optional(),
+  deviceFingerprint: z.string().min(8).max(256).optional(),
+}).refine((b) => Boolean(b.face || b.faceVector), {
+  message: "face or faceVector is required",
+});
+
 export type MultiModalPayload = z.infer<typeof multiModalPayloadSchema>;
 export type AmbientSignInRequest = z.infer<typeof ambientSignInRequestSchema>;
+export type FaceLookupRequest = z.infer<typeof faceLookupRequestSchema>;

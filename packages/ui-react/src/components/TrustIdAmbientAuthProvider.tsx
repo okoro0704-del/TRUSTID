@@ -3,6 +3,7 @@ import {
   useAmbientTrustIdAuth,
   type UseAmbientTrustIdAuthOptions,
 } from "../hooks/useAmbientTrustIdAuth.js";
+import { RegistrationPromptModal } from "./RegistrationPromptModal.js";
 
 export type TrustIdAmbientAuthProviderProps = UseAmbientTrustIdAuthOptions & {
   children: ReactNode;
@@ -23,7 +24,7 @@ function AmbientSplash({ brand, msg }: { brand: string; msg: string }) {
 }
 
 /**
- * Global identity-first auth shell — cloud biometric before any device key.
+ * Global identity-first auth shell — lookup before any enroll write.
  */
 export function TrustIdAmbientAuthProvider({
   children,
@@ -35,6 +36,8 @@ export function TrustIdAmbientAuthProvider({
     error,
     retry,
     confirmSwitchAccount,
+    confirmCreateAccount,
+    declineCreateAccount,
     continueAfterApproval,
     lastResult,
     previousTrustId,
@@ -42,6 +45,22 @@ export function TrustIdAmbientAuthProvider({
 
   if (phase === "AUTHENTICATED") {
     return <>{children}</>;
+  }
+
+  if (phase === "OFFER_CREATE") {
+    return (
+      <>
+        <AmbientSplash
+          brand={brand}
+          msg="No matching Trust ID on the network for this face."
+        />
+        <RegistrationPromptModal
+          isOpen
+          onAccept={confirmCreateAccount}
+          onDecline={declineCreateAccount}
+        />
+      </>
+    );
   }
 
   if (phase === "SWITCH_ACCOUNT") {

@@ -48,7 +48,7 @@ function AmbientShell({ children }: { children: React.ReactNode }) {
       getInstallId={getOrCreateInstallId}
       getLastTrustId={() => getRememberedAccount()?.trustId ?? null}
       capturePayload={() => capture.payload()}
-      allowAutoEnroll
+      allowAutoEnroll={false}
       registerFingerprintBackup={async () => {
         const fp = await captureFingerprintBackup(
           "Scan your fingerprint to save a Trust ID backup",
