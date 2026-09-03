@@ -116,21 +116,45 @@ export function TrustIdAuthProvider({
       ws.onmessage = (ev) => {
         try {
           const msg = JSON.parse(String(ev.data)) as Record<string, unknown>;
-          if (msg.type === "pong") return;
-          if (
-            msg.type === "approval_created" ||
-            msg.type === "approval_updated"
-          ) {
-            const event: DeviceApprovalEvent = {
-              type: msg.type,
-              requestId: String(msg.requestId ?? ""),
-              status: String(msg.status ?? "pending"),
-              deviceName:
-                typeof msg.deviceName === "string" ? msg.deviceName : undefined,
-              at: String(msg.at ?? new Date().toISOString()),
-            };
-            setApprovalEvents((prev) => [event, ...prev].slice(0, 50));
-          }
+          if (msg.type === "pong" || msg.type === "connected") return;
+
+          const rawType = String(msg.type ?? "");
+          const normalized =
+            rawType === "approval.created" || rawType === "DEVICE_APPROVAL_REQUEST"
+              ? ("approval_created" as const)
+              : rawType === "approval.state" || rawType === "approval_updated"
+                ? ("approval_updated" as const)
+                : rawType === "approval.resolved" || rawType === "LOGIN_APPROVAL_RESULT"
+                  ? ("approval_resolved" as const)
+                  : null;
+
+          if (!normalized && rawType !== "DEVICE_APPROVAL_REQUEST") return;
+
+          const event: DeviceApprovalEvent = {
+            type:
+              rawType === "DEVICE_APPROVAL_REQUEST"
+                ? "DEVICE_APPROVAL_REQUEST"
+                : rawType === "LOGIN_APPROVAL_RESULT"
+                  ? "LOGIN_APPROVAL_RESULT"
+                  : (normalized as DeviceApprovalEvent["type"]),
+            requestId: String(msg.requestId ?? ""),
+            status: String(msg.status ?? "pending"),
+            deviceName:
+              typeof msg.deviceName === "string" ? msg.deviceName : undefined,
+            applicationName:
+              typeof msg.applicationName === "string"
+                ? msg.applicationName
+                : undefined,
+            ipAddress:
+              typeof msg.ip === "string"
+                ? msg.ip
+                : typeof msg.ipAddress === "string"
+                  ? msg.ipAddress
+                  : undefined,
+            at: String(msg.at ?? new Date().toISOString()),
+          };
+          if (!event.requestId) return;
+          setApprovalEvents((prev) => [event, ...prev].slice(0, 50));
         } catch {
           /* ignore malformed frames */
         }

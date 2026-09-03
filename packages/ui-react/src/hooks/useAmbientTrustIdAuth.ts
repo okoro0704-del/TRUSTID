@@ -5,6 +5,7 @@ import {
   type CaptureHandlers,
   type MultiModalBiometricPayload,
 } from "@trustid/sdk";
+import { resolveGuestRealtimeUrl } from "../api/client.js";
 import { useTrustIdAuth as useTrustIdSession } from "../context/TrustIdAuthProvider.js";
 import { clearStaleAuthCaches } from "../lib/silentAuth.js";
 import type { TrustIdIdentity } from "../types.js";
@@ -293,11 +294,29 @@ export function useAmbientTrustIdAuth(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, loading, identity, nonce]);
 
-  // Auto-poll while waiting for master approval
+  // Auto-poll while waiting for master approval (+ guest WebSocket fallback)
   useEffect(() => {
     if (phase !== "NEEDS_APPROVAL" || !approvalPollToken) return;
     pollAbortRef.current = false;
     let timer: number | undefined;
+    let guestWs: WebSocket | null = null;
+
+    const claimNow = async () => {
+      if (pollAbortRef.current) return;
+      try {
+        const sdk = createTrustIdSdk({ baseUrl: apiBaseUrl });
+        const claim = await sdk.claimDeviceApproval(approvalPollToken);
+        if (claim.identity) {
+          await finishAuthenticated(claim.identity as TrustIdIdentity);
+          return;
+        }
+        if (claim.sessionToken || claim.mode === "ambient" || claim.mode === "temporary") {
+          await finishAuthenticated();
+        }
+      } catch {
+        /* keep waiting */
+      }
+    };
 
     const tick = async () => {
       if (pollAbortRef.current) return;
@@ -306,15 +325,8 @@ export function useAmbientTrustIdAuth(
         const poll = await sdk.pollDeviceApproval(approvalPollToken);
         if (pollAbortRef.current) return;
         if (poll.status === "approved" || poll.status === "temporary") {
-          const claim = await sdk.claimDeviceApproval(approvalPollToken);
-          if (claim.identity) {
-            await finishAuthenticated(claim.identity as TrustIdIdentity);
-            return;
-          }
-          if (claim.sessionToken || claim.mode === "ambient" || claim.mode === "temporary") {
-            await finishAuthenticated();
-            return;
-          }
+          await claimNow();
+          return;
         }
         if (poll.status === "declined" || poll.status === "expired") {
           setError(
@@ -334,10 +346,47 @@ export function useAmbientTrustIdAuth(
       }
     };
 
+    // Guest WS for instant LOGIN_APPROVAL_RESULT (HTTP poll remains fallback)
+    if (typeof WebSocket !== "undefined") {
+      try {
+        guestWs = new WebSocket(
+          resolveGuestRealtimeUrl(apiBaseUrl, approvalPollToken),
+        );
+        guestWs.onmessage = (ev) => {
+          try {
+            const msg = JSON.parse(String(ev.data)) as {
+              type?: string;
+              status?: string;
+            };
+            if (
+              msg.type === "LOGIN_APPROVAL_RESULT" ||
+              msg.type === "approval.resolved"
+            ) {
+              if (
+                msg.status === "REJECTED" ||
+                msg.status === "declined" ||
+                msg.status === "expired"
+              ) {
+                setError("Access was denied on your Master Device.");
+                setPhase("ERROR");
+                return;
+              }
+              void claimNow();
+            }
+          } catch {
+            /* ignore */
+          }
+        };
+      } catch {
+        /* guest ws optional */
+      }
+    }
+
     timer = window.setTimeout(tick, 2000);
     return () => {
       pollAbortRef.current = true;
       if (timer) window.clearTimeout(timer);
+      guestWs?.close();
     };
   }, [phase, approvalPollToken, apiBaseUrl, finishAuthenticated]);
 

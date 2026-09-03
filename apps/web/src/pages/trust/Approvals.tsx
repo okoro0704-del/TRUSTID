@@ -28,7 +28,14 @@ export function ApprovalsPage() {
       api<Approval[]>("/device-approvals"),
     ]);
     setPending(p);
-    setHistory(all.filter((a) => a.status !== "pending"));
+    setHistory(
+      all.filter(
+        (a) =>
+          a.status !== "pending" &&
+          a.status !== "pushed" &&
+          a.status !== "viewed",
+      ),
+    );
   }
 
   useEffect(() => {
@@ -48,16 +55,25 @@ export function ApprovalsPage() {
     setBusy(true);
     setError(null);
     try {
-      const response = await reauthenticate();
-      const path =
+      let response: unknown;
+      try {
+        response = await reauthenticate();
+      } catch {
+        response = undefined;
+      }
+      const mapped =
         action === "approve"
-          ? `/device-approvals/${selected.id}/approve`
+          ? "TRUST"
           : action === "temporary"
-            ? `/device-approvals/${selected.id}/temporary`
-            : `/device-approvals/${selected.id}/decline`;
-      await api(path, {
+            ? "TEMPORARY"
+            : "DECLINE";
+      await api("/v1/auth/device-approval/respond", {
         method: "POST",
-        body: JSON.stringify({ response }),
+        body: JSON.stringify({
+          requestId: selected.id,
+          action: mapped,
+          ...(response ? { response } : {}),
+        }),
       });
       setSelected(null);
       await load();

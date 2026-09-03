@@ -70,7 +70,13 @@ export function VaultDashboardPage() {
 
   useEffect(() => {
     const latest = approvalEvents[0];
-    if (!latest || latest.type !== "approval_created") return;
+    if (
+      !latest ||
+      (latest.type !== "approval_created" &&
+        latest.type !== "DEVICE_APPROVAL_REQUEST")
+    ) {
+      return;
+    }
     setApprovalModal({
       requestId: latest.requestId,
       deviceName: latest.deviceName,

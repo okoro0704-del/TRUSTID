@@ -19,10 +19,17 @@ export type RealtimeConnectionState =
   | "unsupported";
 
 export type DeviceApprovalEvent = {
-  type: "approval_created" | "approval_updated";
+  type:
+    | "approval_created"
+    | "approval_updated"
+    | "approval_resolved"
+    | "DEVICE_APPROVAL_REQUEST"
+    | "LOGIN_APPROVAL_RESULT";
   requestId: string;
   status: string;
   deviceName?: string;
+  applicationName?: string;
+  ipAddress?: string;
   at: string;
 };
 

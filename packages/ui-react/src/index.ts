@@ -75,10 +75,17 @@ export type { AppLockGuardOverlayProps } from "./components/AppLockGuardOverlay.
 
 export { DeviceApprovalModal } from "./components/DeviceApprovalModal.js";
 export type { DeviceApprovalModalProps } from "./components/DeviceApprovalModal.js";
+export { MasterApprovalModal } from "./components/MasterApprovalModal.js";
+export type {
+  MasterApprovalModalProps,
+  MasterApprovalAction,
+} from "./components/MasterApprovalModal.js";
+export { MasterDeviceApprovalListener } from "./components/MasterDeviceApprovalListener.js";
 
 export {
   createTrustIdApiClient,
   resolveRealtimeUrl,
+  resolveGuestRealtimeUrl,
   TrustIdApiError,
 } from "./api/client.js";
 export type { TrustIdApiClient, TrustIdApiClientOptions } from "./api/client.js";

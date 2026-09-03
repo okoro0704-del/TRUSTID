@@ -277,7 +277,7 @@ export async function autoEnrollFromBiometrics(input: {
   }
 
   // First terminal becomes Primary / Master so later devices can request approval.
-  await prisma.device.create({
+  const masterDevice = await prisma.device.create({
     data: {
       userId: user.id,
       name: "Master device",
@@ -303,7 +303,7 @@ export async function autoEnrollFromBiometrics(input: {
     userAgent: input.userAgent,
   });
 
-  return { userId: user.id, trustId };
+  return { userId: user.id, trustId, deviceId: masterDevice.id };
 }
 
 export async function ambientSignInAndSession(input: {
@@ -388,17 +388,34 @@ export async function ambientSignInAndSession(input: {
       isMasterDevice: false,
     };
     enrolled = true;
+    (fusion as { _deviceId?: string })._deviceId = created.deviceId;
   }
 
   if (!fusion.matched || !fusion.userId || !fusion.trustId) {
     return { matched: false as const, fusion };
   }
 
+  async function resolvePrimaryDeviceId(userId: string) {
+    const primary = await prisma.device.findFirst({
+      where: {
+        userId,
+        trustLevel: DEVICE_TRUST_LEVELS.PRIMARY,
+        status: { in: [DEVICE_STATUS.ACTIVE, DEVICE_STATUS.TRUSTED] },
+      },
+      orderBy: { trustedAt: "asc" },
+    });
+    return primary?.id ?? null;
+  }
+
   // First-time cloud enroll: this terminal becomes the account's primary/master.
   if (enrolled) {
+    const deviceId =
+      (fusion as { _deviceId?: string })._deviceId ??
+      (await resolvePrimaryDeviceId(fusion.userId));
     const identity = await getDashboardIdentity(fusion.userId);
     const { token } = await createSession({
       userId: fusion.userId,
+      deviceId,
       kind: "ambient_enroll",
       ip: input.ip,
       userAgent: input.userAgent,
@@ -424,9 +441,11 @@ export async function ambientSignInAndSession(input: {
 
   // Returning identity: master / already-bound terminal gets a session immediately.
   if (fusion.isMasterDevice) {
+    const deviceId = await resolvePrimaryDeviceId(fusion.userId);
     const identity = await getDashboardIdentity(fusion.userId);
     const { token } = await createSession({
       userId: fusion.userId,
+      deviceId,
       kind: "master",
       ip: input.ip,
       userAgent: input.userAgent,
@@ -458,6 +477,8 @@ export async function ambientSignInAndSession(input: {
       trustId: fusion.trustId,
       deviceName: "TrustID terminal",
       applicationName: "TrustID",
+      // Persist secondary install so TRUST can bind it and skip future prompts.
+      guestSessionId: input.installId,
       ip: input.ip,
       userAgent: input.userAgent,
     });

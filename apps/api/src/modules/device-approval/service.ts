@@ -25,6 +25,40 @@ import {
   type ApprovalRow,
 } from "./fsm.js";
 
+async function confirmMasterAction(input: {
+  userId: string;
+  deviceId: string | null | undefined;
+  response?: AuthenticationResponseJSON | null;
+  ip?: string;
+  userAgent?: string;
+}) {
+  await assertPrimaryDevice(input.userId, input.deviceId);
+  if (input.response) {
+    await verifyReauthentication({
+      userId: input.userId,
+      deviceId: input.deviceId ?? undefined,
+      response: input.response,
+      ip: input.ip,
+      userAgent: input.userAgent,
+    });
+    return;
+  }
+
+  // Face-first masters often have no passkey yet — allow primary-session confirm.
+  const passkeys = await prisma.credential.count({
+    where: {
+      userId: input.userId,
+      status: { not: DEVICE_STATUS.REVOKED },
+    },
+  });
+  if (passkeys === 0) return;
+
+  throw Object.assign(
+    new Error("Biometric / passkey confirmation required"),
+    { statusCode: 400 },
+  );
+}
+
 function guessBrowser(ua: string | null | undefined) {
   if (!ua) return null;
   if (/Edg\//i.test(ua)) return "Edge";
@@ -56,13 +90,19 @@ async function dispatchConsentPush(row: ApprovalRow, userTrustId: string) {
     correlationId: row.correlationId,
     requestId: row.id,
     ownerTrustId: userTrustId,
-    title: "New device wants access",
-    body: `${row.applicationName ?? "TrustID"}: ${row.requestedDeviceName}`,
-    silent: true,
+    title: "New Login Attempt",
+    body: `A ${row.requestedDeviceName} device is requesting access to your account.`,
+    silent: false,
     deepLink,
     metadata: {
+      type: "DEVICE_APPROVAL_REQUEST",
+      requestId: row.id,
+      deviceMeta: row.requestedDeviceName,
+      ipAddress: row.ip,
+      timestamp: String(Math.floor(Date.now() / 1000)),
+      click_action: "OPEN_APPROVAL_MODAL",
+      priority: "high",
       applicationName: row.applicationName,
-      deviceName: row.requestedDeviceName,
       platform: row.platform,
       browser: row.browser,
       location: row.location,
@@ -148,9 +188,12 @@ export async function createDeviceApprovalRequest(input: {
   }
 
   const pollToken = randomToken(24);
-  const expiresAt = new Date(
-    Date.now() + config.deviceApprovalTtlMinutes * 60 * 1000,
+  // Auto-expire pending login attempts quickly (default 180s).
+  const ttlMs = Math.max(
+    60_000,
+    Number(process.env.DEVICE_APPROVAL_TTL_SECONDS ?? 180) * 1000,
   );
+  const expiresAt = new Date(Date.now() + ttlMs);
   const deviceName =
     input.deviceName?.trim() ||
     guessBrowser(input.userAgent) ||
@@ -183,6 +226,17 @@ export async function createDeviceApprovalRequest(input: {
     pollTokenHash: row.pollTokenHash,
     message: {
       type: "approval.created",
+      ...toApprovalEventPayload(row),
+      at: new Date().toISOString(),
+    },
+  });
+
+  // High-priority alias for Master Device notification receivers.
+  broadcastApprovalEvent({
+    userId: user.id,
+    pollTokenHash: row.pollTokenHash,
+    message: {
+      type: "DEVICE_APPROVAL_REQUEST",
       ...toApprovalEventPayload(row),
       at: new Date().toISOString(),
     },
@@ -296,6 +350,19 @@ export async function claimApprovalResult(pollToken: string) {
         trustedAt: new Date(),
       },
     });
+
+    // TRUST once: bind secondary install so next ambient login skips master approval.
+    if (row.guestSessionId) {
+      try {
+        const { bindInstallToUser } = await import(
+          "../authentication/device-install.js"
+        );
+        await bindInstallToUser(row.guestSessionId, row.userId);
+      } catch {
+        /* invalid / occupied install — session still granted */
+      }
+    }
+
     const { session, token } = await createSession({
       userId: row.userId,
       deviceId: device.id,
@@ -313,6 +380,21 @@ export async function claimApprovalResult(pollToken: string) {
         enrollmentTokenExpires: null,
       },
     });
+
+    // Notify waiting secondary immediately (alias for clients listening on LOGIN_APPROVAL_RESULT).
+    broadcastApprovalEvent({
+      userId: row.userId,
+      pollTokenHash: row.pollTokenHash,
+      message: {
+        type: "LOGIN_APPROVAL_RESULT",
+        correlationId: row.correlationId,
+        requestId: row.id,
+        status: "APPROVED_TRUSTED",
+        deviceName: row.requestedDeviceName,
+        at: new Date().toISOString(),
+      },
+    });
+
     return {
       status: DEVICE_APPROVAL_STATUS.APPROVED,
       mode: "ambient" as const,
@@ -358,6 +440,20 @@ export async function claimApprovalResult(pollToken: string) {
         claimConsumedAt: new Date(),
       },
     });
+
+    broadcastApprovalEvent({
+      userId: row.userId,
+      pollTokenHash: row.pollTokenHash,
+      message: {
+        type: "LOGIN_APPROVAL_RESULT",
+        correlationId: row.correlationId,
+        requestId: row.id,
+        status: "APPROVED_TEMPORARY",
+        deviceName: row.requestedDeviceName,
+        at: new Date().toISOString(),
+      },
+    });
+
     return {
       status: DEVICE_APPROVAL_STATUS.TEMPORARY,
       mode: "temporary" as const,
@@ -517,7 +613,7 @@ export async function approveTrustDevice(input: {
   userId: string;
   deviceId: string | null | undefined;
   requestId: string;
-  response: AuthenticationResponseJSON;
+  response?: AuthenticationResponseJSON | null;
   ip?: string;
   userAgent?: string;
 }) {
@@ -526,9 +622,9 @@ export async function approveTrustDevice(input: {
     input.requestId,
     input.deviceId,
   );
-  await verifyReauthentication({
+  await confirmMasterAction({
     userId: input.userId,
-    deviceId: input.deviceId ?? undefined,
+    deviceId: input.deviceId,
     response: input.response,
     ip: input.ip,
     userAgent: input.userAgent,
@@ -561,7 +657,19 @@ export async function approveTrustDevice(input: {
     payload: { requestId: row.id, status: updated.status },
   });
 
-  // Enrollment token is claimed by the requesting device via poll/claim
+  broadcastApprovalEvent({
+    userId: input.userId,
+    pollTokenHash: row.pollTokenHash,
+    message: {
+      type: "LOGIN_APPROVAL_RESULT",
+      correlationId: row.correlationId,
+      requestId: row.id,
+      status: "APPROVED_TRUSTED",
+      deviceName: row.requestedDeviceName,
+      at: new Date().toISOString(),
+    },
+  });
+
   return { id: updated.id, status: updated.status };
 }
 
@@ -569,7 +677,7 @@ export async function approveTemporaryAccess(input: {
   userId: string;
   deviceId: string | null | undefined;
   requestId: string;
-  response: AuthenticationResponseJSON;
+  response?: AuthenticationResponseJSON | null;
   ip?: string;
   userAgent?: string;
 }) {
@@ -578,9 +686,9 @@ export async function approveTemporaryAccess(input: {
     input.requestId,
     input.deviceId,
   );
-  await verifyReauthentication({
+  await confirmMasterAction({
     userId: input.userId,
-    deviceId: input.deviceId ?? undefined,
+    deviceId: input.deviceId,
     response: input.response,
     ip: input.ip,
     userAgent: input.userAgent,
@@ -634,6 +742,19 @@ export async function approveTemporaryAccess(input: {
     payload: { requestId: row.id, status: updated.status },
   });
 
+  broadcastApprovalEvent({
+    userId: input.userId,
+    pollTokenHash: row.pollTokenHash,
+    message: {
+      type: "LOGIN_APPROVAL_RESULT",
+      correlationId: row.correlationId,
+      requestId: row.id,
+      status: "APPROVED_TEMPORARY",
+      deviceName: row.requestedDeviceName,
+      at: new Date().toISOString(),
+    },
+  });
+
   return { id: updated.id, status: updated.status, expiresAt: expiresAt.toISOString() };
 }
 
@@ -641,7 +762,7 @@ export async function declineApproval(input: {
   userId: string;
   deviceId: string | null | undefined;
   requestId: string;
-  response: AuthenticationResponseJSON;
+  response?: AuthenticationResponseJSON | null;
   ip?: string;
   userAgent?: string;
 }) {
@@ -650,9 +771,9 @@ export async function declineApproval(input: {
     input.requestId,
     input.deviceId,
   );
-  await verifyReauthentication({
+  await confirmMasterAction({
     userId: input.userId,
-    deviceId: input.deviceId ?? undefined,
+    deviceId: input.deviceId,
     response: input.response,
     ip: input.ip,
     userAgent: input.userAgent,
@@ -681,7 +802,39 @@ export async function declineApproval(input: {
     payload: { requestId: row.id, status: updated.status },
   });
 
+  broadcastApprovalEvent({
+    userId: input.userId,
+    pollTokenHash: row.pollTokenHash,
+    message: {
+      type: "LOGIN_APPROVAL_RESULT",
+      correlationId: row.correlationId,
+      requestId: row.id,
+      status: "REJECTED",
+      deviceName: row.requestedDeviceName,
+      at: new Date().toISOString(),
+    },
+  });
+
   return { id: updated.id, status: updated.status };
+}
+
+/** Unified master respond endpoint for TRUST | TEMPORARY | DECLINE. */
+export async function respondToDeviceApproval(input: {
+  userId: string;
+  deviceId: string | null | undefined;
+  requestId: string;
+  action: "TRUST" | "TEMPORARY" | "DECLINE";
+  response?: AuthenticationResponseJSON | null;
+  ip?: string;
+  userAgent?: string;
+}) {
+  if (input.action === "TRUST") {
+    return approveTrustDevice(input);
+  }
+  if (input.action === "TEMPORARY") {
+    return approveTemporaryAccess(input);
+  }
+  return declineApproval(input);
 }
 
 export async function resolveApprovalEnrollment(enrollmentToken: string) {

@@ -19,6 +19,7 @@ import {
   listPendingApprovals,
   markApprovalViewed,
   resolveApprovalEnrollment,
+  respondToDeviceApproval,
 } from "../modules/device-approval/service.js";
 import {
   listSecurityNotifications,
@@ -180,7 +181,7 @@ export async function deviceApprovalRoutes(app: FastifyInstance) {
     { preHandler: requireSession },
     async (req, reply) => {
       const params = z.object({ id: z.string() }).parse(req.params);
-      const body = z.object({ response: z.any() }).parse(req.body);
+      const body = z.object({ response: z.any().optional() }).parse(req.body ?? {});
       try {
         return await approveTrustDevice({
           userId: req.auth!.userId,
@@ -200,7 +201,7 @@ export async function deviceApprovalRoutes(app: FastifyInstance) {
     { preHandler: requireSession },
     async (req, reply) => {
       const params = z.object({ id: z.string() }).parse(req.params);
-      const body = z.object({ response: z.any() }).parse(req.body);
+      const body = z.object({ response: z.any().optional() }).parse(req.body ?? {});
       try {
         return await approveTemporaryAccess({
           userId: req.auth!.userId,
@@ -220,7 +221,7 @@ export async function deviceApprovalRoutes(app: FastifyInstance) {
     { preHandler: requireSession },
     async (req, reply) => {
       const params = z.object({ id: z.string() }).parse(req.params);
-      const body = z.object({ response: z.any() }).parse(req.body);
+      const body = z.object({ response: z.any().optional() }).parse(req.body ?? {});
       try {
         return await declineApproval({
           userId: req.auth!.userId,
@@ -229,6 +230,38 @@ export async function deviceApprovalRoutes(app: FastifyInstance) {
           response: body.response,
           ...clientMeta(req),
         });
+      } catch (err) {
+        return httpError(err, reply);
+      }
+    },
+  );
+
+  /** Unified master respond: TRUST | TEMPORARY | DECLINE */
+  app.post(
+    "/v1/auth/device-approval/respond",
+    { preHandler: requireSession },
+    async (req, reply) => {
+      const body = z
+        .object({
+          requestId: z.string().min(1),
+          action: z.enum(["TRUST", "TEMPORARY", "DECLINE"]),
+          response: z.any().optional(),
+        })
+        .parse(req.body ?? {});
+      try {
+        const result = await respondToDeviceApproval({
+          userId: req.auth!.userId,
+          deviceId: req.auth!.deviceId,
+          requestId: body.requestId,
+          action: body.action,
+          response: body.response,
+          ...clientMeta(req),
+        });
+        return {
+          success: true,
+          message: `Device marked as ${result.status}`,
+          ...result,
+        };
       } catch (err) {
         return httpError(err, reply);
       }

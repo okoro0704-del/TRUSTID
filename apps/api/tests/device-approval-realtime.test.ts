@@ -84,7 +84,9 @@ describe("Realtime device approval OOB", () => {
 
     expect(mockElfCom.pushes).toHaveLength(1);
     expect(mockElfCom.pushes[0]?.correlationId).toBeTruthy();
-    expect(mockElfCom.pushes[0]?.silent).toBe(true);
+    expect(mockElfCom.pushes[0]?.silent).toBe(false);
+    expect(mockElfCom.pushes[0]?.metadata?.type).toBe("DEVICE_APPROVAL_REQUEST");
+    expect(mockElfCom.pushes[0]?.title).toBe("New Login Attempt");
 
     const row = await prisma.deviceApprovalRequest.findUniqueOrThrow({
       where: { id: created.requestId },

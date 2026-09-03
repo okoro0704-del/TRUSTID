@@ -1,5 +1,10 @@
 export type RealtimeApprovalMessage = {
-  type: "approval.created" | "approval.state" | "approval.resolved";
+  type:
+    | "approval.created"
+    | "approval.state"
+    | "approval.resolved"
+    | "DEVICE_APPROVAL_REQUEST"
+    | "LOGIN_APPROVAL_RESULT";
   correlationId: string;
   requestId: string;
   status: string;

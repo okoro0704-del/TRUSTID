@@ -1,6 +1,8 @@
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { MasterDeviceApprovalListener } from "@trustid/ui-react";
 import { useAuth } from "../lib/auth";
 import { useTopbarIdentity } from "../lib/useTopbarIdentity";
+import { reauthenticate } from "../lib/reauth";
 
 const TABS = [
   {
@@ -136,6 +138,7 @@ export function TrustCenterLayout() {
 
   return (
     <div className="app-frame">
+      <MasterDeviceApprovalListener reauthenticate={reauthenticate} />
       <div className="app-ambient" aria-hidden="true" />
       <header className={`app-topbar ${onPrimaryTab ? "app-topbar-centered" : ""}`}>
         <div className="app-topbar-inner">

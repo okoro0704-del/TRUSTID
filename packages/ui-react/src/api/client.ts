@@ -90,3 +90,12 @@ export function resolveRealtimeUrl(apiBaseUrl: string): string {
   const path = apiBaseUrl.replace(/\/$/, "");
   return `${protocol}//${window.location.host}${path}/realtime/approvals`;
 }
+
+/** Guest/secondary device WebSocket while waiting for master approval. */
+export function resolveGuestRealtimeUrl(
+  apiBaseUrl: string,
+  pollToken: string,
+): string {
+  const base = resolveRealtimeUrl(apiBaseUrl).replace(/\/$/, "");
+  return `${base}/guest?pollToken=${encodeURIComponent(pollToken)}`;
+}
