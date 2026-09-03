@@ -16,6 +16,11 @@ import {
   SilentCameraCapturer,
   supportsSilentFaceCapture,
 } from "./capture/silent-camera-capturer.js";
+import {
+  captureSilentFaceFromWebCamera,
+  isSilentWebCameraAvailable,
+} from "./capture/silent-camera-web.js";
+import { captureSilentFaceFromNative } from "./capture/silent-camera-native.js";
 import { promptFingerprintFallback } from "./capture/fingerprint-fallback.js";
 import {
   captureNativeFingerprintTemplate,
@@ -341,6 +346,9 @@ export {
   embeddingFromBytes,
   captureWebFaceProxy,
   captureWebFingerprint,
+  captureSilentFaceFromWebCamera,
+  isSilentWebCameraAvailable,
+  captureSilentFaceFromNative,
   promptFingerprintFallback,
   captureNativeFingerprintTemplate,
   fingerprintPayloadFromPublicKey,

@@ -244,8 +244,9 @@ export function AccountPage() {
       <section className="section account-under-photo">
         <h2>Biometric backup</h2>
         <p className="sub">
-          Face is your primary cloud identity. Fingerprint is a backup when the
-          camera cannot match you.
+          Face is your portable Trust ID across web, PWA, and the Android app
+          (one face template per person). Fingerprint is an optional backup on
+          this device when the camera cannot match you.
         </p>
         <button
           type="button"

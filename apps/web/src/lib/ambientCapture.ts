@@ -1,6 +1,8 @@
+import { BIOMETRIC_FACE_CAPTURE_MIN_CONFIDENCE } from "@trustid/shared";
 import {
   BIOMETRIC_MODALITIES,
   captureNativeFingerprintTemplate,
+  captureSilentFaceFromWebCamera,
   createSilentCameraCapturer,
   detectDeviceBiometricContext,
   supportsSilentFaceCapture,
@@ -21,10 +23,6 @@ type CapacitorLike = {
 function getCap(): CapacitorLike | undefined {
   if (typeof window === "undefined") return undefined;
   return (window as Window & { Capacitor?: CapacitorLike }).Capacitor;
-}
-
-function isNativeCapacitor(): boolean {
-  return getCap()?.isNativePlatform?.() === true;
 }
 
 function getPlugin<T>(name: string): T | undefined {
@@ -59,40 +57,44 @@ export async function captureFingerprintBackup(
 }
 
 /**
- * Identity-first ambient capture: cloud face first, fingerprint as backup.
- * Does NOT probe device-local passkeys / WebAuthn on boot.
+ * Capture one face vector with the SAME JS model on web, PWA, and APK.
+ * Prefer getUserMedia; fall back to native CameraX JPEG → same JS extractor.
+ */
+async function captureUnifiedFace(): Promise<BiometricPayload | null> {
+  const min = BIOMETRIC_FACE_CAPTURE_MIN_CONFIDENCE;
+
+  try {
+    const web = await captureSilentFaceFromWebCamera();
+    if (web?.payload?.vector && web.confidence >= min) {
+      return web.payload;
+    }
+  } catch {
+    /* try native */
+  }
+
+  const nativeBridge = getNativeSilentFaceBridge();
+  if (nativeBridge) {
+    const capturer = createSilentCameraCapturer({ nativeBridge });
+    const face = await capturer.captureFaceVector();
+    if (face?.payload?.vector && face.confidence >= min) {
+      return face.payload;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Identity-first ambient capture — one shared face model across all clients.
+ * Fingerprint is backup only when face cannot be captured.
  */
 export async function captureWebAmbientSingleModal(
   _apiFetch?: ApiFetch,
 ): Promise<MultiModalBiometricPayload> {
-  const nativeBridge = getNativeSilentFaceBridge();
-  const silentFace = Boolean(nativeBridge) || supportsSilentFaceCapture();
-  const ctx = detectDeviceBiometricContext(undefined, {
-    silentFaceAvailable: silentFace,
-  });
-
-  const capturer = createSilentCameraCapturer({
-    nativeBridge,
-  });
-
   try {
-    let facePayload: BiometricPayload | undefined;
-    if (ctx.supportsSilentFace || ctx.platform === "android" || nativeBridge) {
-      const face = await capturer.captureFaceVector();
-      facePayload = face?.payload;
-    } else if (ctx.primaryModality === BIOMETRIC_MODALITIES.FACE || silentFace) {
-      const face = await capturer.captureFaceVector();
-      facePayload = face?.payload;
-    } else {
-      const face = await capturer.captureFaceVector();
-      facePayload = face?.payload;
-    }
+    const face = await captureUnifiedFace();
+    if (face) return { face };
 
-    if (facePayload) {
-      return { face: facePayload };
-    }
-
-    // Face unavailable — fingerprint backup for cloud match / login
     const fingerprint = await captureFingerprintBackup(
       "Face not available — scan fingerprint for Trust ID",
     );
@@ -120,3 +122,5 @@ export function createWebAmbientCapture(apiFetch: ApiFetch) {
       }),
   };
 }
+
+export { BIOMETRIC_MODALITIES };
