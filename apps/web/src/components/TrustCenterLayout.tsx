@@ -81,6 +81,8 @@ const TABS = [
   },
 ];
 
+const PRIMARY_TAB_PATHS = new Set(TABS.map((t) => t.to));
+
 const TITLES: Record<string, string> = {
   "/dashboard": "TrustID",
   "/dashboard/apps": "App Locker",
@@ -108,17 +110,21 @@ function titleFor(pathname: string) {
   return TITLES[pathname] ?? "TrustID";
 }
 
+function isPrimaryTab(pathname: string) {
+  if (PRIMARY_TAB_PATHS.has(pathname)) return true;
+  // Exact home only for /dashboard — nested never matches set without end
+  return false;
+}
+
 export function TrustCenterLayout() {
-  const { identity, logout } = useAuth();
+  const { identity } = useAuth();
   const { portraitUrl } = useTopbarIdentity();
   const navigate = useNavigate();
   const location = useLocation();
   const title = titleFor(location.pathname);
-
-  async function onLogout() {
-    await logout();
-    navigate("/");
-  }
+  const onHome = location.pathname === "/dashboard";
+  const onPrimaryTab = isPrimaryTab(location.pathname);
+  const showBack = !onHome && !onPrimaryTab;
 
   const initials =
     identity?.profile?.name
@@ -131,17 +137,45 @@ export function TrustCenterLayout() {
   return (
     <div className="app-frame">
       <div className="app-ambient" aria-hidden="true" />
-      <header className="app-topbar">
+      <header className={`app-topbar ${onPrimaryTab ? "app-topbar-centered" : ""}`}>
         <div className="app-topbar-inner">
-          <div className="app-topbar-brand">
-            <div className="app-topbar-copy">
-              <div className="app-topbar-title">{title}</div>
+          <div className="app-topbar-side app-topbar-side-left">
+            {showBack ? (
+              <button
+                type="button"
+                className="app-icon-btn"
+                aria-label="Go back"
+                onClick={() => {
+                  if (window.history.length > 1) navigate(-1);
+                  else navigate("/dashboard");
+                }}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M15 5.5 8.5 12 15 18.5"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+            ) : (
+              <span className="app-topbar-spacer" aria-hidden="true" />
+            )}
+          </div>
+
+          <div className="app-topbar-center">
+            <div className="app-topbar-title">{title}</div>
+            {!onPrimaryTab && (
               <div className="app-topbar-sub">
                 {identity?.trustId ?? "Private & locked"}
               </div>
-            </div>
+            )}
           </div>
-          <div className="app-topbar-actions">
+
+          <div className="app-topbar-side app-topbar-side-right">
             <NavLink
               to="/dashboard/notifications"
               className="app-icon-btn"
@@ -165,16 +199,16 @@ export function TrustCenterLayout() {
               </svg>
             </NavLink>
             <NavLink
-              to="/dashboard/identity"
+              to="/dashboard/account"
               className="app-avatar-link app-avatar-link-right"
-              aria-label="Verified profile photo — used across apps that use TrustID"
-              title="Your verified profile photo"
+              aria-label="Account"
+              title="Account"
             >
               {portraitUrl ? (
                 <img
                   className="app-avatar app-avatar-lg"
                   src={portraitUrl}
-                  alt="Verified profile"
+                  alt=""
                   width={40}
                   height={40}
                 />
@@ -187,30 +221,6 @@ export function TrustCenterLayout() {
                 <span className="app-avatar-verified" aria-hidden="true" />
               )}
             </NavLink>
-            <button
-              className="app-icon-btn"
-              type="button"
-              onClick={onLogout}
-              aria-label="Sign out"
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path
-                  d="M10 5.5H7.5A2 2 0 0 0 5.5 7.5v9a2 2 0 0 0 2 2H10"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.6"
-                  strokeLinecap="round"
-                />
-                <path
-                  d="M13.5 12H20m0 0-2.5-2.5M20 12l-2.5 2.5"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.6"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </button>
           </div>
         </div>
       </header>

@@ -211,6 +211,13 @@ export function useAmbientTrustIdAuth(
       setPhase("AUTHENTICATED");
       return;
     }
+
+    // After logout identity is null ? clear stale AUTHENTICATED and re-run cloud match.
+    if (phase === "AUTHENTICATED") {
+      setPhase("PROMPTING");
+      startedRef.current = false;
+    }
+
     if (startedRef.current && nonce === 0) return;
     startedRef.current = true;
 

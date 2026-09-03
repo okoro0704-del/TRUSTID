@@ -1,7 +1,10 @@
 import { useEffect, useState, type FormEvent } from "react";
 import type { AppLockPolicy, LockedApp } from "@trustid/device-security";
 import { DEFAULT_APP_LOCK_POLICY } from "@trustid/device-security";
-import { getAppLockController } from "../../lib/security/tier1";
+import {
+  getAppLockController,
+  isNativeCapacitorShell,
+} from "../../lib/security/tier1";
 
 const SUGGESTIONS: Omit<LockedApp, "addedAt">[] = [
   { packageId: "com.whatsapp", displayName: "WhatsApp" },
@@ -23,8 +26,9 @@ function initials(name: string) {
     .join("");
 }
 
-/** 2026 App Locker ? locked app tiles with biometric shield. */
+/** App Locker — native process shield on APK; registry session gate on web/PWA. */
 export function AppLockerPage() {
+  const native = isNativeCapacitorShell();
   const [policy, setPolicy] = useState<AppLockPolicy>({
     ...DEFAULT_APP_LOCK_POLICY,
     apps: [],
@@ -34,6 +38,10 @@ export function AppLockerPage() {
     enabled: boolean;
     note: string;
   } | null>(null);
+  const [overlayGranted, setOverlayGranted] = useState<boolean | null>(null);
+  const [installed, setInstalled] = useState<
+    Array<{ packageId: string; displayName: string }>
+  >([]);
   const [customId, setCustomId] = useState("");
   const [customName, setCustomName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -44,12 +52,25 @@ export function AppLockerPage() {
     const ctrl = getAppLockController();
     setPolicy(await ctrl.getPolicy());
     setA11y(await ctrl.accessibilityStatus());
+    if (native && window.TrustIdAppLock?.canDrawOverlays) {
+      const o = await window.TrustIdAppLock.canDrawOverlays();
+      setOverlayGranted(o.granted);
+    }
+    if (native) {
+      const list = await ctrl.getInstalledApps({ includeIcons: false });
+      setInstalled(
+        list.apps
+          .filter((a) => !a.packageId.startsWith("com.trustid"))
+          .slice(0, 40),
+      );
+    }
   }
 
   useEffect(() => {
     reload().catch((e) =>
       setError(e instanceof Error ? e.message : "Failed to load"),
     );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function persist(next: AppLockPolicy) {
@@ -57,6 +78,11 @@ export function AppLockerPage() {
     setError(null);
     try {
       await getAppLockController().savePolicy(next);
+      if (native && window.TrustIdAppLock?.setLockedApps) {
+        await window.TrustIdAppLock.setLockedApps(
+          next.apps.map((a) => a.packageId),
+        );
+      }
       setPolicy(next);
       setA11y(await getAppLockController().accessibilityStatus());
     } catch (e) {
@@ -75,6 +101,11 @@ export function AppLockerPage() {
     setError(null);
     try {
       const next = await getAppLockController().addApp(app);
+      if (native && window.TrustIdAppLock?.setLockedApps) {
+        await window.TrustIdAppLock.setLockedApps(
+          next.apps.map((a) => a.packageId),
+        );
+      }
       setPolicy(next);
       setShowAdd(false);
     } catch (e) {
@@ -99,7 +130,13 @@ export function AppLockerPage() {
     setBusy(true);
     setError(null);
     try {
-      setPolicy(await getAppLockController().removeApp(packageId));
+      const next = await getAppLockController().removeApp(packageId);
+      if (native && window.TrustIdAppLock?.setLockedApps) {
+        await window.TrustIdAppLock.setLockedApps(
+          next.apps.map((a) => a.packageId),
+        );
+      }
+      setPolicy(next);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Remove failed");
     } finally {
@@ -115,14 +152,28 @@ export function AppLockerPage() {
     }
   }
 
+  async function openOverlaySettings() {
+    try {
+      await window.TrustIdAppLock?.openOverlayPermissionSettings?.();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Overlay settings unavailable");
+    }
+  }
+
+  const addChoices =
+    installed.length > 0
+      ? installed.filter((s) => !policy.apps.some((a) => a.packageId === s.packageId))
+      : SUGGESTIONS.filter((s) => !policy.apps.some((a) => a.packageId === s.packageId));
+
   return (
     <div className="dashboard locker-shell">
       <section className="locker-hero">
         <p className="locker-eyebrow">App Locker</p>
         <h1 className="locker-title">Protected apps</h1>
         <p className="locker-lede">
-          Locked apps open only after biometric. Your shield stays on until you
-          turn it off.
+          {native
+            ? "Locked apps open only after biometric. Enable Accessibility + overlay for the process shield."
+            : "On the web this stores your locker list against your Trust ID session. Install the Android APK for real cross-app locking."}
         </p>
 
         <div className="locker-switch-card">
@@ -131,7 +182,7 @@ export function AppLockerPage() {
             <span className="muted">
               {policy.enabled
                 ? `${policy.apps.length} app${policy.apps.length === 1 ? "" : "s"} protected`
-                : "Off ? apps open freely"}
+                : "Off — apps open freely"}
             </span>
           </div>
           <button
@@ -149,6 +200,11 @@ export function AppLockerPage() {
         {a11y?.supported && !a11y.enabled && (
           <button type="button" className="btn btn-ghost" onClick={openSettings}>
             Enable system App Lock
+          </button>
+        )}
+        {native && overlayGranted === false && (
+          <button type="button" className="btn btn-ghost" onClick={openOverlaySettings}>
+            Allow display over other apps
           </button>
         )}
         {error && <p className="error">{error}</p>}
@@ -206,11 +262,11 @@ export function AppLockerPage() {
 
       {showAdd && (
         <section className="locker-add-sheet">
-          <h2 className="locker-title-sm">Lock an app</h2>
+          <h2 className="locker-title-sm">
+            {installed.length > 0 ? "Installed apps" : "Lock an app"}
+          </h2>
           <div className="app-lock-grid app-lock-grid-suggest">
-            {SUGGESTIONS.filter(
-              (s) => !policy.apps.some((a) => a.packageId === s.packageId),
-            ).map((s) => (
+            {addChoices.map((s) => (
               <button
                 key={s.packageId}
                 type="button"

@@ -10,7 +10,11 @@ import { App } from "./App";
 import { createWebAmbientCapture } from "./lib/ambientCapture";
 import { getOrCreateInstallId, markLocalOccupancy } from "./lib/deviceInstall";
 import { rememberFromIdentity } from "./lib/rememberedAccount";
+import { injectCapacitorSecurityBridges } from "./lib/security/nativeBridges";
 import "./styles.css";
+
+// APK / Capacitor: wire App Lock + biometric + media vault plugins before UI mounts
+injectCapacitorSecurityBridges();
 
 function AmbientShell({ children }: { children: React.ReactNode }) {
   const apiBaseUrl = import.meta.env.VITE_API_URL ?? "/api";
