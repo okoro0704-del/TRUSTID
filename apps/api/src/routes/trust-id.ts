@@ -17,6 +17,7 @@ import {
   registerTrustIdRequestSchema,
   registerPushTokenSchema,
   installUnlockSchema,
+  bindMasterDeviceRequestSchema,
 } from "../modules/trust-id/schemas.js";
 import {
   approveMasterChallenge,
@@ -28,6 +29,7 @@ import {
   verifyMasterDeviceBinding,
 } from "../modules/trust-id/index.js";
 import {
+  bindMasterDeviceForUser,
   registerTrustIdWithMasterDevice,
   unlockSessionForBoundInstall,
 } from "../modules/trust-id/register.js";
@@ -233,6 +235,33 @@ export async function trustIdRoutes(app: FastifyInstance) {
         isMasterDevice: result.isMasterDevice,
         ...sessionBody(result.sessionToken),
         token: config.exposeSessionTokenInBody ? result.token : undefined,
+      };
+    } catch (err) {
+      return httpError(err, reply);
+    }
+  });
+
+  /** Explicit Master Device bind + optional FCM token (post-create or refresh). */
+  app.post("/v1/device/register-master", async (req, reply) => {
+    await requireSession(req, reply);
+    if (!req.auth) return;
+    const body = bindMasterDeviceRequestSchema.parse(req.body ?? {});
+    try {
+      const result = await bindMasterDeviceForUser({
+        userId: req.auth.userId,
+        deviceId: body.deviceId ?? req.auth.deviceId ?? undefined,
+        deviceFingerprint: body.deviceFingerprint,
+        deviceName: body.deviceName,
+        pushToken: body.pushToken,
+        pushPlatform: body.pushPlatform,
+        ...clientMeta(req),
+      });
+      return {
+        success: true,
+        message: "Master Device successfully bound and verified.",
+        deviceId: result.deviceId,
+        masterDeviceId: result.masterDeviceId,
+        isMasterDevice: true,
       };
     } catch (err) {
       return httpError(err, reply);

@@ -127,7 +127,9 @@ export function TrustIdAuthProvider({
 
           const rawType = String(msg.type ?? "");
           const normalized =
-            rawType === "approval.created" || rawType === "DEVICE_APPROVAL_REQUEST"
+            rawType === "approval.created" ||
+            rawType === "DEVICE_APPROVAL_REQUEST" ||
+            rawType === "MASTER_APPROVAL_REQUEST"
               ? ("approval_created" as const)
               : rawType === "approval.state" || rawType === "approval_updated"
                 ? ("approval_updated" as const)
@@ -135,15 +137,23 @@ export function TrustIdAuthProvider({
                   ? ("approval_resolved" as const)
                   : null;
 
-          if (!normalized && rawType !== "DEVICE_APPROVAL_REQUEST") return;
+          if (
+            !normalized &&
+            rawType !== "DEVICE_APPROVAL_REQUEST" &&
+            rawType !== "MASTER_APPROVAL_REQUEST"
+          ) {
+            return;
+          }
 
           const event: DeviceApprovalEvent = {
             type:
-              rawType === "DEVICE_APPROVAL_REQUEST"
-                ? "DEVICE_APPROVAL_REQUEST"
-                : rawType === "LOGIN_APPROVAL_RESULT"
-                  ? "LOGIN_APPROVAL_RESULT"
-                  : (normalized as DeviceApprovalEvent["type"]),
+              rawType === "MASTER_APPROVAL_REQUEST"
+                ? "MASTER_APPROVAL_REQUEST"
+                : rawType === "DEVICE_APPROVAL_REQUEST"
+                  ? "DEVICE_APPROVAL_REQUEST"
+                  : rawType === "LOGIN_APPROVAL_RESULT"
+                    ? "LOGIN_APPROVAL_RESULT"
+                    : (normalized as DeviceApprovalEvent["type"]),
             requestId: String(msg.requestId ?? ""),
             status: String(msg.status ?? "pending"),
             deviceName:

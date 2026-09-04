@@ -107,19 +107,19 @@ async function dispatchConsentPush(row: ApprovalRow, userTrustId: string) {
     correlationId: row.correlationId,
     requestId: row.id,
     ownerTrustId: userTrustId,
-    title: "Login Approval Request",
-    body: `A ${row.requestedDeviceName} device is requesting access to your account. Tap to approve.`,
+    title: "Login Approval Requested",
+    body: `New login attempt from ${row.requestedDeviceName}. Tap to approve or decline.`,
     silent: false,
     deepLink,
     metadata: {
-      type: "DEVICE_APPROVAL_REQUEST",
+      type: "MASTER_APPROVAL_REQUEST",
       requestId: row.id,
       deviceMeta: row.requestedDeviceName,
       ipAddress: row.ip,
       timestamp: String(Math.floor(Date.now() / 1000)),
       click_action: "OPEN_APPROVAL_MODAL",
       priority: "high",
-      channelId: "high_importance_approval_channel",
+      channelId: "trust_id_security_alerts",
       applicationName: row.applicationName,
       platform: row.platform,
       browser: row.browser,
@@ -249,12 +249,21 @@ export async function createDeviceApprovalRequest(input: {
     },
   });
 
-  // High-priority alias for Master Device notification receivers.
+  // High-priority aliases for Master Device notification receivers.
   broadcastApprovalEvent({
     userId: user.id,
     pollTokenHash: row.pollTokenHash,
     message: {
       type: "DEVICE_APPROVAL_REQUEST",
+      ...toApprovalEventPayload(row),
+      at: new Date().toISOString(),
+    },
+  });
+  broadcastApprovalEvent({
+    userId: user.id,
+    pollTokenHash: row.pollTokenHash,
+    message: {
+      type: "MASTER_APPROVAL_REQUEST",
       ...toApprovalEventPayload(row),
       at: new Date().toISOString(),
     },

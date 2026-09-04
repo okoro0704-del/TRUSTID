@@ -45,6 +45,14 @@ export type UseAmbientTrustIdAuthOptions = CaptureHandlers & {
   /** Optional FCM token for heads-up approval pushes */
   getPushToken?: () => Promise<string | null>;
   /**
+   * Persist TRUST_ID_KEY / IS_MASTER_DEVICE / DEVICE_ID immediately after create.
+   */
+  persistMasterDeviceState?: (info: {
+    trustId: string;
+    isMasterDevice: boolean;
+    deviceId?: string | null;
+  }) => Promise<void>;
+  /**
    * Prompt native fingerprint / device PIN. Return true when OS auth succeeds.
    * Used when face fails on an already-bound install.
    */
@@ -89,6 +97,7 @@ export function useAmbientTrustIdAuth(
     hasBoundInstall,
     storeSessionToken,
     getPushToken,
+    persistMasterDeviceState,
     unlockWithDeviceCredential,
   } = options;
 
@@ -315,20 +324,61 @@ export function useAmbientTrustIdAuth(
     void (async () => {
       const sdk = createTrustIdSdk({ baseUrl: apiBaseUrl });
       const pushToken = getPushToken ? await getPushToken() : null;
+      const installId = pendingInstallRef.current;
       const result = await sdk.registerTrustId({
         ...payload,
-        installId: pendingInstallRef.current,
+        installId,
         deviceName: "Master Phone",
+        deviceFingerprint:
+          payload.deviceFingerprint ||
+          (await getDeviceFingerprint?.()) ||
+          installId,
         pushToken: pushToken ?? undefined,
         pushPlatform: pushToken ? "android" : undefined,
       });
+
+      if (result.trustId && persistMasterDeviceState) {
+        await persistMasterDeviceState({
+          trustId: result.trustId,
+          isMasterDevice: true,
+          deviceId: result.device?.id ?? null,
+        });
+      }
+
+      // Refresh master bind + push token when we have a session.
+      if (result.trustId) {
+        try {
+          const fp =
+            payload.deviceFingerprint ||
+            (await getDeviceFingerprint?.()) ||
+            installId;
+          if (fp) {
+            await sdk.bindMasterDevice({
+              deviceFingerprint: fp,
+              deviceId: result.device?.id,
+              deviceName: "Master Phone",
+              pushToken: pushToken ?? undefined,
+              pushPlatform: pushToken ? "android" : undefined,
+            });
+          }
+        } catch {
+          /* optional second bind */
+        }
+      }
+
       setLastResult(result);
       await applyMatchedResult(result);
     })().catch((e) => {
       setError(e instanceof Error ? e.message : "Could not create Trust ID");
       setPhase("ERROR");
     });
-  }, [apiBaseUrl, applyMatchedResult, getPushToken]);
+  }, [
+    apiBaseUrl,
+    applyMatchedResult,
+    getDeviceFingerprint,
+    getPushToken,
+    persistMasterDeviceState,
+  ]);
 
   const declineCreateAccount = useCallback(() => {
     pendingPayloadRef.current = null;

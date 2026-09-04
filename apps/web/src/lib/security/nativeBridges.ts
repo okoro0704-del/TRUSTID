@@ -65,6 +65,16 @@ export function injectCapacitorSecurityBridges(): boolean {
     >;
   }
 
+  const heads = plugin("TrustIdHeadsUp");
+  if (heads && !window.TrustIdHeadsUp) {
+    window.TrustIdHeadsUp = {
+      ensureChannels: () =>
+        heads.ensureChannels?.() as Promise<{ ok: boolean }>,
+      showApproval: (options) =>
+        heads.showApproval?.(options) as Promise<{ ok: boolean }>,
+    };
+  }
+
   const lock = plugin("TrustIdAppLock");
   if (lock && !window.TrustIdAppLock) {
     window.TrustIdAppLock = {

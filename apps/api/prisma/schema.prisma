@@ -898,8 +898,8 @@ model DevicePushToken {
   /// FCM registration token or Web Push endpoint id
   token     String   @unique
   platform  String   @default("android")
-  /// high_importance_approval_channel
-  channelId String   @default("high_importance_approval_channel") @map("channel_id")
+  /// trust_id_security_alerts
+  channelId String   @default("trust_id_security_alerts") @map("channel_id")
   status    String   @default("active")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

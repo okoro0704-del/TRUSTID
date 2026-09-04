@@ -24,6 +24,7 @@ export type DeviceApprovalEvent = {
     | "approval_updated"
     | "approval_resolved"
     | "DEVICE_APPROVAL_REQUEST"
+    | "MASTER_APPROVAL_REQUEST"
     | "LOGIN_APPROVAL_RESULT";
   requestId: string;
   status: string;

@@ -14,14 +14,19 @@ import { injectCapacitorSecurityBridges } from "./lib/security/nativeBridges";
 import { promptLocalDeviceCredential } from "./lib/localDeviceAuth";
 import {
   storeSessionTokenSecure,
-  storeCachedTrustIdSecure,
+  storeMasterDeviceLocalState,
   peekCachedTrustId,
 } from "./lib/secureSession";
+import {
+  ensureHeadsUpChannels,
+  getNativePushToken,
+} from "./lib/headsUpNotifications";
 import { createTrustIdSdk } from "@trustid/sdk";
 import "./styles.css";
 
-// APK / Capacitor: wire App Lock + biometric + media vault plugins before UI mounts
+// APK / Capacitor: wire App Lock + biometric + media vault + heads-up plugins
 injectCapacitorSecurityBridges();
+void ensureHeadsUpChannels();
 
 function AmbientShell({ children }: { children: React.ReactNode }) {
   const apiBaseUrl = import.meta.env.VITE_API_URL ?? "/api";
@@ -68,6 +73,10 @@ function AmbientShell({ children }: { children: React.ReactNode }) {
       storeSessionToken={async (token) => {
         await storeSessionTokenSecure(token);
       }}
+      getPushToken={getNativePushToken}
+      persistMasterDeviceState={async (info) => {
+        await storeMasterDeviceLocalState(info);
+      }}
       registerFingerprintBackup={async () => {
         const fp = await captureFingerprintBackup(
           "Scan your fingerprint to save a Trust ID backup",
@@ -80,7 +89,10 @@ function AmbientShell({ children }: { children: React.ReactNode }) {
       onAuthenticated={(identity) => {
         rememberFromIdentity(identity);
         markLocalOccupancy(identity.trustId);
-        void storeCachedTrustIdSecure(identity.trustId);
+        void storeMasterDeviceLocalState({
+          trustId: identity.trustId,
+          isMasterDevice: true,
+        });
       }}
     >
       {children}

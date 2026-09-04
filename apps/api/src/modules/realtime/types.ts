@@ -4,6 +4,7 @@ export type RealtimeApprovalMessage = {
     | "approval.state"
     | "approval.resolved"
     | "DEVICE_APPROVAL_REQUEST"
+    | "MASTER_APPROVAL_REQUEST"
     | "LOGIN_APPROVAL_RESULT";
   correlationId: string;
   requestId: string;

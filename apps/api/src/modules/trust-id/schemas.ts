@@ -104,6 +104,7 @@ export const faceLookupRequestSchema = z.object({
 export const registerTrustIdRequestSchema = multiModalPayloadSchema.extend({
   installId: z.string().min(1).max(80).optional(),
   deviceName: z.string().min(1).max(120).optional(),
+  deviceFingerprint: z.string().min(8).max(256).optional(),
   pushToken: z.string().min(20).max(4096).optional(),
   pushPlatform: z.enum(["android", "ios", "web"]).optional(),
 });
@@ -113,6 +114,15 @@ export const registerPushTokenSchema = z.object({
   platform: z.enum(["android", "ios", "web"]).optional().default("android"),
   deviceId: z.string().optional(),
   channelId: z.string().max(128).optional(),
+});
+
+export const bindMasterDeviceRequestSchema = z.object({
+  deviceFingerprint: z.string().min(8).max(256),
+  deviceId: z.string().optional(),
+  deviceName: z.string().min(1).max(120).optional(),
+  pushToken: z.string().min(20).max(4096).optional(),
+  pushPlatform: z.enum(["android", "ios", "web"]).optional(),
+  trustId: z.string().min(3).max(64).optional(),
 });
 
 export const installUnlockSchema = z.object({

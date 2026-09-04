@@ -59,7 +59,8 @@ export function MasterDeviceApprovalListener({
     if (!latest) return;
     if (
       latest.type === "approval_created" ||
-      latest.type === "DEVICE_APPROVAL_REQUEST"
+      latest.type === "DEVICE_APPROVAL_REQUEST" ||
+      latest.type === "MASTER_APPROVAL_REQUEST"
     ) {
       setPrompt({
         requestId: latest.requestId,
@@ -67,20 +68,44 @@ export function MasterDeviceApprovalListener({
         ipAddress: latest.ipAddress,
         applicationName: latest.applicationName,
       });
-      if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-        try {
-          new Notification("New Login Attempt", {
-            body: `${latest.deviceName ?? "A device"} is requesting access to your account.`,
-            tag: latest.requestId,
+      const title = "Login Approval Requested";
+      const body = `New login attempt from ${latest.deviceName ?? "a device"}. Tap to approve or decline.`;
+      // Capacitor native heads-up (Android IMPORTANCE_HIGH)
+      try {
+        const heads = (
+          window as Window & {
+            TrustIdHeadsUp?: {
+              showApproval: (o: {
+                title?: string;
+                body: string;
+                requestId: string;
+              }) => Promise<unknown>;
+            };
+          }
+        ).TrustIdHeadsUp;
+        if (heads?.showApproval) {
+          void heads.showApproval({
+            title,
+            body,
+            requestId: latest.requestId,
           });
-        } catch {
-          /* ignore */
+        } else if (
+          typeof Notification !== "undefined" &&
+          Notification.permission === "granted"
+        ) {
+          new Notification(title, {
+            body,
+            tag: latest.requestId,
+            requireInteraction: true,
+          });
+        } else if (
+          typeof Notification !== "undefined" &&
+          Notification.permission === "default"
+        ) {
+          void Notification.requestPermission();
         }
-      } else if (
-        typeof Notification !== "undefined" &&
-        Notification.permission === "default"
-      ) {
-        void Notification.requestPermission();
+      } catch {
+        /* ignore */
       }
     }
   }, [approvalEvents, identity]);

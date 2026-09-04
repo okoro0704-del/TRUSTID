@@ -267,12 +267,13 @@ export class TrustIdSdk {
   async registerTrustId(input: MultiModalBiometricPayload & {
     installId?: string;
     deviceName?: string;
+    deviceFingerprint?: string;
     pushToken?: string;
     pushPlatform?: "android" | "ios" | "web";
   }): Promise<AmbientSignInResult & {
     success?: boolean;
     user?: { id: string; trustId: string };
-    device?: { id: string; isMasterDevice: boolean };
+    device?: { id: string; isMasterDevice: boolean; masterDeviceId?: string };
     token?: string;
   }> {
     const data = await this.api<{
@@ -285,10 +286,14 @@ export class TrustIdSdk {
       token?: string;
       isMasterDevice?: boolean;
       user?: { id: string; trustId: string };
-      device?: { id: string; isMasterDevice: boolean };
+      device?: { id: string; isMasterDevice: boolean; masterDeviceId?: string };
     }>("/v1/identity/register-trust-id", {
       method: "POST",
-      body: JSON.stringify(input),
+      body: JSON.stringify({
+        ...input,
+        deviceFingerprint:
+          input.deviceFingerprint ?? input.face?.deviceFingerprint,
+      }),
     });
     return {
       matched: data.matched ?? true,
@@ -302,6 +307,25 @@ export class TrustIdSdk {
       device: data.device,
       token: data.token ?? data.sessionToken,
     };
+  }
+
+  /** Explicit Master Device bind + optional FCM token refresh. */
+  async bindMasterDevice(input: {
+    deviceFingerprint: string;
+    deviceId?: string;
+    deviceName?: string;
+    pushToken?: string;
+    pushPlatform?: "android" | "ios" | "web";
+  }) {
+    return this.api<{
+      success: boolean;
+      deviceId: string | null;
+      masterDeviceId: string;
+      isMasterDevice: boolean;
+    }>("/v1/device/register-master", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
   }
 
   /**
