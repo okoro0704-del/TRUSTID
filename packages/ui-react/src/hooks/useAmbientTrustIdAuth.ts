@@ -222,10 +222,12 @@ export function useAmbientTrustIdAuth(
     pendingPayloadRef.current = payload;
 
     // Lookup-only first — never writes a new Trust ID until user consents.
+    const cachedTrustId = getLastTrustId?.() ?? undefined;
     const lookup = await sdk.faceLookup({
       face: payload.face,
       installId,
       deviceFingerprint: payload.deviceFingerprint,
+      cachedTrustId,
     });
 
     if (lookup.status === "NOT_FOUND") {

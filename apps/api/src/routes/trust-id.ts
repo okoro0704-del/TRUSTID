@@ -54,7 +54,7 @@ function sessionBody(token: string | undefined) {
 export async function trustIdRoutes(app: FastifyInstance) {
   /**
    * Ultra-fast edge-vector match — client sends ONLY a 512-D float array (~2KB).
-   * Cascade: in-memory/Redis hot cache → HNSW pgvector → NOT_FOUND.
+   * Dual-path: cachedTrustId → 1:1 direct; otherwise 1:N HNSW global search.
    */
   app.post("/v1/auth/fast-vector-match", async (req, reply) => {
     try {
@@ -63,7 +63,22 @@ export async function trustIdRoutes(app: FastifyInstance) {
       if (err && typeof err === "object" && "issues" in err) {
         return reply.code(400).send({
           error: "invalid_vector",
-          message: "Invalid 512-dimensional vector payload.",
+          message: "Valid 512-dimensional vector required.",
+        });
+      }
+      return httpError(err, reply);
+    }
+  });
+
+  /** Alias for biometric-login clients (same dual-path handler). */
+  app.post("/v1/auth/biometric-login", async (req, reply) => {
+    try {
+      return await handleFastVectorMatch(req, reply);
+    } catch (err) {
+      if (err && typeof err === "object" && "issues" in err) {
+        return reply.code(400).send({
+          error: "invalid_vector",
+          message: "Valid 512-dimensional vector required.",
         });
       }
       return httpError(err, reply);

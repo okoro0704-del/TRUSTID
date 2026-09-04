@@ -12,7 +12,11 @@ import { getOrCreateInstallId, getLocalOccupancy, markLocalOccupancy } from "./l
 import { getRememberedAccount, rememberFromIdentity } from "./lib/rememberedAccount";
 import { injectCapacitorSecurityBridges } from "./lib/security/nativeBridges";
 import { promptLocalDeviceCredential } from "./lib/localDeviceAuth";
-import { storeSessionTokenSecure } from "./lib/secureSession";
+import {
+  storeSessionTokenSecure,
+  storeCachedTrustIdSecure,
+  peekCachedTrustId,
+} from "./lib/secureSession";
 import { createTrustIdSdk } from "@trustid/sdk";
 import "./styles.css";
 
@@ -48,7 +52,12 @@ function AmbientShell({ children }: { children: React.ReactNode }) {
     <TrustIdAmbientAuthProvider
       apiBaseUrl={apiBaseUrl}
       getInstallId={getOrCreateInstallId}
-      getLastTrustId={() => getRememberedAccount()?.trustId ?? null}
+      getLastTrustId={() =>
+        peekCachedTrustId() ??
+        getRememberedAccount()?.trustId ??
+        getLocalOccupancy()?.trustId ??
+        null
+      }
       capturePayload={() => capture.payload()}
       allowAutoEnroll={false}
       hasBoundInstall={() => Boolean(getLocalOccupancy()?.trustId)}
@@ -56,7 +65,9 @@ function AmbientShell({ children }: { children: React.ReactNode }) {
         const result = await promptLocalDeviceCredential(reason);
         return result.ok;
       }}
-      storeSessionToken={storeSessionTokenSecure}
+      storeSessionToken={async (token) => {
+        await storeSessionTokenSecure(token);
+      }}
       registerFingerprintBackup={async () => {
         const fp = await captureFingerprintBackup(
           "Scan your fingerprint to save a Trust ID backup",
@@ -69,6 +80,7 @@ function AmbientShell({ children }: { children: React.ReactNode }) {
       onAuthenticated={(identity) => {
         rememberFromIdentity(identity);
         markLocalOccupancy(identity.trustId);
+        void storeCachedTrustIdSecure(identity.trustId);
       }}
     >
       {children}

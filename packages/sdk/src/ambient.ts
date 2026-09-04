@@ -45,8 +45,11 @@ export type FaceLookupResult = {
   needsMasterApproval?: boolean;
   approvalPollToken?: string;
   approvalRequestId?: string;
-  /** Server-side match latency (hot cache / HNSW) */
+  /** Server-side match latency (hot cache / HNSW / 1:1) */
   durationMs?: number;
+  /** `1:1_DIRECT_VERIFICATION` or `1:N_GLOBAL_SEARCH` */
+  strategy?: string;
+  distance?: number;
 };
 
 type AmbientSdkLike = {

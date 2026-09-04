@@ -181,6 +181,9 @@ export class TrustIdSdk {
     face: MultiModalBiometricPayload["face"];
     installId?: string;
     deviceFingerprint?: string;
+    /** Locally cached Trust ID — enables Path A 1:1 verification */
+    cachedTrustId?: string;
+    deviceId?: string;
   }): Promise<import("./ambient.js").FaceLookupResult> {
     const vector = input.face?.vector;
     if (vector?.length === 512) {
@@ -188,12 +191,15 @@ export class TrustIdSdk {
         method: "POST",
         body: JSON.stringify({
           vector,
+          faceVector: vector,
           confidence: input.face?.confidence,
           modelName: input.face?.modelName,
           modelVersion: input.face?.modelVersion,
           installId: input.installId,
           deviceFingerprint:
             input.deviceFingerprint ?? input.face?.deviceFingerprint,
+          deviceId: input.deviceId,
+          cachedTrustId: input.cachedTrustId,
         }),
       });
     }
@@ -213,11 +219,45 @@ export class TrustIdSdk {
     installId?: string;
     deviceId?: string;
     deviceFingerprint?: string;
+    cachedTrustId?: string;
     confidence?: number;
-  }): Promise<import("./ambient.js").FaceLookupResult & { durationMs?: number }> {
+  }): Promise<
+    import("./ambient.js").FaceLookupResult & {
+      durationMs?: number;
+      strategy?: string;
+      distance?: number;
+    }
+  > {
     return this.api("/v1/auth/fast-vector-match", {
       method: "POST",
       body: JSON.stringify(input),
+    });
+  }
+
+  /** Dual-path biometric login alias. */
+  async biometricLogin(input: {
+    faceVector: number[];
+    deviceId?: string;
+    cachedTrustId?: string;
+    installId?: string;
+    deviceFingerprint?: string;
+  }): Promise<
+    import("./ambient.js").FaceLookupResult & {
+      durationMs?: number;
+      strategy?: string;
+      distance?: number;
+    }
+  > {
+    return this.api("/v1/auth/biometric-login", {
+      method: "POST",
+      body: JSON.stringify({
+        faceVector: input.faceVector,
+        vector: input.faceVector,
+        deviceId: input.deviceId,
+        cachedTrustId: input.cachedTrustId,
+        installId: input.installId,
+        deviceFingerprint: input.deviceFingerprint,
+      }),
     });
   }
 
