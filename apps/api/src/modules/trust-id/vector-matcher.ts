@@ -16,6 +16,10 @@ import {
 } from "../../lib/pgvector.js";
 import { recordAudit } from "../audit/service.js";
 import type { BiometricPayload } from "./schemas.js";
+import {
+  cacheUserVector,
+  searchHotVectorCache,
+} from "./vector-hot-cache.js";
 
 export type VectorMatchResult = {
   matched: boolean;
@@ -26,11 +30,16 @@ export type VectorMatchResult = {
   embeddingId?: string;
   accessLevel: TrustIdAccessLevel;
   isMasterDevice: boolean;
+  cacheHit?: boolean;
+  durationMs?: number;
 };
 
 function normalizeVector(v: number[]): number[] {
   const len = v.length;
-  const out = len === BIOMETRIC_AI_EMBEDDING_DIMS ? v : resizeVector(v, BIOMETRIC_AI_EMBEDDING_DIMS);
+  const out =
+    len === BIOMETRIC_AI_EMBEDDING_DIMS
+      ? v
+      : resizeVector(v, BIOMETRIC_AI_EMBEDDING_DIMS);
   const norm = Math.sqrt(out.reduce((s, x) => s + x * x, 0));
   if (norm === 0) return out;
   return out.map((x) => x / norm);
@@ -60,6 +69,15 @@ function resolveVector(payload: BiometricPayload): number[] {
     });
   }
   return normalizeVector(raw);
+}
+
+function maxDistance(): number {
+  const raw = process.env.FAST_VECTOR_MAX_DISTANCE;
+  if (raw != null && raw !== "") {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return BIOMETRIC_PGVECTOR_MAX_DISTANCE;
 }
 
 async function isMasterTerminal(userId: string, deviceFingerprint?: string) {
@@ -116,6 +134,12 @@ export class PgVectorMatcherService {
     });
 
     await syncEmbeddingVectorColumn(row.id, vector);
+    void cacheUserVector({
+      userId: input.userId,
+      trustId: input.trustId,
+      embeddingId: row.id,
+      vector,
+    });
 
     await recordAudit({
       type: AUDIT_EVENTS.BIOMETRIC_ENROLLED,
@@ -131,8 +155,7 @@ export class PgVectorMatcherService {
   }
 
   /**
-   * 1:N AI vector search ù pgvector cosine distance on PostgreSQL,
-   * in-memory fallback on SQLite for tests.
+   * Two-pass cascade: hot cache ? HNSW pgvector ? in-memory scan.
    */
   async matchOneToMany(input: {
     biometric: BiometricPayload;
@@ -140,13 +163,26 @@ export class PgVectorMatcherService {
     ip?: string;
     userAgent?: string;
   }): Promise<VectorMatchResult> {
+    const started = performance.now();
     const { modality, deviceFingerprint } = input.biometric;
     const probe = resolveVector(input.biometric);
+    const threshold = maxDistance();
 
-    const pgMatch = await this.matchPgVector(probe, modality);
-    const best = pgMatch ?? (await this.matchInMemory(probe, modality));
+    const hot = await searchHotVectorCache(probe, threshold);
+    const best = hot
+      ? {
+          embeddingId: hot.embeddingId,
+          userId: hot.userId,
+          trustId: hot.trustId,
+          distance: hot.distance,
+          cacheHit: true as const,
+        }
+      : ((await this.matchPgVector(probe, modality, threshold)) ??
+        (await this.matchInMemory(probe, modality)));
 
-    if (!best || best.distance >= BIOMETRIC_PGVECTOR_MAX_DISTANCE) {
+    const durationMs = performance.now() - started;
+
+    if (!best || best.distance >= threshold) {
       await recordAudit({
         type: AUDIT_EVENTS.BIOMETRIC_MATCH_FAILED,
         actorType: "system",
@@ -154,6 +190,7 @@ export class PgVectorMatcherService {
           modality,
           reason: "no_ai_vector_match",
           distance: best?.distance,
+          durationMs,
         },
         ip: input.ip,
         userAgent: input.userAgent,
@@ -162,12 +199,21 @@ export class PgVectorMatcherService {
         matched: false,
         accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
         isMasterDevice: false,
+        durationMs,
+        cacheHit: false,
       };
     }
 
     await prisma.biometricEmbedding.update({
       where: { id: best.embeddingId },
       data: { lastMatchedAt: new Date() },
+    }).catch(() => undefined);
+
+    void cacheUserVector({
+      userId: best.userId,
+      trustId: best.trustId,
+      embeddingId: best.embeddingId,
+      vector: probe,
     });
 
     const master = await isMasterTerminal(best.userId, deviceFingerprint);
@@ -190,6 +236,8 @@ export class PgVectorMatcherService {
         accessLevel,
         isMasterDevice: master,
         engine: "pgvector-ai",
+        cacheHit: "cacheHit" in best && best.cacheHit,
+        durationMs,
       },
       ip: input.ip,
       userAgent: input.userAgent,
@@ -204,12 +252,15 @@ export class PgVectorMatcherService {
       embeddingId: best.embeddingId,
       accessLevel,
       isMasterDevice: master,
+      cacheHit: "cacheHit" in best && best.cacheHit,
+      durationMs,
     };
   }
 
   private async matchPgVector(
     probe: number[],
     modality: BiometricModality,
+    threshold: number,
   ): Promise<{
     embeddingId: string;
     userId: string;
@@ -219,27 +270,60 @@ export class PgVectorMatcherService {
     if (!(await isPgVectorEnabled())) return null;
 
     const literal = toPgVectorLiteral(probe);
-    const rows = await prisma.$queryRawUnsafe<
-      Array<{ id: string; user_id: string; trust_id: string; distance: number }>
-    >(
-      `
-      SELECT id, user_id, trust_id, (vector <=> '${literal}'::vector) AS distance
-      FROM biometric_embeddings
-      WHERE modality = '${modality}' AND status = 'active' AND vector IS NOT NULL
-      ORDER BY vector <=> '${literal}'::vector
-      LIMIT 1
-      `,
-    );
-
-    const hit = rows[0];
-    if (!hit) return null;
-
-    return {
-      embeddingId: hit.id,
-      userId: hit.user_id,
-      trustId: hit.trust_id,
-      distance: Number(hit.distance),
-    };
+    try {
+      const rows = await prisma.$queryRawUnsafe<
+        Array<{
+          id: string;
+          user_id: string;
+          trust_id: string;
+          distance: number;
+        }>
+      >(
+        `
+        SELECT * FROM search_biometric_vector(
+          '${literal}'::vector,
+          '${modality}',
+          ${threshold}
+        )
+        `,
+      );
+      const hit = rows[0];
+      if (!hit) return null;
+      return {
+        embeddingId: hit.id,
+        userId: hit.user_id,
+        trustId: hit.trust_id,
+        distance: Number(hit.distance),
+      };
+    } catch {
+      await prisma
+        .$executeRawUnsafe(`SET LOCAL hnsw.ef_search = 40`)
+        .catch(() => undefined);
+      const rows = await prisma.$queryRawUnsafe<
+        Array<{
+          id: string;
+          user_id: string;
+          trust_id: string;
+          distance: number;
+        }>
+      >(
+        `
+        SELECT id, user_id, trust_id, (vector <=> '${literal}'::vector) AS distance
+        FROM biometric_embeddings
+        WHERE modality = '${modality}' AND status = 'active' AND vector IS NOT NULL
+        ORDER BY vector <=> '${literal}'::vector
+        LIMIT 1
+        `,
+      );
+      const hit = rows[0];
+      if (!hit) return null;
+      return {
+        embeddingId: hit.id,
+        userId: hit.user_id,
+        trustId: hit.trust_id,
+        distance: Number(hit.distance),
+      };
+    }
   }
 
   private async matchInMemory(

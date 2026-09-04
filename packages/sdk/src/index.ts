@@ -174,6 +174,7 @@ export class TrustIdSdk {
 
   /**
    * Launch-time face lookup — never creates an account.
+   * Uses ultra-fast edge-vector cascade (~2KB payload, hot cache → HNSW).
    * NOT_FOUND requires explicit user consent before ambient enroll.
    */
   async faceLookup(input: {
@@ -181,6 +182,21 @@ export class TrustIdSdk {
     installId?: string;
     deviceFingerprint?: string;
   }): Promise<import("./ambient.js").FaceLookupResult> {
+    const vector = input.face?.vector;
+    if (vector?.length === 512) {
+      return this.api("/v1/auth/fast-vector-match", {
+        method: "POST",
+        body: JSON.stringify({
+          vector,
+          confidence: input.face?.confidence,
+          modelName: input.face?.modelName,
+          modelVersion: input.face?.modelVersion,
+          installId: input.installId,
+          deviceFingerprint:
+            input.deviceFingerprint ?? input.face?.deviceFingerprint,
+        }),
+      });
+    }
     return this.api("/v1/identity/face-lookup", {
       method: "POST",
       body: JSON.stringify({
@@ -188,6 +204,20 @@ export class TrustIdSdk {
         installId: input.installId,
         deviceFingerprint: input.deviceFingerprint,
       }),
+    });
+  }
+
+  /** Explicit ultra-fast 512-D vector match (edge extraction only). */
+  async fastVectorMatch(input: {
+    vector: number[];
+    installId?: string;
+    deviceId?: string;
+    deviceFingerprint?: string;
+    confidence?: number;
+  }): Promise<import("./ambient.js").FaceLookupResult & { durationMs?: number }> {
+    return this.api("/v1/auth/fast-vector-match", {
+      method: "POST",
+      body: JSON.stringify(input),
     });
   }
 

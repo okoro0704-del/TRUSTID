@@ -31,6 +31,7 @@ import {
   registerTrustIdWithMasterDevice,
   unlockSessionForBoundInstall,
 } from "../modules/trust-id/register.js";
+import { handleFastVectorMatch } from "../modules/trust-id/fast-vector-match.js";
 import { registerDevicePushToken } from "../modules/notifications/push.js";
 import { BIOMETRIC_MODALITIES } from "@trustid/shared";
 
@@ -51,6 +52,24 @@ function sessionBody(token: string | undefined) {
 }
 
 export async function trustIdRoutes(app: FastifyInstance) {
+  /**
+   * Ultra-fast edge-vector match — client sends ONLY a 512-D float array (~2KB).
+   * Cascade: in-memory/Redis hot cache → HNSW pgvector → NOT_FOUND.
+   */
+  app.post("/v1/auth/fast-vector-match", async (req, reply) => {
+    try {
+      return await handleFastVectorMatch(req, reply);
+    } catch (err) {
+      if (err && typeof err === "object" && "issues" in err) {
+        return reply.code(400).send({
+          error: "invalid_vector",
+          message: "Invalid 512-dimensional vector payload.",
+        });
+      }
+      return httpError(err, reply);
+    }
+  });
+
   /**
    * Launch lookup only — never enrolls.
    * MATCH_FOUND may issue a session (or master-approval pending).

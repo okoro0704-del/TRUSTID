@@ -45,6 +45,8 @@ export type FaceLookupResult = {
   needsMasterApproval?: boolean;
   approvalPollToken?: string;
   approvalRequestId?: string;
+  /** Server-side match latency (hot cache / HNSW) */
+  durationMs?: number;
 };
 
 type AmbientSdkLike = {

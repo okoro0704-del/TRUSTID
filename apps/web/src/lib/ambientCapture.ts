@@ -99,6 +99,8 @@ async function captureUnifiedFace(): Promise<BiometricPayload | null> {
 
 /**
  * Identity-first ambient capture — face is required.
+ * Extraction runs on-device (ONNX / face-api / spatial); only the ~2KB
+ * 512-D float vector is sent to the API — never raw camera frames.
  * Fingerprint is backup enroll only (see registerFingerprintBackup), not a login bypass.
  */
 export async function captureWebAmbientSingleModal(
