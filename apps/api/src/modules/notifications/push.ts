@@ -1,8 +1,10 @@
 import { prisma } from "../../db/client.js";
 import { config } from "../../lib/config.js";
 import { getElfComClient } from "../baas/registry.js";
+import { mintElfComCapabilityJwt } from "../elfcom/capability.js";
+import { sendMasterDeviceApprovalPush } from "../elfcom/push.adapter.js";
 
-/** Primary Android channel ó IMPORTANCE_HIGH heads-up banner */
+/** Primary Android channel ù IMPORTANCE_HIGH heads-up banner */
 export const HEADS_UP_CHANNEL_ID = "trust_id_security_alerts";
 /** Legacy channel kept for older installs */
 export const HEADS_UP_CHANNEL_LEGACY = "high_importance_approval_channel";
@@ -15,11 +17,12 @@ export type HeadsUpApprovalPushInput = {
   ipAddress?: string | null;
   deepLink?: string;
   ownerTrustId?: string;
+  locationHint?: string | null;
 };
 
 /**
- * Register push token with ElfCom (preferred). Local DevicePushToken is legacy fallback
- * until ElfCom device directory is authoritative.
+ * Register push token with ElfCom Universal Push Primitive (POST /v1/devices/register).
+ * Local DevicePushToken remains a legacy mirror until ElfCom is sole directory.
  */
 export async function registerDevicePushToken(input: {
   userId: string;
@@ -36,14 +39,35 @@ export async function registerDevicePushToken(input: {
   const channelId = input.channelId ?? HEADS_UP_CHANNEL_ID;
 
   const elfcom = getElfComClient();
+  let via: "elfcom" | "local_fallback" = "local_fallback";
+
   if (elfcom.bound && input.ownerTrustId) {
-    await elfcom.registerPushToken({
-      ownerTrustId: input.ownerTrustId,
-      token,
-      platform: input.platform ?? "android",
-      deviceId: input.deviceId ?? null,
-      channelId,
-    });
+    try {
+      const bearerToken = await mintElfComCapabilityJwt({
+        trustId: input.ownerTrustId,
+      });
+      const remote = await elfcom.registerPushToken({
+        ownerTrustId: input.ownerTrustId,
+        token,
+        platform: input.platform ?? "android",
+        deviceId: input.deviceId ?? null,
+        channelId,
+        bearerToken,
+        appId: config.elfcom.appId,
+      });
+      if (remote.ok) via = "elfcom";
+      else {
+        console.warn(
+          "[push] ElfCom device register failed:",
+          remote.error ?? remote.statusCode,
+        );
+      }
+    } catch (err) {
+      console.warn(
+        "[push] ElfCom device register error:",
+        err instanceof Error ? err.message : err,
+      );
+    }
   }
 
   const row = await prisma.devicePushToken.upsert({
@@ -68,13 +92,12 @@ export async function registerDevicePushToken(input: {
     id: row.id,
     platform: row.platform,
     channelId: row.channelId,
-    via: elfcom.bound ? ("elfcom" as const) : ("local_fallback" as const),
+    via,
   };
 }
 
 /**
- * OS heads-up for master approval ó delivered via ElfCom only.
- * Direct FCM from TrustID is removed (monolith leakage).
+ * OS heads-up for master approval ù delivered via ElfCom /v1/baas/notify only.
  */
 export async function sendMasterApprovalHeadsUpPush(
   input: HeadsUpApprovalPushInput,
@@ -100,31 +123,25 @@ export async function sendMasterApprovalHeadsUpPush(
     return { sent: 0, skipped: true, error: "missing_trust_id", via: "elfcom" };
   }
 
-  const result = await elfcom.pushConsent({
-    correlationId: input.correlationId,
-    requestId: input.requestId,
-    ownerTrustId,
-    title: "Login Approval Requested",
-    body: `New login attempt from ${input.deviceName}. Tap to approve or decline.`,
-    silent: false,
-    deepLink,
-    metadata: {
-      type: "MASTER_APPROVAL_REQUEST",
-      requestId: input.requestId,
-      deviceMeta: input.deviceName,
-      ipAddress: input.ipAddress ?? "",
-      channelId: HEADS_UP_CHANNEL_ID,
-      priority: "high",
-      click_action: "OPEN_APPROVAL_MODAL",
-      timestamp: String(Math.floor(Date.now() / 1000)),
-    },
-  });
-
-  if (!result.ok) {
-    return { sent: 0, skipped: true, error: result.error, via: "elfcom" };
+  try {
+    await sendMasterDeviceApprovalPush({
+      targetTrustId: ownerTrustId,
+      challengeId: input.requestId,
+      deviceLabel: input.deviceName,
+      locationHint: input.locationHint ?? input.ipAddress ?? undefined,
+      correlationId: input.correlationId,
+      deepLink,
+    });
+    return { sent: 1, skipped: false, via: "elfcom" };
+  } catch (err) {
+    return {
+      sent: 0,
+      skipped: true,
+      error: err instanceof Error ? err.message : "elfcom_notify_failed",
+      via: "elfcom",
+    };
   }
-  return { sent: 1, skipped: false, via: "elfcom" };
 }
 
-/** @deprecated alias */
-export const sendMasterDeviceApprovalPush = sendMasterApprovalHeadsUpPush;
+/** Prefer sendMasterApprovalHeadsUpPush; adapter re-export for callers. */
+export { sendMasterDeviceApprovalPush };

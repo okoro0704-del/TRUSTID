@@ -2,7 +2,10 @@ export type * from "./types.js";
 export {
   HttpElfComClient,
   UnboundElfComClient,
+  ELFCOM_TRUST_ID_APP_ID,
+  ELFCOM_SECURITY_CHANNEL,
   type IElfComClient,
+  type ElfComBaasNotifyInput,
   type ElfComConsentPushPayload,
   type ElfComNotification,
   type ElfComPushTokenInput,

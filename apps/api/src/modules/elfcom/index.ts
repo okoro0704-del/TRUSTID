@@ -12,3 +12,9 @@ export type {
   ConsentPushResult,
   IElfComConsentDispatcher,
 } from "./dispatcher.js";
+
+export { mintElfComCapabilityJwt } from "./capability.js";
+export {
+  sendMasterDeviceApprovalPush,
+  type MasterApprovalPushInput,
+} from "./push.adapter.js";

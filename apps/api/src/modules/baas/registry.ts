@@ -44,6 +44,8 @@ export function bootstrapBaasClients() {
     elfcom = new HttpElfComClient({
       baseUrl: config.elfcom.baseUrl,
       nodeSecret: config.elfcom.nodeSecret,
+      baasApiKey: config.elfcom.baasApiKey || undefined,
+      appId: config.elfcom.appId,
     });
   } else {
     elfcom = new UnboundElfComClient();

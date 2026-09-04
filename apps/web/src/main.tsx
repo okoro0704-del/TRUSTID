@@ -21,6 +21,7 @@ import {
   ensureHeadsUpChannels,
   getNativePushToken,
 } from "./lib/headsUpNotifications";
+import { initElfComPushRegistration } from "./lib/notification_registration";
 import { createTrustIdSdk } from "@trustid/sdk";
 import "./styles.css";
 
@@ -93,6 +94,7 @@ function AmbientShell({ children }: { children: React.ReactNode }) {
           trustId: identity.trustId,
           isMasterDevice: true,
         });
+        void initElfComPushRegistration(identity.trustId, apiBaseUrl);
       }}
     >
       {children}
@@ -107,7 +109,13 @@ createRoot(document.getElementById("root")!).render(
         apiBaseUrl={import.meta.env.VITE_API_URL ?? "/api"}
         enableRealtime
         onIdentityChange={(identity) => {
-          if (identity) rememberFromIdentity(identity);
+          if (identity) {
+            rememberFromIdentity(identity);
+            void initElfComPushRegistration(
+              identity.trustId,
+              import.meta.env.VITE_API_URL ?? "/api",
+            );
+          }
         }}
       >
         <AmbientShell>

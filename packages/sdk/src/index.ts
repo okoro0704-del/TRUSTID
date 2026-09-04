@@ -367,13 +367,30 @@ export class TrustIdSdk {
     deviceId?: string;
     channelId?: string;
   }) {
-    return this.api<{ ok: boolean; id?: string; platform?: string }>(
-      "/v1/devices/push-token",
-      {
-        method: "POST",
-        body: JSON.stringify(input),
-      },
-    );
+    return this.api<{
+      ok: boolean;
+      id?: string;
+      platform?: string;
+      via?: string;
+    }>("/v1/devices/push-token", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  /** Short-lived JWT for direct ElfCom POST /v1/devices/register */
+  async mintElfComCapabilityToken() {
+    return this.api<{
+      ok: boolean;
+      token: string;
+      trustId: string;
+      expiresInSeconds: number;
+      elfcomBaseUrl: string;
+      appId: string;
+    }>("/v1/elfcom/capability-token", {
+      method: "POST",
+      body: "{}",
+    });
   }
 
   async pollDeviceApproval(pollToken: string): Promise<{

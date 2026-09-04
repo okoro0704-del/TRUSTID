@@ -82,20 +82,8 @@ export async function showApprovalHeadsUp(input: {
  * Notifications plugin are configured on the APK.
  */
 export async function getNativePushToken(): Promise<string | null> {
-  const push = plugin("PushNotifications");
-  if (!push) return null;
-  try {
-    await push.requestPermissions?.();
-    await push.register?.();
-    // Capacitor PushNotifications delivers token via 'registration' listener —
-    // without a long-lived listener we can't await it here. Callers should
-    // register via window hook when available.
-    const cached = (window as Window & { __trustidFcmToken?: string })
-      .__trustidFcmToken;
-    return cached ?? null;
-  } catch {
-    return null;
-  }
+  const { obtainNativePushToken } = await import("./notification_registration");
+  return obtainNativePushToken();
 }
 
 declare global {

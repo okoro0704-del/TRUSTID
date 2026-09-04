@@ -148,12 +148,12 @@ async function dispatchConsentPush(row: ApprovalRow, userTrustId: string) {
     /* fall through to direct ElfCom */
   }
 
-  // Direct ElfCom when Platform Job unbound / enqueue failed.
+  // Direct ElfCom /v1/baas/notify when Platform Job unbound / enqueue failed.
   try {
     const { sendMasterApprovalHeadsUpPush } = await import(
       "../notifications/push.js"
     );
-    await sendMasterApprovalHeadsUpPush({
+    const headsUp = await sendMasterApprovalHeadsUpPush({
       userId: row.userId,
       requestId: row.id,
       correlationId: row.correlationId,
@@ -161,9 +161,22 @@ async function dispatchConsentPush(row: ApprovalRow, userTrustId: string) {
       ipAddress: row.ip,
       deepLink,
       ownerTrustId: userTrustId,
+      locationHint: row.location ?? row.ip,
     });
+    if (headsUp.sent > 0) {
+      await transitionApprovalFsm({
+        row,
+        event: "push_dispatched",
+        audit: {
+          type: AUDIT_EVENTS.DEVICE_APPROVAL_PUSHED,
+          actorType: "system",
+          metadata: { via: "elfcom_baas_notify" },
+        },
+      });
+      return;
+    }
   } catch {
-    /* ElfCom optional — WS still notify */
+    /* fall through to legacy consent dispatcher */
   }
 
   const result = await dispatcher.pushConsent(pushPayload);

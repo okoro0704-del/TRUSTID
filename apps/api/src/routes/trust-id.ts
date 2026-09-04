@@ -35,6 +35,7 @@ import {
 } from "../modules/trust-id/register.js";
 import { handleFastVectorMatch } from "../modules/trust-id/fast-vector-match.js";
 import { registerDevicePushToken } from "../modules/notifications/push.js";
+import { mintElfComCapabilityJwt } from "../modules/elfcom/capability.js";
 import { prisma } from "../db/client.js";
 import { BIOMETRIC_MODALITIES } from "@trustid/shared";
 
@@ -288,6 +289,42 @@ export async function trustIdRoutes(app: FastifyInstance) {
         ownerTrustId: user?.trustId,
       });
       return { ok: true, ...row };
+    } catch (err) {
+      return httpError(err, reply);
+    }
+  });
+
+  /**
+   * Short-lived ElfCom capability JWT so the client can call
+   * POST /v1/devices/register directly (cookie session → Bearer for ElfCom).
+   */
+  app.post("/v1/elfcom/capability-token", async (req, reply) => {
+    await requireSession(req, reply);
+    if (!req.auth) return;
+    try {
+      const user = await prisma.user.findUnique({
+        where: { id: req.auth.userId },
+        select: { trustId: true },
+      });
+      if (!user?.trustId) {
+        return reply.code(400).send({
+          error: "missing_trust_id",
+          message: "Account has no Trust ID",
+        });
+      }
+      const token = await mintElfComCapabilityJwt({
+        trustId: user.trustId,
+        sessionId: req.auth.sessionId,
+        expiresInSeconds: 300,
+      });
+      return {
+        ok: true,
+        token,
+        trustId: user.trustId,
+        expiresInSeconds: 300,
+        elfcomBaseUrl: config.elfcom.baseUrl,
+        appId: config.elfcom.appId,
+      };
     } catch (err) {
       return httpError(err, reply);
     }

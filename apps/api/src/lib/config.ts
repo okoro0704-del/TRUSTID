@@ -101,14 +101,31 @@ export const config = {
   get temporarySessionHours() {
     return Number(process.env.TEMPORARY_SESSION_HOURS ?? 8);
   },
-  /** ElfCom sovereign messaging node for consent push / inbox / realtime */
+  /** ElfCom sovereign messaging node — Universal Push Primitive + realtime */
   get elfcom() {
     const mode = (process.env.ELFCOM_MODE ?? "unbound") as "unbound" | "http";
+    const baseUrl =
+      process.env.ELFCOM_API_URL ??
+      process.env.ELFCOM_BASE_URL ??
+      "http://localhost:8791";
     return {
       mode,
-      baseUrl: process.env.ELFCOM_BASE_URL ?? "http://localhost:8791",
+      baseUrl,
       nodeSecret:
-        process.env.ELFCOM_NODE_SECRET ?? "elfcom-dev-node-secret-change-me",
+        process.env.ELFCOM_NODE_SECRET ??
+        process.env.LIFEOS_JWT_SECRET ??
+        "elfcom-dev-node-secret-change-me",
+      /** BaaS key for POST /v1/baas/notify (maps to trust_id_app) */
+      baasApiKey: process.env.ELFCOM_BAAS_API_KEY ?? "",
+      appId: process.env.ELFCOM_APP_ID ?? "trust_id_app",
+      /** Shared with elfcom-node LIFEOS_JWT_* for device register JWTs */
+      capabilityJwtSecret:
+        process.env.ELFCOM_CAPABILITY_JWT_SECRET ??
+        process.env.LIFEOS_JWT_SECRET ??
+        process.env.ELFCOM_NODE_SECRET ??
+        "elfcom-dev-node-secret-change-me",
+      capabilityJwtIss: process.env.LIFEOS_JWT_ISS ?? "lifeos",
+      capabilityJwtAud: process.env.LIFEOS_JWT_AUD ?? "elfcom",
     };
   },
   /** DataZone sovereign-drive — object storage + sync relay */
