@@ -51,6 +51,10 @@ export function injectCapacitorSecurityBridges(): boolean {
           publicKeyBase64?: string;
           keyAlias?: string;
         }>,
+      storeSecure: (options) =>
+        bio.storeSecure?.(options) as Promise<{ ok: boolean }>,
+      getSecure: (options) =>
+        bio.getSecure?.(options) as Promise<{ value: string | null }>,
     };
   }
 

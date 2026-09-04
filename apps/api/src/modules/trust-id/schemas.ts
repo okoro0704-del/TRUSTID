@@ -100,6 +100,28 @@ export const faceLookupRequestSchema = z.object({
   message: "face or faceVector is required",
 });
 
+/** Explicit create-consent: register Trust ID + bind Master Device. */
+export const registerTrustIdRequestSchema = multiModalPayloadSchema.extend({
+  installId: z.string().min(1).max(80).optional(),
+  deviceName: z.string().min(1).max(120).optional(),
+  pushToken: z.string().min(20).max(4096).optional(),
+  pushPlatform: z.enum(["android", "ios", "web"]).optional(),
+});
+
+export const registerPushTokenSchema = z.object({
+  token: z.string().min(20).max(4096),
+  platform: z.enum(["android", "ios", "web"]).optional().default("android"),
+  deviceId: z.string().optional(),
+  channelId: z.string().max(128).optional(),
+});
+
+export const installUnlockSchema = z.object({
+  installId: z.string().min(1).max(80),
+  /** Client attested local biometric / device-credential success */
+  localAuthOk: z.boolean().optional().default(true),
+});
+
 export type MultiModalPayload = z.infer<typeof multiModalPayloadSchema>;
 export type AmbientSignInRequest = z.infer<typeof ambientSignInRequestSchema>;
 export type FaceLookupRequest = z.infer<typeof faceLookupRequestSchema>;
+export type RegisterTrustIdRequest = z.infer<typeof registerTrustIdRequestSchema>;

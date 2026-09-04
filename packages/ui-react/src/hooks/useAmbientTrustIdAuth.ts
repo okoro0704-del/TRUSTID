@@ -38,6 +38,17 @@ export type UseAmbientTrustIdAuthOptions = CaptureHandlers & {
     requestId?: string;
   }) => void;
   registerFingerprintBackup?: () => Promise<void | boolean>;
+  /** True when this install already owns a Trust ID locally / occupancy cache */
+  hasBoundInstall?: () => boolean;
+  /** Persist session token to encrypted secure storage after enroll/login */
+  storeSessionToken?: (token: string) => Promise<void>;
+  /** Optional FCM token for heads-up approval pushes */
+  getPushToken?: () => Promise<string | null>;
+  /**
+   * Prompt native fingerprint / device PIN. Return true when OS auth succeeds.
+   * Used when face fails on an already-bound install.
+   */
+  unlockWithDeviceCredential?: (reason: string) => Promise<boolean>;
 };
 
 export type UseAmbientTrustIdAuthResult = {
@@ -75,6 +86,10 @@ export function useAmbientTrustIdAuth(
     getDeviceFingerprint,
     capturePayload,
     registerFingerprintBackup,
+    hasBoundInstall,
+    storeSessionToken,
+    getPushToken,
+    unlockWithDeviceCredential,
   } = options;
 
   const { loading, identity, setIdentity, refresh } = useTrustIdSession();
@@ -91,7 +106,14 @@ export function useAmbientTrustIdAuth(
   const pendingInstallRef = useRef<string | undefined>(undefined);
 
   const finishAuthenticated = useCallback(
-    async (id?: TrustIdIdentity | null) => {
+    async (id?: TrustIdIdentity | null, sessionToken?: string | null) => {
+      if (sessionToken && storeSessionToken) {
+        try {
+          await storeSessionToken(sessionToken);
+        } catch {
+          /* optional secure store */
+        }
+      }
       if (id) {
         setIdentity(id);
         onAuthenticated?.(id);
@@ -99,8 +121,33 @@ export function useAmbientTrustIdAuth(
       await refresh();
       setPhase("AUTHENTICATED");
     },
-    [onAuthenticated, refresh, setIdentity],
+    [onAuthenticated, refresh, setIdentity, storeSessionToken],
   );
+
+  const tryBoundInstallUnlock = useCallback(async (): Promise<boolean> => {
+    const installId = pendingInstallRef.current;
+    if (!installId || !hasBoundInstall?.() || !unlockWithDeviceCredential) {
+      return false;
+    }
+    const ok = await unlockWithDeviceCredential(
+      "Face match failed. Verify with Fingerprint or Device PIN",
+    );
+    if (!ok) return false;
+    const sdk = createTrustIdSdk({ baseUrl: apiBaseUrl });
+    const unlocked = await sdk.installUnlock({ installId, localAuthOk: true });
+    if (!unlocked.matched) return false;
+    setLastResult(unlocked);
+    await finishAuthenticated(
+      unlocked.identity as TrustIdIdentity | undefined,
+      unlocked.sessionToken ?? unlocked.token,
+    );
+    return true;
+  }, [
+    apiBaseUrl,
+    finishAuthenticated,
+    hasBoundInstall,
+    unlockWithDeviceCredential,
+  ]);
 
   const applyMatchedResult = useCallback(
     async (result: AmbientSignInResult) => {
@@ -126,10 +173,13 @@ export function useAmbientTrustIdAuth(
           }
         }
         if (result.identity) {
-          await finishAuthenticated(result.identity as TrustIdIdentity);
+          await finishAuthenticated(
+            result.identity as TrustIdIdentity,
+            result.sessionToken,
+          );
           return;
         }
-        await finishAuthenticated();
+        await finishAuthenticated(undefined, result.sessionToken);
         return;
       }
 
@@ -160,6 +210,8 @@ export function useAmbientTrustIdAuth(
     }
 
     if (!payload?.face) {
+      const unlocked = await tryBoundInstallUnlock();
+      if (unlocked) return;
       setError(
         "No face detected. Look straight at the camera so Trust ID can verify you.",
       );
@@ -177,6 +229,10 @@ export function useAmbientTrustIdAuth(
     });
 
     if (lookup.status === "NOT_FOUND") {
+      // Returning phone: face miss → fingerprint / PIN before create prompt.
+      const unlocked = await tryBoundInstallUnlock();
+      if (unlocked) return;
+
       if (allowAutoEnroll) {
         const result = await sdk.ambientAuthenticate({
           captureFace,
@@ -242,6 +298,7 @@ export function useAmbientTrustIdAuth(
     getDeviceFingerprint,
     getInstallId,
     getLastTrustId,
+    tryBoundInstallUnlock,
   ]);
 
   const confirmCreateAccount = useCallback(() => {
@@ -255,13 +312,13 @@ export function useAmbientTrustIdAuth(
     setError(null);
     void (async () => {
       const sdk = createTrustIdSdk({ baseUrl: apiBaseUrl });
-      const result = await sdk.ambientAuthenticate({
-        captureFace,
-        captureFingerprint,
-        getDeviceFingerprint,
-        payload,
-        allowAutoEnroll: true,
+      const pushToken = getPushToken ? await getPushToken() : null;
+      const result = await sdk.registerTrustId({
+        ...payload,
         installId: pendingInstallRef.current,
+        deviceName: "Master Phone",
+        pushToken: pushToken ?? undefined,
+        pushPlatform: pushToken ? "android" : undefined,
       });
       setLastResult(result);
       await applyMatchedResult(result);
@@ -269,13 +326,7 @@ export function useAmbientTrustIdAuth(
       setError(e instanceof Error ? e.message : "Could not create Trust ID");
       setPhase("ERROR");
     });
-  }, [
-    apiBaseUrl,
-    applyMatchedResult,
-    captureFace,
-    captureFingerprint,
-    getDeviceFingerprint,
-  ]);
+  }, [apiBaseUrl, applyMatchedResult, getPushToken]);
 
   const declineCreateAccount = useCallback(() => {
     pendingPayloadRef.current = null;

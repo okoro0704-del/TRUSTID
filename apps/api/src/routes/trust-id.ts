@@ -14,6 +14,9 @@ import {
   verifyMasterDeviceSchema,
   ambientSignInRequestSchema,
   faceLookupRequestSchema,
+  registerTrustIdRequestSchema,
+  registerPushTokenSchema,
+  installUnlockSchema,
 } from "../modules/trust-id/schemas.js";
 import {
   approveMasterChallenge,
@@ -24,6 +27,11 @@ import {
   verifyBiometricAndSession,
   verifyMasterDeviceBinding,
 } from "../modules/trust-id/index.js";
+import {
+  registerTrustIdWithMasterDevice,
+  unlockSessionForBoundInstall,
+} from "../modules/trust-id/register.js";
+import { registerDevicePushToken } from "../modules/notifications/push.js";
 import { BIOMETRIC_MODALITIES } from "@trustid/shared";
 
 function httpError(err: unknown, reply: import("fastify").FastifyReply) {
@@ -126,6 +134,91 @@ export async function trustIdRoutes(app: FastifyInstance) {
         ...sessionBody(result.sessionToken),
         token: config.exposeSessionTokenInBody ? result.sessionToken : undefined,
       };
+    } catch (err) {
+      return httpError(err, reply);
+    }
+  });
+
+  /**
+   * Create Trust ID after user consent — binds this terminal as Master Device.
+   */
+  app.post("/v1/identity/register-trust-id", async (req, reply) => {
+    const body = registerTrustIdRequestSchema.parse(req.body ?? {});
+    try {
+      const { installId, deviceName, pushToken, pushPlatform, ...payload } =
+        body;
+      const result = await registerTrustIdWithMasterDevice({
+        payload,
+        installId,
+        deviceName,
+        pushToken,
+        pushPlatform,
+        ...clientMeta(req),
+      });
+      setSessionCookie(reply, result.sessionToken);
+      return {
+        success: true,
+        matched: true,
+        enrolled: true,
+        trustId: result.trustId,
+        user: result.user,
+        device: result.device,
+        isMasterDevice: true,
+        identity: result.identity,
+        ...sessionBody(result.sessionToken),
+        token: config.exposeSessionTokenInBody ? result.token : undefined,
+      };
+    } catch (err) {
+      return httpError(err, reply);
+    }
+  });
+
+  /**
+   * After local fingerprint / device PIN succeeds on a bound install,
+   * re-issue the cloud session without requiring a face rematch.
+   */
+  app.post("/v1/auth/install-unlock", async (req, reply) => {
+    const body = installUnlockSchema.parse(req.body ?? {});
+    if (!body.localAuthOk) {
+      return reply.code(401).send({
+        error: "local_auth_required",
+        message: "Device biometric or PIN verification required",
+      });
+    }
+    try {
+      const result = await unlockSessionForBoundInstall({
+        installId: body.installId,
+        ...clientMeta(req),
+      });
+      setSessionCookie(reply, result.sessionToken);
+      return {
+        status: "MATCH_FOUND" as const,
+        authenticatedVia: result.authenticatedVia,
+        trustId: result.trustId,
+        identity: result.identity,
+        isMasterDevice: result.isMasterDevice,
+        ...sessionBody(result.sessionToken),
+        token: config.exposeSessionTokenInBody ? result.token : undefined,
+      };
+    } catch (err) {
+      return httpError(err, reply);
+    }
+  });
+
+  /** Register FCM / Web Push token for heads-up approval alerts. */
+  app.post("/v1/devices/push-token", async (req, reply) => {
+    await requireSession(req, reply);
+    if (!req.auth) return;
+    const body = registerPushTokenSchema.parse(req.body ?? {});
+    try {
+      const row = await registerDevicePushToken({
+        userId: req.auth.userId,
+        token: body.token,
+        platform: body.platform,
+        deviceId: body.deviceId ?? req.auth.deviceId,
+        channelId: body.channelId,
+      });
+      return { ok: true, ...row };
     } catch (err) {
       return httpError(err, reply);
     }

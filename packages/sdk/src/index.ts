@@ -191,6 +191,97 @@ export class TrustIdSdk {
     });
   }
 
+  /**
+   * Create Trust ID after consent — binds this terminal as Master Device.
+   */
+  async registerTrustId(input: MultiModalBiometricPayload & {
+    installId?: string;
+    deviceName?: string;
+    pushToken?: string;
+    pushPlatform?: "android" | "ios" | "web";
+  }): Promise<AmbientSignInResult & {
+    success?: boolean;
+    user?: { id: string; trustId: string };
+    device?: { id: string; isMasterDevice: boolean };
+    token?: string;
+  }> {
+    const data = await this.api<{
+      success?: boolean;
+      matched?: boolean;
+      enrolled?: boolean;
+      trustId?: string;
+      identity?: unknown;
+      sessionToken?: string;
+      token?: string;
+      isMasterDevice?: boolean;
+      user?: { id: string; trustId: string };
+      device?: { id: string; isMasterDevice: boolean };
+    }>("/v1/identity/register-trust-id", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+    return {
+      matched: data.matched ?? true,
+      enrolled: data.enrolled ?? true,
+      trustId: data.trustId ?? data.user?.trustId,
+      identity: data.identity,
+      sessionToken: data.sessionToken ?? data.token,
+      isMasterDevice: data.isMasterDevice ?? true,
+      success: data.success,
+      user: data.user,
+      device: data.device,
+      token: data.token ?? data.sessionToken,
+    };
+  }
+
+  /**
+   * Bound-install unlock after native fingerprint / device PIN succeeds.
+   */
+  async installUnlock(input: {
+    installId: string;
+    localAuthOk?: boolean;
+  }): Promise<AmbientSignInResult & { authenticatedVia?: string; token?: string }> {
+    const data = await this.api<{
+      status?: string;
+      authenticatedVia?: string;
+      trustId?: string;
+      identity?: unknown;
+      sessionToken?: string;
+      token?: string;
+      isMasterDevice?: boolean;
+    }>("/v1/auth/install-unlock", {
+      method: "POST",
+      body: JSON.stringify({
+        installId: input.installId,
+        localAuthOk: input.localAuthOk ?? true,
+      }),
+    });
+    return {
+      matched: true,
+      trustId: data.trustId,
+      identity: data.identity,
+      sessionToken: data.sessionToken ?? data.token,
+      isMasterDevice: data.isMasterDevice ?? true,
+      authenticatedVia: data.authenticatedVia,
+      token: data.token ?? data.sessionToken,
+    };
+  }
+
+  async registerPushToken(input: {
+    token: string;
+    platform?: "android" | "ios" | "web";
+    deviceId?: string;
+    channelId?: string;
+  }) {
+    return this.api<{ ok: boolean; id?: string; platform?: string }>(
+      "/v1/devices/push-token",
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+    );
+  }
+
   async pollDeviceApproval(pollToken: string): Promise<{
     requestId: string;
     status: string;

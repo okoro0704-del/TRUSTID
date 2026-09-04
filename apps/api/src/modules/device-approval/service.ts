@@ -86,12 +86,29 @@ async function dispatchConsentPush(row: ApprovalRow, userTrustId: string) {
   const dispatcher = getElfComConsentDispatcher();
   const deepLink = `${config.webauthn.origin}/dashboard/approvals?requestId=${row.id}&correlationId=${row.correlationId}`;
 
+  // OS heads-up via FCM when tokens + FCM_SERVER_KEY are configured.
+  try {
+    const { sendMasterApprovalHeadsUpPush } = await import(
+      "../notifications/push.js"
+    );
+    await sendMasterApprovalHeadsUpPush({
+      userId: row.userId,
+      requestId: row.id,
+      correlationId: row.correlationId,
+      deviceName: row.requestedDeviceName,
+      ipAddress: row.ip,
+      deepLink,
+    });
+  } catch {
+    /* FCM optional — ElfCom / WS still notify */
+  }
+
   const result = await dispatcher.pushConsent({
     correlationId: row.correlationId,
     requestId: row.id,
     ownerTrustId: userTrustId,
-    title: "New Login Attempt",
-    body: `A ${row.requestedDeviceName} device is requesting access to your account.`,
+    title: "Login Approval Request",
+    body: `A ${row.requestedDeviceName} device is requesting access to your account. Tap to approve.`,
     silent: false,
     deepLink,
     metadata: {
@@ -102,6 +119,7 @@ async function dispatchConsentPush(row: ApprovalRow, userTrustId: string) {
       timestamp: String(Math.floor(Date.now() / 1000)),
       click_action: "OPEN_APPROVAL_MODAL",
       priority: "high",
+      channelId: "high_importance_approval_channel",
       applicationName: row.applicationName,
       platform: row.platform,
       browser: row.browser,

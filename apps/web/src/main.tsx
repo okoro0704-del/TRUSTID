@@ -8,9 +8,11 @@ import {
 import "@trustid/ui-react/styles.css";
 import { App } from "./App";
 import { createWebAmbientCapture, captureFingerprintBackup } from "./lib/ambientCapture";
-import { getOrCreateInstallId, markLocalOccupancy } from "./lib/deviceInstall";
+import { getOrCreateInstallId, getLocalOccupancy, markLocalOccupancy } from "./lib/deviceInstall";
 import { getRememberedAccount, rememberFromIdentity } from "./lib/rememberedAccount";
 import { injectCapacitorSecurityBridges } from "./lib/security/nativeBridges";
+import { promptLocalDeviceCredential } from "./lib/localDeviceAuth";
+import { storeSessionTokenSecure } from "./lib/secureSession";
 import { createTrustIdSdk } from "@trustid/sdk";
 import "./styles.css";
 
@@ -49,6 +51,12 @@ function AmbientShell({ children }: { children: React.ReactNode }) {
       getLastTrustId={() => getRememberedAccount()?.trustId ?? null}
       capturePayload={() => capture.payload()}
       allowAutoEnroll={false}
+      hasBoundInstall={() => Boolean(getLocalOccupancy()?.trustId)}
+      unlockWithDeviceCredential={async (reason) => {
+        const result = await promptLocalDeviceCredential(reason);
+        return result.ok;
+      }}
+      storeSessionToken={storeSessionTokenSecure}
       registerFingerprintBackup={async () => {
         const fp = await captureFingerprintBackup(
           "Scan your fingerprint to save a Trust ID backup",

@@ -20,6 +20,9 @@ export type AmbientSignInResult = {
   fingerprintMatchScore?: number;
   identity?: unknown;
   sessionToken?: string;
+  /** Alias when API returns token in body */
+  token?: string;
+  authenticatedVia?: string;
   /** Cloud identity matched but this terminal needs Master Device approval */
   needsMasterApproval?: boolean;
   approvalPollToken?: string;

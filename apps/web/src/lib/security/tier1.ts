@@ -21,7 +21,7 @@ declare global {
       authenticate(options: {
         reason: string;
         allowDeviceCredential: boolean;
-        strongOnly: boolean;
+        strongOnly?: boolean;
       }): Promise<{ ok: boolean; method: string }>;
       captureFingerprintTemplate?(options?: {
         reason?: string;
@@ -31,6 +31,11 @@ declare global {
         publicKeyBase64?: string;
         keyAlias?: string;
       }>;
+      storeSecure?(options: {
+        key: string;
+        value: string;
+      }): Promise<{ ok: boolean }>;
+      getSecure?(options: { key: string }): Promise<{ value: string | null }>;
     };
     TrustIdMediaVault?: ConstructorParameters<typeof MediaVault>[1];
     TrustIdAppLock?: ConstructorParameters<typeof AppLockController>[1];

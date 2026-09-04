@@ -118,6 +118,54 @@ class BiometricGatePlugin : Plugin() {
     )
   }
 
+  /** EncryptedSharedPreferences for session tokens / local secrets. */
+  @PluginMethod
+  fun storeSecure(call: PluginCall) {
+    val key = call.getString("key")
+    val value = call.getString("value") ?: ""
+    if (key.isNullOrBlank()) {
+      call.reject("key is required")
+      return
+    }
+    try {
+      prefs().edit().putString(key, value).apply()
+      val ret = JSObject()
+      ret.put("ok", true)
+      call.resolve(ret)
+    } catch (e: Exception) {
+      call.reject(e.message ?: "storeSecure failed")
+    }
+  }
+
+  @PluginMethod
+  fun getSecure(call: PluginCall) {
+    val key = call.getString("key")
+    if (key.isNullOrBlank()) {
+      call.reject("key is required")
+      return
+    }
+    try {
+      val ret = JSObject()
+      ret.put("value", prefs().getString(key, null))
+      call.resolve(ret)
+    } catch (e: Exception) {
+      call.reject(e.message ?: "getSecure failed")
+    }
+  }
+
+  private fun prefs(): android.content.SharedPreferences {
+    val masterKey = androidx.security.crypto.MasterKey.Builder(context)
+      .setKeyScheme(androidx.security.crypto.MasterKey.KeyScheme.AES256_GCM)
+      .build()
+    return androidx.security.crypto.EncryptedSharedPreferences.create(
+      context,
+      "trustid_secure_prefs",
+      masterKey,
+      androidx.security.crypto.EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+      androidx.security.crypto.EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+    )
+  }
+
   private fun runBiometricPrompt(
     call: PluginCall,
     reason: String,

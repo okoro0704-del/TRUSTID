@@ -48,6 +48,7 @@ model User {
   biometricEmbeddings     BiometricEmbedding[]
   masterDevices           MasterDevice[]
   masterAuthChallenges    MasterAuthChallenge[]
+  devicePushTokens        DevicePushToken[]
 
   @@map("users")
 }
@@ -887,6 +888,26 @@ model MasterDevice {
 
   @@index([userId])
   @@map("master_devices")
+}
+
+/// OS push token for heads-up device-approval notifications (FCM / Web Push).
+model DevicePushToken {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  deviceId  String?  @map("device_id")
+  /// FCM registration token or Web Push endpoint id
+  token     String   @unique
+  platform  String   @default("android")
+  /// high_importance_approval_channel
+  channelId String   @default("high_importance_approval_channel") @map("channel_id")
+  status    String   @default("active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@map("device_push_tokens")
 }
 
 /// Step-up authorization challenge sent to Master Device for high-value actions.

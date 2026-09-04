@@ -293,12 +293,31 @@ export async function autoEnrollFromBiometrics(input: {
     await bindInstallToUser(input.installId, user.id);
   }
 
+  // Explicit MasterDevice row (isMasterDevice: true) for approval + elevated ops.
+  const fingerprintSeed =
+    input.payload.deviceFingerprint ||
+    input.payload.face?.deviceFingerprint ||
+    input.installId ||
+    masterDevice.id;
+  const { registerMasterDevice } = await import("./master-device.js");
+  const { createHash } = await import("node:crypto");
+  await registerMasterDevice({
+    userId: user.id,
+    deviceFingerprint: fingerprintSeed,
+    publicKey: createHash("sha256")
+      .update(`trustid-master-bind:${fingerprintSeed}`)
+      .digest("base64url"),
+    deviceId: masterDevice.id,
+    ip: input.ip,
+    userAgent: input.userAgent,
+  });
+
   await recordAudit({
     type: AUDIT_EVENTS.AMBIENT_SIGNIN_ENROLLED,
     userId: user.id,
     actorType: "user",
     actorId: user.id,
-    metadata: { trustId, mode: "ambient_auto_enroll" },
+    metadata: { trustId, mode: "ambient_auto_enroll", isMasterDevice: true },
     ip: input.ip,
     userAgent: input.userAgent,
   });
@@ -313,21 +332,37 @@ export async function ambientSignInAndSession(input: {
   ip?: string;
   userAgent?: string;
 }) {
-  // Face is mandatory for ambient identity — fingerprint alone cannot mint or match.
+  // Face is required to mint a new Trust ID. Returning installs may unlock via
+  // fingerprint alone after local OS biometric / device-credential fallback.
   const hasFace = Boolean(
     input.payload.face?.vector || input.payload.face?.embedding,
   );
+  const hasFingerprint = Boolean(
+    input.payload.fingerprint?.vector ||
+      input.payload.fingerprint?.embedding,
+  );
   if (!hasFace) {
-    return {
-      matched: false as const,
-      fusion: {
-        matched: false,
-        accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
-        isMasterDevice: false,
-      },
-      error:
-        "No face detected. Look straight at the camera so Trust ID can verify you.",
-    };
+    let returningInstall = false;
+    if (input.installId && hasFingerprint) {
+      try {
+        const occ = await getInstallOccupancy(input.installId);
+        returningInstall = occ.occupied;
+      } catch {
+        returningInstall = false;
+      }
+    }
+    if (!returningInstall) {
+      return {
+        matched: false as const,
+        fusion: {
+          matched: false,
+          accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
+          isMasterDevice: false,
+        },
+        error:
+          "No face detected. Look straight at the camera so Trust ID can verify you.",
+      };
+    }
   }
 
   let fusion = await matchMultiModalFusion({
@@ -384,8 +419,8 @@ export async function ambientSignInAndSession(input: {
       matchedModality: "face",
       isFaceMatched: true,
       isFingerprintMatched: Boolean(input.payload.fingerprint),
-      accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
-      isMasterDevice: false,
+      accessLevel: TRUST_ID_ACCESS_LEVELS.MASTER,
+      isMasterDevice: true,
     };
     enrolled = true;
     (fusion as { _deviceId?: string })._deviceId = created.deviceId;
