@@ -34,7 +34,12 @@ const CONTROLS = [
   {
     to: "/dashboard/notifications",
     title: "Alerts",
-    blurb: "Security notifications",
+    blurb: "Security notifications via ElfCom",
+  },
+  {
+    to: "/dashboard/ecosystem",
+    title: "Ecosystem",
+    blurb: "ElfCom · DataZone · FinProv · LIDIOS · Digiconomy",
   },
   {
     to: "/dashboard/identity",

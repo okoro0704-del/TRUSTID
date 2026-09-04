@@ -1,13 +1,10 @@
-export type ConsentPushPayload = {
-  correlationId: string;
-  requestId: string;
-  ownerTrustId: string;
-  title: string;
-  body: string;
-  silent: boolean;
-  deepLink?: string;
-  metadata?: Record<string, unknown>;
-};
+import type {
+  ElfComConsentPushPayload,
+  IElfComClient,
+} from "@trustid/baas-sdk";
+import { getElfComClient } from "../baas/registry.js";
+
+export type ConsentPushPayload = ElfComConsentPushPayload;
 
 export type ConsentPushResult = {
   ok: boolean;
@@ -20,6 +17,7 @@ export interface IElfComConsentDispatcher {
   pushConsent(payload: ConsentPushPayload): Promise<ConsentPushResult>;
 }
 
+/** @deprecated Prefer getElfComClient() from baas registry. */
 export class UnboundElfComConsentDispatcher implements IElfComConsentDispatcher {
   readonly bound = false;
 
@@ -28,6 +26,10 @@ export class UnboundElfComConsentDispatcher implements IElfComConsentDispatcher 
   }
 }
 
+/**
+ * Thin adapter over @trustid/baas-sdk ElfCom client.
+ * TrustID must not own FCM / inbox — ElfCom does.
+ */
 export class HttpElfComConsentDispatcher implements IElfComConsentDispatcher {
   readonly bound = true;
 
@@ -37,34 +39,18 @@ export class HttpElfComConsentDispatcher implements IElfComConsentDispatcher {
       nodeSecret: string;
       timeoutMs?: number;
     },
-  ) {}
+  ) {
+    void this.opts;
+  }
 
   async pushConsent(payload: ConsentPushPayload): Promise<ConsentPushResult> {
-    try {
-      const res = await fetch(`${this.opts.baseUrl.replace(/\/$/, "")}/consent/push`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-ElfCom-Node-Secret": this.opts.nodeSecret,
-        },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(this.opts.timeoutMs ?? 8000),
-      });
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        return {
-          ok: false,
-          error: text || `ElfCom push failed (${res.status})`,
-          statusCode: res.status,
-        };
-      }
-      return { ok: true };
-    } catch (err) {
-      return {
-        ok: false,
-        error: err instanceof Error ? err.message : "ElfCom unreachable",
-      };
-    }
+    const client: IElfComClient = getElfComClient();
+    const result = await client.pushConsent(payload);
+    return {
+      ok: result.ok,
+      error: result.error,
+      statusCode: result.statusCode,
+    };
   }
 }
 

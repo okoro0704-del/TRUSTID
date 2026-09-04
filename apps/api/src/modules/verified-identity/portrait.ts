@@ -45,6 +45,7 @@ export async function uploadIdentityPortrait(input: {
 
   const stored = await storePrivateBytes({
     userId: input.userId,
+    trustId: profile.trustId,
     purpose: "identity_portrait",
     mimeType: input.mimeType,
     bytes: input.bytes,

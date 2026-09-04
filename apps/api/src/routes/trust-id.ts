@@ -35,6 +35,7 @@ import {
 } from "../modules/trust-id/register.js";
 import { handleFastVectorMatch } from "../modules/trust-id/fast-vector-match.js";
 import { registerDevicePushToken } from "../modules/notifications/push.js";
+import { prisma } from "../db/client.js";
 import { BIOMETRIC_MODALITIES } from "@trustid/shared";
 
 function httpError(err: unknown, reply: import("fastify").FastifyReply) {
@@ -274,12 +275,17 @@ export async function trustIdRoutes(app: FastifyInstance) {
     if (!req.auth) return;
     const body = registerPushTokenSchema.parse(req.body ?? {});
     try {
+      const user = await prisma.user.findUnique({
+        where: { id: req.auth.userId },
+        select: { trustId: true },
+      });
       const row = await registerDevicePushToken({
         userId: req.auth.userId,
         token: body.token,
         platform: body.platform,
         deviceId: body.deviceId ?? req.auth.deviceId,
         channelId: body.channelId,
+        ownerTrustId: user?.trustId,
       });
       return { ok: true, ...row };
     } catch (err) {

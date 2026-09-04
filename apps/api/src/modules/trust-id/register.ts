@@ -92,6 +92,7 @@ export async function registerTrustIdWithMasterDevice(input: {
       platform: input.pushPlatform ?? "android",
       deviceId: created.deviceId,
       channelId: HEADS_UP_CHANNEL_ID,
+      ownerTrustId: created.trustId,
     });
     pushTokenRegistered = true;
   }
@@ -177,12 +178,17 @@ export async function bindMasterDeviceForUser(input: {
   });
 
   if (input.pushToken?.trim()) {
+    const user = await prisma.user.findUnique({
+      where: { id: input.userId },
+      select: { trustId: true },
+    });
     await registerDevicePushToken({
       userId: input.userId,
       token: input.pushToken.trim(),
       platform: input.pushPlatform ?? "android",
       deviceId: deviceId ?? null,
       channelId: HEADS_UP_CHANNEL_ID,
+      ownerTrustId: user?.trustId,
     });
   }
 

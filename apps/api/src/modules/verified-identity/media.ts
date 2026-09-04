@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "../../lib/config.js";
 import { decryptBytes, encryptBytes } from "../../lib/crypto.js";
+import { getDataZoneClient } from "../baas/registry.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_ROOT = path.resolve(__dirname, "../../../data/private-media");
@@ -25,19 +26,41 @@ export type StoredMedia = {
   absolutePath: string;
   contentHash: string;
   byteSize: number;
+  via?: "datazone" | "local_fallback";
 };
 
 /**
- * Private media abstraction — never public buckets.
- * Bytes stay on disk under TRUSTID_MEDIA_ROOT; access via short-lived signed URLs.
+ * Private media — prefer DataZone object storage; local disk only when unbound/fallback.
+ * TrustID retains metadata pointers (IdentityMediaObject.storageKey), not blob ownership.
  */
 export async function storePrivateBytes(input: {
   userId: string;
+  trustId?: string;
   purpose: string;
   mimeType: string;
   bytes: Buffer;
 }): Promise<StoredMedia> {
   const contentHash = createHash("sha256").update(input.bytes).digest("hex");
+  const dz = getDataZoneClient();
+  if (dz.bound && input.trustId) {
+    const remote = await dz.putObject({
+      userId: input.userId,
+      trustId: input.trustId,
+      purpose: input.purpose,
+      mimeType: input.mimeType,
+      bytes: input.bytes,
+    });
+    if (remote.ok && remote.data) {
+      return {
+        storageKey: remote.data.storageKey,
+        absolutePath: `datazone://${remote.data.storageKey}`,
+        contentHash: remote.data.contentHash || contentHash,
+        byteSize: remote.data.byteSize || input.bytes.byteLength,
+        via: "datazone",
+      };
+    }
+  }
+
   const id = randomBytes(16).toString("hex");
   const storageKey = `${input.purpose}/${input.userId}/${id}`;
   const absolutePath = path.join(mediaRoot(), storageKey);
@@ -48,11 +71,25 @@ export async function storePrivateBytes(input: {
     absolutePath,
     contentHash,
     byteSize: input.bytes.byteLength,
+    via: "local_fallback",
   };
 }
 
-export async function readPrivateBytes(storageKey: string): Promise<Buffer> {
-  // Prevent traversal
+export async function readPrivateBytes(
+  storageKey: string,
+  auth?: { userId: string; trustId: string },
+): Promise<Buffer> {
+  if (storageKey.startsWith("datazone://") || (auth && getDataZoneClient().bound)) {
+    const key = storageKey.replace(/^datazone:\/\//, "");
+    const dz = getDataZoneClient();
+    if (dz.bound && auth) {
+      const remote = await dz.getObjectBytes(key, auth);
+      if (remote.ok && remote.data) {
+        return Buffer.from(remote.data);
+      }
+    }
+  }
+
   if (
     storageKey.includes("..") ||
     path.isAbsolute(storageKey) ||
@@ -76,7 +113,7 @@ export async function readPrivateBytes(storageKey: string): Promise<Buffer> {
 
 export async function deletePrivateBytes(storageKey: string): Promise<void> {
   try {
-    await unlink(path.join(mediaRoot(), storageKey));
+    await unlink(path.join(mediaRoot(), storageKey.replace(/^datazone:\/\//, "")));
   } catch {
     /* ignore missing */
   }

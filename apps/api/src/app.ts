@@ -26,6 +26,12 @@ import { recoveryRoutes } from "./routes/recovery.js";
 import { bbsRoutes } from "./routes/bbs.js";
 import { trustIdRoutes } from "./routes/trust-id.js";
 import { registerRealtimeGateway } from "./modules/realtime/index.js";
+import {
+  getBaasBindings,
+  getDigiconomyClient,
+  getElfComClient,
+  getLidiosClient,
+} from "./modules/baas/registry.js";
 
 export async function buildApp() {
   bootstrapElfComDispatcher();
@@ -92,12 +98,34 @@ export async function buildApp() {
   app.get("/health", async () => ({
     ok: true,
     service: "trustid-api",
+    role: "identity_provider",
     // Non-secret: helps diagnose WebAuthn origin/RP ID misconfig in production
     webauthn: {
       rpID: config.webauthn.rpID,
       origins: config.webauthn.origins,
     },
+    baas: getBaasBindings(),
+    elfcomRealtimeUrl: getElfComClient().realtimeUrl,
   }));
+
+  app.get("/ecosystem/status", async () => {
+    const bindings = getBaasBindings();
+    const [lidios, digiconomy] = await Promise.all([
+      getLidiosClient().health(),
+      getDigiconomyClient().health(),
+    ]);
+    return {
+      ok: true,
+      identityProvider: "trustid",
+      primitives: bindings,
+      probes: {
+        lidios: lidios.ok ? lidios.data : { ok: false, error: lidios.error },
+        digiconomy: digiconomy.ok
+          ? digiconomy.data
+          : { ok: false, error: digiconomy.error },
+      },
+    };
+  });
 
   await app.register(authRoutes);
   await app.register(identityRoutes);

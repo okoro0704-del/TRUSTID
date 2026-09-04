@@ -236,6 +236,11 @@ export function VaultDashboardPage() {
       <div className="dashboard">
         <section className="section surface-block">
           <h2>Sovereign Vault</h2>
+          <p className="muted">
+            Client-side eSFS encryption with zero server knowledge of plaintext.
+            Duress alerts dispatch through ElfCom; durable sync/media blobs prefer
+            DataZone when bound.
+          </p>
           <p className="sub">
             Hardware-gated DAK/CDK encryption, app lock registry, risk-based step-up,
             and duress handling ? zero server knowledge of plaintext media.

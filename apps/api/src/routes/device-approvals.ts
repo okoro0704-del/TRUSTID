@@ -24,8 +24,8 @@ import {
 import {
   listSecurityNotifications,
   markNotificationRead,
-  unreadNotificationCount,
 } from "../modules/notifications/service.js";
+import { prisma } from "../db/client.js";
 import {
   registrationOptions,
   reauthenticationOptions,
@@ -269,18 +269,35 @@ export async function deviceApprovalRoutes(app: FastifyInstance) {
   );
 
   app.get("/notifications", { preHandler: requireSession }, async (req) => {
-    const [items, unread] = await Promise.all([
-      listSecurityNotifications(req.auth!.userId),
-      unreadNotificationCount(req.auth!.userId),
-    ]);
-    return { items, unread };
+    const user = await prisma.user.findUnique({
+      where: { id: req.auth!.userId },
+      select: { trustId: true },
+    });
+    const listed = await listSecurityNotifications(
+      req.auth!.userId,
+      40,
+      user?.trustId,
+    );
+    return {
+      items: listed.items,
+      unread: listed.unread,
+      via: listed.via,
+    };
   });
 
   app.post("/notifications/:id/read", { preHandler: requireSession }, async (req, reply) => {
     const params = z.object({ id: z.string() }).parse(req.params);
     try {
-      await markNotificationRead(req.auth!.userId, params.id);
-      return { ok: true };
+      const user = await prisma.user.findUnique({
+        where: { id: req.auth!.userId },
+        select: { trustId: true },
+      });
+      const result = await markNotificationRead(
+        req.auth!.userId,
+        params.id,
+        user?.trustId,
+      );
+      return { ok: true, via: result.via };
     } catch (err) {
       return httpError(err, reply);
     }

@@ -21,6 +21,7 @@
     "@prisma/client": "^6.5.0",
     "@simplewebauthn/server": "^13.1.1",
     "@trustid/bbs-sdk": "*",
+    "@trustid/baas-sdk": "*",
     "@trustid/shared": "*",
     "@trustid/sovereign-crypto": "*",
     "@trustid/zk": "*",

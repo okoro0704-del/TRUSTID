@@ -101,7 +101,7 @@ export const config = {
   get temporarySessionHours() {
     return Number(process.env.TEMPORARY_SESSION_HOURS ?? 8);
   },
-  /** ElfCom sovereign messaging node for consent push */
+  /** ElfCom sovereign messaging node for consent push / inbox / realtime */
   get elfcom() {
     const mode = (process.env.ELFCOM_MODE ?? "unbound") as "unbound" | "http";
     return {
@@ -109,6 +109,59 @@ export const config = {
       baseUrl: process.env.ELFCOM_BASE_URL ?? "http://localhost:8791",
       nodeSecret:
         process.env.ELFCOM_NODE_SECRET ?? "elfcom-dev-node-secret-change-me",
+    };
+  },
+  /** DataZone sovereign-drive — object storage + sync relay */
+  get datazone() {
+    const mode = (process.env.DATAZONE_MODE ?? "unbound") as "unbound" | "http";
+    return {
+      mode,
+      baseUrl:
+        process.env.DATAZONE_BASE_URL ??
+        "https://sovereign-drive-engine-production.up.railway.app",
+      jwtSecret:
+        process.env.DATAZONE_JWT_SECRET ??
+        process.env.TRUST_ID_JWT_SECRET ??
+        "dev-datazone-jwt-secret",
+      issuer:
+        process.env.DATAZONE_JWT_ISSUER ??
+        process.env.ASSERTION_ISSUER ??
+        "https://trustedid.netlify.app",
+      audience: process.env.DATAZONE_JWT_AUDIENCE ?? "data-zone",
+    };
+  },
+  /**
+   * FinProv payment step-up.
+   * `http` = remote FinProv engine; `embedded` = temporary local shim behind IFinProvClient.
+   */
+  get finprov() {
+    const mode = (process.env.FINPROV_MODE ?? "embedded") as
+      | "unbound"
+      | "http"
+      | "embedded";
+    return {
+      mode,
+      baseUrl: process.env.FINPROV_BASE_URL ?? "http://localhost:8793",
+      apiKey: process.env.FINPROV_API_KEY?.trim() || undefined,
+    };
+  },
+  /** LIDIOS token network (TrustID is IdP; this is outbound health/handshake only). */
+  get lidios() {
+    const mode = (process.env.LIDIOS_MODE ?? "unbound") as "unbound" | "http";
+    return {
+      mode,
+      baseUrl:
+        process.env.LIDIOS_BASE_URL ??
+        process.env.LIDIOS_API_PUBLIC_URL ??
+        "http://localhost:8794",
+    };
+  },
+  /** Digiconomy commerce RP health/handshake. */
+  get digiconomy() {
+    const mode = (process.env.DIGICONOMY_MODE ?? "unbound") as "unbound" | "http";
+    return {
+      mode,
+      baseUrl: process.env.DIGICONOMY_BASE_URL ?? "http://localhost:8795",
     };
   },
   /** Temporary: show/log OTP when email/SMS provider is not configured. */

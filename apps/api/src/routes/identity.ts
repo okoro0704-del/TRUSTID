@@ -305,11 +305,19 @@ export async function identityRoutes(app: FastifyInstance) {
       if (!media) {
         return reply.code(404).send({ error: "not_found", message: "Media not found" });
       }
-      const bytes = await readPrivateBytes(media.storageKey);
+      const owner = await prisma.user.findUnique({
+        where: { id: media.userId },
+        select: { trustId: true },
+      });
+      const bytes = await readPrivateBytes(media.storageKey, {
+        userId: media.userId,
+        trustId: owner?.trustId ?? media.userId,
+      });
       return reply
         .header("Content-Type", media.mimeType)
         .header("Cache-Control", "private, no-store")
         .header("X-Content-Type-Options", "nosniff")
+        .header("X-TrustID-Storage", media.storageKey.startsWith("datazone") ? "datazone" : "local_fallback")
         .send(bytes);
     } catch (err) {
       return httpError(err, reply);

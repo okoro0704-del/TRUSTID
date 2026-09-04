@@ -11,6 +11,7 @@ import { DeviceDetailPage } from "./pages/trust/DeviceDetail";
 import { ApprovalsPage } from "./pages/trust/Approvals";
 import { TemporaryDevicesPage } from "./pages/trust/TemporaryDevices";
 import { NotificationsPage } from "./pages/trust/Notifications";
+import { EcosystemPage } from "./pages/trust/Ecosystem";
 import { ApplicationsPage } from "./pages/trust/Applications";
 import { SessionsPage } from "./pages/trust/Sessions";
 import { PasskeysPage } from "./pages/trust/Passkeys";
@@ -51,6 +52,7 @@ export function App() {
         <Route path="approvals" element={<ApprovalsPage />} />
         <Route path="temporary" element={<TemporaryDevicesPage />} />
         <Route path="notifications" element={<NotificationsPage />} />
+        <Route path="ecosystem" element={<EcosystemPage />} />
         <Route path="applications" element={<ApplicationsPage />} />
         <Route path="sessions" element={<SessionsPage />} />
         <Route path="passkeys" element={<PasskeysPage />} />

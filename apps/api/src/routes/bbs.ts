@@ -1,15 +1,16 @@
 import type { FastifyInstance } from "fastify";
 import { requireAuth, requireSession } from "../lib/auth-context.js";
+import { getFinProvClient } from "../modules/baas/registry.js";
 import {
   BbsError,
   bbsConfirmSchema,
   bbsInitiateSchema,
   bbsVerifySchema,
-  confirmBbsStepUp,
-  getBbsChallengeStatus,
-  initiateBbsStepUp,
-  verifyBbsStepUpProof,
 } from "../modules/bbs/index.js";
+import {
+  EmbeddedFinProvClient,
+} from "../modules/bbs/finprov-embedded.js";
+import { config } from "../lib/config.js";
 
 function httpError(err: unknown, reply: import("fastify").FastifyReply) {
   if (err instanceof BbsError) {
@@ -25,6 +26,24 @@ function httpError(err: unknown, reply: import("fastify").FastifyReply) {
   });
 }
 
+function fromBaas(
+  result: { ok: boolean; data?: unknown; error?: string; statusCode?: number },
+  reply: import("fastify").FastifyReply,
+) {
+  if (!result.ok) {
+    return reply.code(result.statusCode ?? 502).send({
+      error: "finprov_error",
+      message: result.error ?? "FinProv call failed",
+      via: config.finprov.mode,
+    });
+  }
+  return result.data;
+}
+
+/**
+ * BBS routes are a thin FinProv consumer facade.
+ * Identity assertions stay on TrustID; payment challenge lifecycle belongs to FinProv.
+ */
 export async function bbsRoutes(app: FastifyInstance) {
   app.post("/bbs/step-up/initiate", { preHandler: requireAuth }, async (req, reply) => {
     try {
@@ -35,13 +54,32 @@ export async function bbsRoutes(app: FastifyInstance) {
         });
       }
       const body = bbsInitiateSchema.parse(req.body ?? {});
-      return await initiateBbsStepUp({
-        userId: req.auth!.userId,
-        applicationId: req.auth!.applicationId,
-        scopes: req.auth!.scopes ?? [],
-        body,
-        deviceId: null,
-      });
+      const finprov = getFinProvClient();
+      const accessToken =
+        (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "").trim();
+
+      if (finprov instanceof EmbeddedFinProvClient) {
+        return fromBaas(
+          await finprov.initiateStepUp({
+            accessToken,
+            userId: req.auth!.userId,
+            applicationId: req.auth!.applicationId,
+            scopes: req.auth!.scopes ?? [],
+            deviceId: null,
+            body,
+            ...body,
+          }),
+          reply,
+        );
+      }
+
+      return fromBaas(
+        await finprov.initiateStepUp({
+          accessToken,
+          ...body,
+        }),
+        reply,
+      );
     } catch (err) {
       return httpError(err, reply);
     }
@@ -54,12 +92,14 @@ export async function bbsRoutes(app: FastifyInstance) {
       try {
         const params = req.params as { challengeId: string };
         bbsConfirmSchema.parse(req.body ?? {});
-        const result = await confirmBbsStepUp({
-          userId: req.auth!.userId,
-          challengeId: params.challengeId,
-          deviceId: req.auth!.deviceId,
-        });
-        return result;
+        const finprov = getFinProvClient();
+        return fromBaas(
+          await finprov.confirmStepUp(params.challengeId, "", {
+            userId: req.auth!.userId,
+            deviceId: req.auth!.deviceId,
+          }),
+          reply,
+        );
       } catch (err) {
         return httpError(err, reply);
       }
@@ -69,7 +109,8 @@ export async function bbsRoutes(app: FastifyInstance) {
   app.post("/bbs/step-up/verify", async (req, reply) => {
     try {
       const body = bbsVerifySchema.parse(req.body ?? {});
-      return await verifyBbsStepUpProof(body);
+      const finprov = getFinProvClient();
+      return fromBaas(await finprov.verifyStepUp(body), reply);
     } catch (err) {
       return httpError(err, reply);
     }
@@ -80,14 +121,26 @@ export async function bbsRoutes(app: FastifyInstance) {
       const params = req.params as { challengeId: string };
       const header = req.headers.authorization;
       let userId: string | undefined;
+      let accessToken: string | undefined;
       if (header?.startsWith("Bearer ")) {
+        accessToken = header.slice(7).trim();
         const { resolveAccessToken } = await import(
           "../modules/authorization/service.js"
         );
-        const access = await resolveAccessToken(header.slice(7).trim());
+        const access = await resolveAccessToken(accessToken);
         userId = access?.userId;
       }
-      return await getBbsChallengeStatus(params.challengeId, userId);
+      const finprov = getFinProvClient();
+      if (finprov instanceof EmbeddedFinProvClient) {
+        return fromBaas(
+          await finprov.getChallengeStatus(params.challengeId, accessToken, userId),
+          reply,
+        );
+      }
+      return fromBaas(
+        await finprov.getChallengeStatus(params.challengeId, accessToken),
+        reply,
+      );
     } catch (err) {
       return httpError(err, reply);
     }

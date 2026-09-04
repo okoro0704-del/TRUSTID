@@ -14,9 +14,11 @@ import {
 let vaultSingleton: SovereignVault | null = null;
 
 function elfcomBridge(): HttpElfComEmergencyBridge | undefined {
-  const baseUrl = import.meta.env.VITE_ELFCOM_BASE_URL as string | undefined;
+  const baseUrl =
+    (import.meta.env.VITE_ELFCOM_BASE_URL as string | undefined) ||
+    "https://elfcomnode-production.up.railway.app";
   const nodeSecret = import.meta.env.VITE_ELFCOM_NODE_SECRET as string | undefined;
-  if (!baseUrl || !nodeSecret) return undefined;
+  if (!nodeSecret) return undefined;
   return new HttpElfComEmergencyBridge({ baseUrl, nodeSecret });
 }
 

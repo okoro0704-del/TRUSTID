@@ -2,6 +2,7 @@ import { z } from "zod";
 import { AUDIT_EVENTS, isDeviceCredentialActive } from "@trustid/shared";
 import { prisma } from "../../db/client.js";
 import { recordAudit } from "../audit/service.js";
+import { getDataZoneClient } from "../baas/registry.js";
 
 const prekeySchema = z.object({
   identityKey: z.string().min(16),
@@ -146,6 +147,40 @@ export async function queueEnvelope(input: {
   const ttlHours = body.ttlHours ?? 48;
   const expiresAt = new Date(Date.now() + ttlHours * 3600_000);
 
+  const user = await prisma.user.findUnique({
+    where: { id: input.userId },
+    select: { trustId: true },
+  });
+  const dz = getDataZoneClient();
+  if (dz.bound && user?.trustId) {
+    const remote = await dz.queueEnvelope({
+      userId: input.userId,
+      trustId: user.trustId,
+      senderDeviceId: input.senderDeviceId,
+      recipientDeviceId: body.recipientDeviceId,
+      envelopeType: body.envelopeType,
+      header: body.header,
+      nonce: body.nonce,
+      ciphertext: body.ciphertext,
+      ttlHours,
+    });
+    if (remote.ok && remote.data) {
+      await recordAudit({
+        type: AUDIT_EVENTS.DEVICE_SYNC_ENVELOPE_QUEUED,
+        userId: input.userId,
+        actorType: "user",
+        actorId: input.userId,
+        metadata: {
+          envelopeId: remote.data.id,
+          type: body.envelopeType,
+          recipientDeviceId: body.recipientDeviceId,
+          via: "datazone",
+        },
+      });
+      return { id: remote.data.id, expiresAt, via: "datazone" as const };
+    }
+  }
+
   const env = await prisma.deviceSyncEnvelope.create({
     data: {
       userId: input.userId,
@@ -168,10 +203,11 @@ export async function queueEnvelope(input: {
       envelopeId: env.id,
       type: body.envelopeType,
       recipientDeviceId: body.recipientDeviceId,
+      via: "local_fallback",
     },
   });
 
-  return { id: env.id, expiresAt: env.expiresAt };
+  return { id: env.id, expiresAt: env.expiresAt, via: "local_fallback" as const };
 }
 
 export async function listInbox(input: {
@@ -179,6 +215,23 @@ export async function listInbox(input: {
   recipientDeviceId: string;
 }) {
   await assertOwnedDevice(input.userId, input.recipientDeviceId);
+
+  const user = await prisma.user.findUnique({
+    where: { id: input.userId },
+    select: { trustId: true },
+  });
+  const dz = getDataZoneClient();
+  if (dz.bound && user?.trustId) {
+    const remote = await dz.listInbox({
+      userId: input.userId,
+      trustId: user.trustId,
+      recipientDeviceId: input.recipientDeviceId,
+    });
+    if (remote.ok && remote.data) {
+      return remote.data.envelopes;
+    }
+  }
+
   const now = new Date();
   const rows = await prisma.deviceSyncEnvelope.findMany({
     where: {
