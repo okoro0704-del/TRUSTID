@@ -39,7 +39,7 @@ const CONTROLS = [
   {
     to: "/dashboard/ecosystem",
     title: "Ecosystem",
-    blurb: "ElfCom · DataZone · FinProv · LIDIOS · Digiconomy",
+    blurb: "ElfCom · DataZone · FinProv · Platform Job · Master Distribution",
   },
   {
     to: "/dashboard/identity",

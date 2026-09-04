@@ -25,6 +25,23 @@ export {
   type FinProvVerifyInput,
 } from "./finprov.js";
 export {
+  HttpPlatformJobClient,
+  UnboundPlatformJobClient,
+  mintPlatformJobServiceJwt,
+  type IPlatformJobClient,
+  type PlatformJobDispatchInput,
+  type PlatformJobDispatchResult,
+  type PlatformJobStatus,
+} from "./platform-job.js";
+export {
+  HttpMasterDistributionClient,
+  UnboundMasterDistributionClient,
+  mintMasterDistributionServiceJwt,
+  type IMasterDistributionClient,
+  type DistributionProvisionDomainInput,
+  type DistributionBootstrapTenantInput,
+} from "./master-distribution.js";
+export {
   HttpLidiosClient,
   UnboundLidiosClient,
   HttpDigiconomyClient,

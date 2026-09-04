@@ -86,30 +86,13 @@ async function dispatchConsentPush(row: ApprovalRow, userTrustId: string) {
   const dispatcher = getElfComConsentDispatcher();
   const deepLink = `${config.webauthn.origin}/dashboard/approvals?requestId=${row.id}&correlationId=${row.correlationId}`;
 
-  // OS heads-up via FCM when tokens + FCM_SERVER_KEY are configured.
-  try {
-    const { sendMasterApprovalHeadsUpPush } = await import(
-      "../notifications/push.js"
-    );
-    await sendMasterApprovalHeadsUpPush({
-      userId: row.userId,
-      requestId: row.id,
-      correlationId: row.correlationId,
-      deviceName: row.requestedDeviceName,
-      ipAddress: row.ip,
-      deepLink,
-    });
-  } catch {
-    /* FCM optional — ElfCom / WS still notify */
-  }
-
-  const result = await dispatcher.pushConsent({
+  const pushPayload = {
     correlationId: row.correlationId,
     requestId: row.id,
     ownerTrustId: userTrustId,
     title: "Login Approval Requested",
     body: `New login attempt from ${row.requestedDeviceName}. Tap to approve or decline.`,
-    silent: false,
+    silent: false as const,
     deepLink,
     metadata: {
       type: "MASTER_APPROVAL_REQUEST",
@@ -128,7 +111,62 @@ async function dispatchConsentPush(row: ApprovalRow, userTrustId: string) {
       oauthConsentCodeId: row.oauthConsentCodeId,
       guestSessionId: row.guestSessionId,
     },
-  });
+  };
+
+  // Prefer Platform Job enqueue so TrustID does not own delivery workers.
+  try {
+    const { getPlatformJobClient } = await import("../baas/registry.js");
+    const jobs = getPlatformJobClient();
+    if (jobs.bound) {
+      const enqueued = await jobs.dispatch({
+        tenantId: userTrustId,
+        sub: row.userId,
+        jobName: "trustid.elfcom.consent_push",
+        deduplicationKey: `consent-push:${row.id}`,
+        payload: {
+          ...pushPayload,
+          userId: row.userId,
+        },
+      });
+      if (enqueued.ok) {
+        await transitionApprovalFsm({
+          row,
+          event: "push_dispatched",
+          audit: {
+            type: AUDIT_EVENTS.DEVICE_APPROVAL_PUSHED,
+            actorType: "system",
+            metadata: {
+              via: "platform_job",
+              jobId: enqueued.data?.jobId,
+            },
+          },
+        });
+        return;
+      }
+    }
+  } catch {
+    /* fall through to direct ElfCom */
+  }
+
+  // Direct ElfCom when Platform Job unbound / enqueue failed.
+  try {
+    const { sendMasterApprovalHeadsUpPush } = await import(
+      "../notifications/push.js"
+    );
+    await sendMasterApprovalHeadsUpPush({
+      userId: row.userId,
+      requestId: row.id,
+      correlationId: row.correlationId,
+      deviceName: row.requestedDeviceName,
+      ipAddress: row.ip,
+      deepLink,
+      ownerTrustId: userTrustId,
+    });
+  } catch {
+    /* ElfCom optional — WS still notify */
+  }
+
+  const result = await dispatcher.pushConsent(pushPayload);
 
   if (result.ok) {
     await transitionApprovalFsm({

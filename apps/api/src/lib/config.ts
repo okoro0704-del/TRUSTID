@@ -164,6 +164,43 @@ export const config = {
       baseUrl: process.env.DIGICONOMY_BASE_URL ?? "http://localhost:8795",
     };
   },
+  /**
+   * Platform Jobs Engine — async queue (BullMQ). TrustID enqueues; does not run workers.
+   */
+  get platformJob() {
+    const mode = (process.env.PLATFORM_JOB_MODE ?? "unbound") as "unbound" | "http";
+    return {
+      mode,
+      baseUrl: process.env.PLATFORM_JOB_BASE_URL ?? "http://localhost:4070",
+      jwtSecret:
+        process.env.PLATFORM_JOB_JWT_SECRET ??
+        process.env.TRUST_ID_JWT_SECRET ??
+        "dev-trust-id-secret",
+      issuer: process.env.PLATFORM_JOB_JWT_ISSUER ?? "lifeos-trust-id",
+      audience: process.env.PLATFORM_JOB_JWT_AUDIENCE ?? "platform-jobs-engine",
+    };
+  },
+  /**
+   * Master Distributor Engine — tenant/domain provisioning (not identity).
+   */
+  get masterDistribution() {
+    const mode = (process.env.MASTER_DISTRIBUTION_MODE ?? "unbound") as
+      | "unbound"
+      | "http";
+    return {
+      mode,
+      baseUrl:
+        process.env.MASTER_DISTRIBUTION_BASE_URL ?? "http://localhost:3100",
+      jwtSecret:
+        process.env.MASTER_DISTRIBUTION_JWT_SECRET ??
+        process.env.TRUST_ID_JWT_SECRET ??
+        "dev-trust-id-secret-change-me",
+      issuer: process.env.MASTER_DISTRIBUTION_JWT_ISSUER ?? "lifeos-trust-id",
+      audience:
+        process.env.MASTER_DISTRIBUTION_JWT_AUDIENCE ??
+        "master-distributor-engine",
+    };
+  },
   /** Temporary: show/log OTP when email/SMS provider is not configured. */
   get otpExposeDebug() {
     return process.env.OTP_EXPOSE_DEBUG === "true" || this.isDev;

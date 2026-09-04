@@ -34,8 +34,8 @@ export function OverviewPage() {
         <p className="continue-eyebrow">TrustID</p>
         <h2>Your identity layer</h2>
         <p className="sub">
-          Passkeys, devices, and approvals stay here. Push, storage, and payments
-          are consumed from ElfCom, DataZone, FinProv, LIDIOS, and Digiconomy.
+          Passkeys, devices, and approvals stay here. Everything else is consumed
+          from ElfCom, DataZone, FinProv, Platform Job, and Master Distribution.
         </p>
       </section>
 

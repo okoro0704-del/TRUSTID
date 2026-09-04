@@ -40,8 +40,10 @@ export function EcosystemPage() {
         <p className="continue-eyebrow">Identity Provider</p>
         <h2>Ecosystem primitives</h2>
         <p className="sub">
-          TrustID authenticates people and issues scoped credentials. Messaging,
-          storage, payments, and commerce live in the five BaaS services below.
+          TrustID authenticates people and issues scoped credentials. The five
+          backend primitives handle everything else: ElfCom (messaging), DataZone
+          (storage), FinProv (payments), Platform Job (async work), and Master
+          Distribution (tenant/domain provisioning).
         </p>
       </section>
 

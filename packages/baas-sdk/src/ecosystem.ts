@@ -95,14 +95,17 @@ export class HttpDigiconomyClient implements IDigiconomyClient {
   }
 }
 
+/** Core five backend primitives TrustID consumes as an IdP. */
 export function summarizeBindings(input: {
   elfcom: { bound: boolean; mode: string; baseUrl: string | null };
   datazone: { bound: boolean; mode: string; baseUrl: string | null };
   finprov: { bound: boolean; mode: string; baseUrl: string | null };
-  lidios: { bound: boolean; mode: string; baseUrl: string | null };
-  digiconomy: { bound: boolean; mode: string; baseUrl: string | null };
+  platformJob: { bound: boolean; mode: string; baseUrl: string | null };
+  masterDistribution: { bound: boolean; mode: string; baseUrl: string | null };
+  lidios?: { bound: boolean; mode: string; baseUrl: string | null };
+  digiconomy?: { bound: boolean; mode: string; baseUrl: string | null };
 }): PrimitiveBinding[] {
-  return [
+  const core: PrimitiveBinding[] = [
     {
       id: "elfcom",
       mode: input.elfcom.mode as PrimitiveBinding["mode"],
@@ -125,18 +128,38 @@ export function summarizeBindings(input: {
       role: "payments_bbs_step_up",
     },
     {
+      id: "platform_job",
+      mode: input.platformJob.mode as PrimitiveBinding["mode"],
+      bound: input.platformJob.bound,
+      baseUrl: input.platformJob.baseUrl ?? undefined,
+      role: "async_job_queue",
+    },
+    {
+      id: "master_distribution",
+      mode: input.masterDistribution.mode as PrimitiveBinding["mode"],
+      bound: input.masterDistribution.bound,
+      baseUrl: input.masterDistribution.baseUrl ?? undefined,
+      role: "tenant_domain_provisioning",
+    },
+  ];
+
+  if (input.lidios) {
+    core.push({
       id: "lidios",
       mode: input.lidios.mode as PrimitiveBinding["mode"],
       bound: input.lidios.bound,
       baseUrl: input.lidios.baseUrl ?? undefined,
       role: "token_network_rp",
-    },
-    {
+    });
+  }
+  if (input.digiconomy) {
+    core.push({
       id: "digiconomy",
       mode: input.digiconomy.mode as PrimitiveBinding["mode"],
       bound: input.digiconomy.bound,
       baseUrl: input.digiconomy.baseUrl ?? undefined,
       role: "commerce_rp",
-    },
-  ];
+    });
+  }
+  return core;
 }

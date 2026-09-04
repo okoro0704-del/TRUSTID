@@ -5,13 +5,29 @@ export type BaasResult<T = void> = {
   error?: string;
   statusCode?: number;
   /** Which primitive handled the call */
-  via: "elfcom" | "datazone" | "finprov" | "lidios" | "digiconomy" | "unbound" | "local_fallback";
+  via:
+    | "elfcom"
+    | "datazone"
+    | "finprov"
+    | "platform_job"
+    | "master_distribution"
+    | "lidios"
+    | "digiconomy"
+    | "unbound"
+    | "local_fallback";
 };
 
 export type PrimitiveMode = "unbound" | "http" | "embedded";
 
 export type PrimitiveBinding = {
-  id: "elfcom" | "datazone" | "finprov" | "lidios" | "digiconomy";
+  id:
+    | "elfcom"
+    | "datazone"
+    | "finprov"
+    | "platform_job"
+    | "master_distribution"
+    | "lidios"
+    | "digiconomy";
   mode: PrimitiveMode;
   bound: boolean;
   baseUrl?: string;

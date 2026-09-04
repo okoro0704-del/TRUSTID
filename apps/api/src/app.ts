@@ -25,12 +25,15 @@ import { deviceSyncRoutes } from "./routes/device-sync.js";
 import { recoveryRoutes } from "./routes/recovery.js";
 import { bbsRoutes } from "./routes/bbs.js";
 import { trustIdRoutes } from "./routes/trust-id.js";
+import { baasRoutes } from "./routes/baas.js";
 import { registerRealtimeGateway } from "./modules/realtime/index.js";
 import {
   getBaasBindings,
   getDigiconomyClient,
   getElfComClient,
   getLidiosClient,
+  getMasterDistributionClient,
+  getPlatformJobClient,
 } from "./modules/baas/registry.js";
 
 export async function buildApp() {
@@ -110,15 +113,32 @@ export async function buildApp() {
 
   app.get("/ecosystem/status", async () => {
     const bindings = getBaasBindings();
-    const [lidios, digiconomy] = await Promise.all([
-      getLidiosClient().health(),
-      getDigiconomyClient().health(),
-    ]);
+    const [lidios, digiconomy, platformJob, masterDistribution] =
+      await Promise.all([
+        getLidiosClient().health(),
+        getDigiconomyClient().health(),
+        getPlatformJobClient().health(),
+        getMasterDistributionClient().health(),
+      ]);
     return {
       ok: true,
       identityProvider: "trustid",
+      role: "identity_only",
+      corePrimitives: [
+        "elfcom",
+        "datazone",
+        "finprov",
+        "platform_job",
+        "master_distribution",
+      ],
       primitives: bindings,
       probes: {
+        platform_job: platformJob.ok
+          ? platformJob.data
+          : { ok: false, error: platformJob.error },
+        master_distribution: masterDistribution.ok
+          ? masterDistribution.data
+          : { ok: false, error: masterDistribution.error },
         lidios: lidios.ok ? lidios.data : { ok: false, error: lidios.error },
         digiconomy: digiconomy.ok
           ? digiconomy.data
@@ -144,6 +164,7 @@ export async function buildApp() {
   await app.register(recoveryRoutes);
   await app.register(bbsRoutes);
   await app.register(trustIdRoutes);
+  await app.register(baasRoutes);
   await app.register(wipeRoutes);
 
   await registerRealtimeGateway(app);
