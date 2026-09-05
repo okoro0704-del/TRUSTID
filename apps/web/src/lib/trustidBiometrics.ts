@@ -19,31 +19,38 @@ function apiBase(): string {
   return import.meta.env.VITE_API_URL ?? "/api";
 }
 
-/** Safe availability probe â€” never throws. */
+/** Safe Class 3 availability probe — never throws. */
 export async function getBiometricAvailability(): Promise<{
   available: boolean;
   biometryType?: string;
   reason?: string;
+  strength?: string;
 }> {
   try {
     const gate = window.TrustIdBiometricGate;
     if (gate?.getAvailability) {
       const avail = await gate.getAvailability();
+      const strong =
+        Boolean(avail?.available) && avail?.strength === "strong";
       return {
-        available: Boolean(avail?.available),
+        available: strong,
         biometryType: avail?.strength,
-        reason: avail?.available
+        strength: avail?.strength,
+        reason: strong
           ? undefined
-          : avail?.notes?.[0] ?? "Hardware biometrics unavailable",
+          : avail?.strength === "weak"
+            ? "Class 1/2 face unlock is disabled. Enroll a fingerprint or Class 3 Face in device Settings."
+            : (avail?.notes?.[0] ?? "Class 3 hardware biometrics unavailable"),
       };
     }
-    // Web / PWA: platform authenticator via WebAuthn
+    // Web / PWA: platform authenticator via WebAuthn (UV required at registration)
     if (typeof window !== "undefined" && window.PublicKeyCredential) {
       const uvpa =
         await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable?.();
       return {
         available: Boolean(uvpa),
         biometryType: uvpa ? "platform" : undefined,
+        strength: uvpa ? "strong" : "none",
         reason: uvpa ? undefined : "No platform authenticator on this browser",
       };
     }

@@ -2,6 +2,7 @@ package com.trustid.device.plugins
 
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import androidx.biometric.BiometricManager
@@ -14,14 +15,19 @@ import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
+import java.security.InvalidKeyException
 import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.PublicKey
+import java.security.Signature
+import java.security.UnrecoverableKeyException
 
 /**
  * Hardware-backed biometric gate + fingerprint backup template capture.
- * Default: BIOMETRIC_STRONG only (Class 3). Device credential allowed only when
- * allowDeviceCredential=true (explicit user opt-in from policy UI).
+ *
+ * TrustID ONLY accepts Class 3 (BIOMETRIC_STRONG) — fingerprint sensor or
+ * 3D depth IR Face. Class 1/2 2D camera face unlock is never allowed.
+ * Auth uses Android Keystore CryptoObject signatures.
  */
 @CapacitorPlugin(name = "TrustIdBiometricGate")
 class BiometricGatePlugin : Plugin() {
@@ -29,91 +35,108 @@ class BiometricGatePlugin : Plugin() {
   companion object {
     private const val KEYSTORE = "AndroidKeyStore"
     private const val FP_KEY_ALIAS = "trustid_fp_backup_v1"
+    private const val AUTH_KEY_ALIAS = "trustid_bio_auth_v1"
+    private const val SIGN_ALG = "SHA256withECDSA"
   }
 
   @PluginMethod
   fun getAvailability(call: PluginCall) {
-    val mgr = BiometricManager.from(context)
-    val strong = mgr.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
-    val weak = mgr.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_WEAK)
-    val enrolled = strong == BiometricManager.BIOMETRIC_SUCCESS ||
-      weak == BiometricManager.BIOMETRIC_SUCCESS
+    try {
+      val mgr = BiometricManager.from(context)
+      val strong = mgr.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+      val weak = mgr.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_WEAK)
+      val strongOk = strong == BiometricManager.BIOMETRIC_SUCCESS
+      val weakOnly = !strongOk && weak == BiometricManager.BIOMETRIC_SUCCESS
 
-    val ret = JSObject()
-    ret.put("platform", "android")
-    ret.put(
-      "available",
-      strong == BiometricManager.BIOMETRIC_SUCCESS ||
-        weak == BiometricManager.BIOMETRIC_SUCCESS,
-    )
-    ret.put("enrolled", enrolled)
-    ret.put(
-      "strength",
-      when {
-        strong == BiometricManager.BIOMETRIC_SUCCESS -> "strong"
-        weak == BiometricManager.BIOMETRIC_SUCCESS -> "weak"
-        else -> "none"
-      },
-    )
-    ret.put("hardwareBoundKeys", true)
-    ret.put("appLockSupported", true)
-    ret.put("secureWipeSupported", Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
-    val notes = JSArray()
-    notes.put("Keys bound via Android Keystore + BiometricPrompt CryptoObject.")
-    notes.put("Fingerprint backup uses a biometric-bound Keystore public key template.")
-    notes.put("App Lock requires Accessibility permission.")
-    ret.put("notes", notes)
-    call.resolve(ret)
+      val ret = JSObject()
+      ret.put("platform", "android")
+      // TrustID availability = Class 3 only (never Class 1/2 face unlock).
+      ret.put("available", strongOk)
+      ret.put("enrolled", strongOk)
+      ret.put(
+        "strength",
+        when {
+          strongOk -> "strong"
+          weakOnly -> "weak"
+          else -> "none"
+        },
+      )
+      ret.put("hardwareBoundKeys", true)
+      ret.put("appLockSupported", true)
+      ret.put("secureWipeSupported", Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+      val notes = JSArray()
+      notes.put("Class 3 BIOMETRIC_STRONG only (fingerprint / 3D IR Face).")
+      notes.put("2D optical camera face unlock is rejected.")
+      notes.put("Keys bound via Android Keystore + BiometricPrompt CryptoObject.")
+      if (weakOnly) {
+        notes.put(
+          "Only Class 1/2 biometrics enrolled. Register a fingerprint sensor or Class 3 Face in Android Settings.",
+        )
+      }
+      if (!strongOk && !weakOnly) {
+        notes.put(biometricStatusMessage(strong))
+      }
+      ret.put("notes", notes)
+      call.resolve(ret)
+    } catch (e: Exception) {
+      val ret = JSObject()
+      ret.put("platform", "android")
+      ret.put("available", false)
+      ret.put("enrolled", false)
+      ret.put("strength", "none")
+      ret.put("hardwareBoundKeys", false)
+      ret.put("appLockSupported", false)
+      ret.put("secureWipeSupported", false)
+      val notes = JSArray()
+      notes.put(e.message ?: "Availability check failed")
+      ret.put("notes", notes)
+      call.resolve(ret)
+    }
   }
 
   @PluginMethod
   fun authenticate(call: PluginCall) {
     val reason = call.getString("reason") ?: "Authenticate"
-    val allowDevice = call.getBoolean("allowDeviceCredential", false) ?: false
-    val strongOnly = call.getBoolean("strongOnly", true) ?: true
-    runBiometricPrompt(
+    // Device PIN / Class 1-2 never unlock TrustID identity gates.
+    runCryptoBiometricPrompt(
       call = call,
       reason = reason,
-      allowDevice = allowDevice,
-      strongOnly = strongOnly,
-      onSuccess = { method ->
+      keyAlias = AUTH_KEY_ALIAS,
+      onSuccess = { method, publicKey ->
         val ret = JSObject()
         ret.put("ok", true)
         ret.put("method", method)
+        ret.put(
+          "publicKeyBase64",
+          Base64.encodeToString(publicKey.encoded, Base64.NO_WRAP),
+        )
         call.resolve(ret)
       },
     )
   }
 
   /**
-   * Prompt fingerprint / strong biometric, then return a stable Keystore public-key
+   * Prompt Class 3 biometric, then return a stable Keystore public-key
    * template for cloud fingerprint-backup enrollment and matching.
    */
   @PluginMethod
   fun captureFingerprintTemplate(call: PluginCall) {
     val reason = call.getString("reason")
       ?: "Scan your fingerprint to register a Trust ID backup"
-    runBiometricPrompt(
+    runCryptoBiometricPrompt(
       call = call,
       reason = reason,
-      allowDevice = false,
-      strongOnly = true,
-      onSuccess = { method ->
-        try {
-          val publicKey = ensureFingerprintBackupKey()
-          val encoded = publicKey.encoded
-          val ret = JSObject()
-          ret.put("ok", true)
-          ret.put("method", method)
-          ret.put(
-            "publicKeyBase64",
-            Base64.encodeToString(encoded, Base64.NO_WRAP),
-          )
-          ret.put("keyAlias", FP_KEY_ALIAS)
-          call.resolve(ret)
-        } catch (e: Exception) {
-          call.reject("Fingerprint template failed: ${e.message}")
-        }
+      keyAlias = FP_KEY_ALIAS,
+      onSuccess = { method, publicKey ->
+        val ret = JSObject()
+        ret.put("ok", true)
+        ret.put("method", method)
+        ret.put(
+          "publicKeyBase64",
+          Base64.encodeToString(publicKey.encoded, Base64.NO_WRAP),
+        )
+        ret.put("keyAlias", FP_KEY_ALIAS)
+        call.resolve(ret)
       },
     )
   }
@@ -166,12 +189,11 @@ class BiometricGatePlugin : Plugin() {
     )
   }
 
-  private fun runBiometricPrompt(
+  private fun runCryptoBiometricPrompt(
     call: PluginCall,
     reason: String,
-    allowDevice: Boolean,
-    strongOnly: Boolean,
-    onSuccess: (method: String) -> Unit,
+    keyAlias: String,
+    onSuccess: (method: String, publicKey: PublicKey) -> Unit,
   ) {
     val activity = activity as? FragmentActivity
     if (activity == null) {
@@ -179,14 +201,30 @@ class BiometricGatePlugin : Plugin() {
       return
     }
 
-    var authenticators = if (strongOnly) {
-      BiometricManager.Authenticators.BIOMETRIC_STRONG
-    } else {
-      BiometricManager.Authenticators.BIOMETRIC_STRONG or
-        BiometricManager.Authenticators.BIOMETRIC_WEAK
+    val mgr = BiometricManager.from(context)
+    val strong = mgr.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+    if (strong != BiometricManager.BIOMETRIC_SUCCESS) {
+      val weak = mgr.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_WEAK)
+      val msg = if (weak == BiometricManager.BIOMETRIC_SUCCESS) {
+        "Class 1/2 face unlock is not allowed. Enroll a fingerprint or Class 3 Face in Android Settings."
+      } else {
+        biometricStatusMessage(strong)
+      }
+      call.reject(msg)
+      return
     }
-    if (allowDevice) {
-      authenticators = authenticators or BiometricManager.Authenticators.DEVICE_CREDENTIAL
+
+    val crypto: BiometricPrompt.CryptoObject
+    val publicKey: PublicKey
+    try {
+      val prepared = prepareCryptoObject(keyAlias)
+      crypto = prepared.first
+      publicKey = prepared.second
+    } catch (e: Exception) {
+      call.reject(
+        "Keystore alias unavailable: ${e.message ?: "could not create biometric-bound key"}",
+      )
+      return
     }
 
     val executor = ContextCompat.getMainExecutor(context)
@@ -195,16 +233,23 @@ class BiometricGatePlugin : Plugin() {
       executor,
       object : BiometricPrompt.AuthenticationCallback() {
         override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-          val type = when (result.authenticationType) {
-            BiometricPrompt.AUTHENTICATION_RESULT_TYPE_BIOMETRIC -> "biometric_strong"
-            BiometricPrompt.AUTHENTICATION_RESULT_TYPE_DEVICE_CREDENTIAL -> "device_credential"
-            else -> "unknown"
+          try {
+            if (result.cryptoObject?.signature == null) {
+              call.reject("CryptoObject signature missing — Class 3 hardware binding required")
+              return
+            }
+            val type = when (result.authenticationType) {
+              BiometricPrompt.AUTHENTICATION_RESULT_TYPE_BIOMETRIC -> "biometric_strong"
+              BiometricPrompt.AUTHENTICATION_RESULT_TYPE_DEVICE_CREDENTIAL -> {
+                call.reject("Device credential / PIN fallback is disabled for TrustID")
+                return
+              }
+              else -> "biometric_strong"
+            }
+            onSuccess(type, publicKey)
+          } catch (e: Exception) {
+            call.reject(e.message ?: "Biometric success handler failed")
           }
-          if (!allowDevice && type == "device_credential") {
-            call.reject("Device credential fallback is disabled")
-            return
-          }
-          onSuccess(type)
         }
 
         override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
@@ -218,30 +263,81 @@ class BiometricGatePlugin : Plugin() {
     )
 
     val builder = BiometricPrompt.PromptInfo.Builder()
-      .setTitle("TrustID")
+      .setTitle("TrustID Secure Access")
       .setSubtitle(reason)
-      .setAllowedAuthenticators(authenticators)
-
-    if (!allowDevice) {
-      builder.setNegativeButtonText("Cancel")
-    }
+      .setDescription("Use fingerprint or Class 3 Face ID — 2D camera unlock is disabled")
+      .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+      .setNegativeButtonText("Cancel")
 
     activity.runOnUiThread {
-      prompt.authenticate(builder.build())
+      try {
+        prompt.authenticate(builder.build(), crypto)
+      } catch (e: Exception) {
+        call.reject(e.message ?: "Failed to show biometric prompt")
+      }
     }
   }
 
-  private fun ensureFingerprintBackupKey(): PublicKey {
+  private fun prepareCryptoObject(
+    keyAlias: String,
+  ): Pair<BiometricPrompt.CryptoObject, PublicKey> {
+    return try {
+      initCrypto(keyAlias)
+    } catch (e: Exception) {
+      // Missing / invalidated alias after fingerprint change — recreate safely.
+      deleteAliasQuietly(keyAlias)
+      initCrypto(keyAlias)
+    }
+  }
+
+  private fun initCrypto(
+    keyAlias: String,
+  ): Pair<BiometricPrompt.CryptoObject, PublicKey> {
+    val publicKey = ensureBiometricKey(keyAlias)
     val ks = KeyStore.getInstance(KEYSTORE).apply { load(null) }
-    if (ks.containsAlias(FP_KEY_ALIAS)) {
-      val entry = ks.getEntry(FP_KEY_ALIAS, null) as KeyStore.PrivateKeyEntry
-      return entry.certificate.publicKey
+    val entry = ks.getEntry(keyAlias, null) as? KeyStore.PrivateKeyEntry
+      ?: throw IllegalStateException("Keystore alias $keyAlias missing after create")
+    val signature = Signature.getInstance(SIGN_ALG)
+    try {
+      signature.initSign(entry.privateKey)
+    } catch (e: KeyPermanentlyInvalidatedException) {
+      deleteAliasQuietly(keyAlias)
+      val recreated = ensureBiometricKey(keyAlias)
+      val again = ks.apply { load(null) }.getEntry(keyAlias, null) as KeyStore.PrivateKeyEntry
+      signature.initSign(again.privateKey)
+      return Pair(BiometricPrompt.CryptoObject(signature), recreated)
+    } catch (e: InvalidKeyException) {
+      deleteAliasQuietly(keyAlias)
+      val recreated = ensureBiometricKey(keyAlias)
+      val again = ks.apply { load(null) }.getEntry(keyAlias, null) as KeyStore.PrivateKeyEntry
+      signature.initSign(again.privateKey)
+      return Pair(BiometricPrompt.CryptoObject(signature), recreated)
+    } catch (e: UnrecoverableKeyException) {
+      deleteAliasQuietly(keyAlias)
+      val recreated = ensureBiometricKey(keyAlias)
+      val again = ks.apply { load(null) }.getEntry(keyAlias, null) as KeyStore.PrivateKeyEntry
+      signature.initSign(again.privateKey)
+      return Pair(BiometricPrompt.CryptoObject(signature), recreated)
+    }
+    return Pair(BiometricPrompt.CryptoObject(signature), publicKey)
+  }
+
+  private fun ensureBiometricKey(alias: String): PublicKey {
+    val ks = KeyStore.getInstance(KEYSTORE).apply { load(null) }
+    if (ks.containsAlias(alias)) {
+      try {
+        val entry = ks.getEntry(alias, null) as? KeyStore.PrivateKeyEntry
+        if (entry != null) return entry.certificate.publicKey
+      } catch (_: Exception) {
+        deleteAliasQuietly(alias)
+      }
     }
 
     val purposes = KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY
-    val builder = KeyGenParameterSpec.Builder(FP_KEY_ALIAS, purposes)
+    val builder = KeyGenParameterSpec.Builder(alias, purposes)
       .setDigests(KeyProperties.DIGEST_SHA256)
       .setUserAuthenticationRequired(true)
+      .setInvalidatedByBiometricEnrollment(true)
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
       builder.setUserAuthenticationParameters(
@@ -258,7 +354,31 @@ class BiometricGatePlugin : Plugin() {
       KEYSTORE,
     )
     kpg.initialize(builder.build())
-    val pair = kpg.generateKeyPair()
-    return pair.public
+    return kpg.generateKeyPair().public
+  }
+
+  private fun deleteAliasQuietly(alias: String) {
+    try {
+      val ks = KeyStore.getInstance(KEYSTORE).apply { load(null) }
+      if (ks.containsAlias(alias)) ks.deleteEntry(alias)
+    } catch (_: Exception) {
+      // ignore — next ensure will recreate
+    }
+  }
+
+  private fun biometricStatusMessage(code: Int): String {
+    return when (code) {
+      BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE ->
+        "No Class 3 biometric hardware on this device"
+      BiometricManager.BIOMETRIC_ERROR_HW_UNAVAILABLE ->
+        "Biometric hardware temporarily unavailable"
+      BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED ->
+        "No fingerprint / Class 3 Face enrolled. Add one in Android Settings."
+      BiometricManager.BIOMETRIC_ERROR_SECURITY_UPDATE_REQUIRED ->
+        "Device security update required before biometrics can be used"
+      BiometricManager.BIOMETRIC_ERROR_UNSUPPORTED ->
+        "Class 3 biometrics unsupported on this device"
+      else -> "Class 3 biometrics unavailable (code $code)"
+    }
   }
 }

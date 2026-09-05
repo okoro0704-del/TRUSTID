@@ -74,8 +74,8 @@ export class NativeBiometricGate implements BiometricGate {
   ): Promise<{ ok: true; method: string }> {
     const result = await this.bridge.authenticate({
       reason: config.reason,
-      allowDeviceCredential: config.allowDeviceCredential === true,
-      strongOnly: config.strongOnly !== false,
+      allowDeviceCredential: false,
+      strongOnly: true,
     });
     if (!result.ok) throw new Error("Biometric authentication failed");
     return { ok: true, method: result.method };

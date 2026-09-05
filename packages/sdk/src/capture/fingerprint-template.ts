@@ -16,7 +16,11 @@ export type FingerprintTemplateBridge = {
     publicKeyBase64?: string;
     keyAlias?: string;
   }>;
-  getAvailability?(): Promise<{ available?: boolean; enrolled?: boolean }>;
+  getAvailability?(): Promise<{
+    available?: boolean;
+    enrolled?: boolean;
+    strength?: string;
+  }>;
 };
 
 function decodeBase64(raw: string): Uint8Array {
@@ -58,6 +62,7 @@ export async function captureNativeFingerprintTemplate(
   try {
     const avail = await bridge.getAvailability?.();
     if (avail && avail.available === false) return null;
+    if (avail?.strength && avail.strength !== "strong") return null;
 
     const result = await bridge.captureFingerprintTemplate({ reason });
     if (!result?.ok || !result.publicKeyBase64) return null;

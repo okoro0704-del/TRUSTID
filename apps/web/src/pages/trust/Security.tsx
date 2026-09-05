@@ -6,6 +6,11 @@ import {
   getBiometricAvailability,
   registerBiometricPasskey,
 } from "../../lib/trustidBiometrics";
+import {
+  isMobileApp,
+  setupTrustIDFingerprintStrict,
+} from "../../lib/mobileBridge";
+import { createTrustIdSdk } from "@trustid/sdk";
 
 type EventRow = {
   id: string;
@@ -57,6 +62,9 @@ export function SecurityPage() {
   const [bioBusy, setBioBusy] = useState(false);
   const [bioMessage, setBioMessage] = useState<string | null>(null);
   const [bioError, setBioError] = useState<string | null>(null);
+  const [fpBusy, setFpBusy] = useState(false);
+  const [fpMessage, setFpMessage] = useState<string | null>(null);
+  const [fpError, setFpError] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -85,7 +93,7 @@ export function SecurityPage() {
       if (!avail.available) {
         setBioError(
           avail.reason ??
-            "Biometrics unavailable on this device. Enable Face ID / fingerprint in settings.",
+            "Class 3 biometrics unavailable. Enable fingerprint / Face ID in settings.",
         );
         return;
       }
@@ -106,24 +114,90 @@ export function SecurityPage() {
     }
   }
 
+  /** Class 3 fingerprint setup — never crashes the app. */
+  async function handleSetupFingerprint() {
+    setFpBusy(true);
+    setFpError(null);
+    setFpMessage(null);
+    try {
+      if (!isMobileApp()) {
+        setFpMessage(
+          "Fingerprint hardware setup runs in the TrustID app. On web, use Setup biometrics / passkey.",
+        );
+        return;
+      }
+
+      const bound = await setupTrustIDFingerprintStrict(identity?.trustId);
+      if (!bound.ok) {
+        setFpError(
+          bound.error ||
+            "Could not complete fingerprint setup. Ensure fingerprints are registered in Android/iOS Settings.",
+        );
+        return;
+      }
+
+      if (bound.publicKeyBase64) {
+        try {
+          const { fingerprintPayloadFromPublicKey } = await import(
+            "@trustid/sdk"
+          );
+          const payload = fingerprintPayloadFromPublicKey(bound.publicKeyBase64);
+          const sdk = createTrustIdSdk({
+            baseUrl: import.meta.env.VITE_API_URL ?? "/api",
+          });
+          await sdk.enrollBiometric(payload);
+          setFpMessage(
+            "Class 3 fingerprint bound to TrustID Keystore and saved as cloud backup.",
+          );
+          return;
+        } catch (enrollErr) {
+          console.warn("[TrustID] Cloud fingerprint enroll skipped:", enrollErr);
+        }
+      }
+
+      setFpMessage(
+        "Fingerprint successfully bound to TrustID Keystore (Class 3).",
+      );
+    } catch (error: unknown) {
+      console.error("Handled Fingerprint Enrollment Exception:", error);
+      setFpError(
+        "Could not complete fingerprint setup. Please ensure fingerprints are registered in Android/iOS Settings.",
+      );
+    } finally {
+      setFpBusy(false);
+    }
+  }
+
   return (
     <div className="dashboard">
       <section className="section surface-block">
         <h2>Hardware biometrics</h2>
         <p className="sub">
-          Setup a Secure Enclave / platform passkey. Canceling the prompt shows
-          an inline error — the app will not quit.
+          Class 3 only (fingerprint sensor or 3D Face ID). 2D camera face unlock
+          is rejected. Canceling shows an inline error — the app will not quit.
         </p>
-        <button
-          type="button"
-          className="btn btn-primary"
-          disabled={bioBusy || !identity?.trustId}
-          onClick={() => void handleBiometricToggle()}
-        >
-          {bioBusy ? "Waiting for authenticator…" : "Setup biometrics / passkey"}
-        </button>
+        <div className="row" style={{ gap: "0.75rem", flexWrap: "wrap" }}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={bioBusy || !identity?.trustId}
+            onClick={() => void handleBiometricToggle()}
+          >
+            {bioBusy ? "Waiting for authenticator…" : "Setup biometrics / passkey"}
+          </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={fpBusy || !identity?.trustId}
+            onClick={() => void handleSetupFingerprint()}
+          >
+            {fpBusy ? "Waiting for fingerprint…" : "Setup Fingerprint"}
+          </button>
+        </div>
         {bioMessage && <p className="notice">{bioMessage}</p>}
         {bioError && <p className="error">{bioError}</p>}
+        {fpMessage && <p className="notice">{fpMessage}</p>}
+        {fpError && <p className="error">{fpError}</p>}
       </section>
 
       <section className="section surface-block">

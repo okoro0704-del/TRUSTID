@@ -1,7 +1,9 @@
 /**
- * Native fingerprint / device PIN fallback when face scan fails on a
- * returning (already-bound) install. Does not mint a new Trust ID.
+ * Native Class 3 biometric unlock when face scan fails on a bound install.
+ * Never accepts Class 1/2 face unlock or device PIN as TrustID proof.
  */
+import { verifyTrustIDBiometricStrict } from "./mobileBridge";
+
 export async function promptLocalDeviceCredential(reason?: string): Promise<{
   ok: boolean;
   method?: string;
@@ -11,35 +13,18 @@ export async function promptLocalDeviceCredential(reason?: string): Promise<{
     return { ok: false, error: "Not in a browser context" };
   }
 
-  const gate = window.TrustIdBiometricGate;
-  if (!gate?.authenticate) {
-    return {
-      ok: false,
-      error: "Native biometric plugin unavailable. Use a hardware passkey instead.",
-    };
-  }
-
   try {
-    if (gate.getAvailability) {
-      const avail = await gate.getAvailability();
-      if (!avail?.available) {
-        return {
-          ok: false,
-          error:
-            avail?.notes?.[0] ??
-            "Biometrics not enrolled. Enable Face ID / fingerprint in device settings.",
-        };
-      }
+    const result = await verifyTrustIDBiometricStrict();
+    if (!result.ok) {
+      return {
+        ok: false,
+        error:
+          result.error ??
+          reason ??
+          "Class 3 fingerprint / Face ID required. 2D camera unlock is disabled.",
+      };
     }
-
-    const result = await gate.authenticate({
-      reason:
-        reason ??
-        "Face ID failed. Verify with Fingerprint or Device PIN",
-      allowDeviceCredential: true,
-      strongOnly: false,
-    });
-    return { ok: Boolean(result?.ok), method: result?.method };
+    return { ok: true, method: result.method ?? "biometric_strong" };
   } catch (err) {
     return {
       ok: false,

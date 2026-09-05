@@ -20,9 +20,15 @@ declare global {
       getAvailability(): Promise<BiometricAvailability>;
       authenticate(options: {
         reason: string;
-        allowDeviceCredential: boolean;
+        allowDeviceCredential?: boolean;
         strongOnly?: boolean;
-      }): Promise<{ ok: boolean; method: string }>;
+        useFallback?: boolean;
+        title?: string;
+        subtitle?: string;
+        description?: string;
+        negativeButtonText?: string;
+        maxAttempts?: number;
+      }): Promise<{ ok: boolean; method: string; publicKeyBase64?: string }>;
       captureFingerprintTemplate?(options?: {
         reason?: string;
       }): Promise<{
