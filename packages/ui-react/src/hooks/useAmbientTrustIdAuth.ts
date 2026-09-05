@@ -129,10 +129,39 @@ export function useAmbientTrustIdAuth(
   const [nonce, setNonce] = useState(0);
   const startedRef = useRef(false);
   const pollAbortRef = useRef(false);
+  /** Invalidate in-flight ambient runs (Strict Mode / overlapping captures). */
+  const runIdRef = useRef(0);
   const pendingResultRef = useRef<AmbientSignInResult | null>(null);
   const pendingPayloadRef = useRef<MultiModalBiometricPayload | null>(null);
   const pendingInstallRef = useRef<string | undefined>(undefined);
   const pendingEnrollRef = useRef<AmbientSignInResult | null>(null);
+  /** User-choice screens must not be overwritten by stale async work. */
+  const phaseRef = useRef<AmbientAuthPhase>("CHECKING");
+
+  const setPhaseSafe = useCallback((next: AmbientAuthPhase, runId?: number) => {
+    if (runId != null && runId !== runIdRef.current) {
+      // Stale run was aborted (Strict Mode remount) — still allow it to stop
+      // the spinner if we are mid-search and lookup already returned no match.
+      const searching =
+        phaseRef.current === "PROMPTING" || phaseRef.current === "CHECKING";
+      const stopSearch = next === "OFFER_CREATE" || next === "ERROR";
+      if (!(searching && stopSearch)) return;
+    }
+    phaseRef.current = next;
+    setPhase(next);
+  }, []);
+
+  const isUserChoicePhase = useCallback((p: AmbientAuthPhase) => {
+    return (
+      p === "OFFER_CREATE" ||
+      p === "DEVICE_SAVED" ||
+      p === "OFFER_FINGERPRINT" ||
+      p === "SWITCH_ACCOUNT" ||
+      p === "NEEDS_APPROVAL" ||
+      p === "ERROR" ||
+      p === "AUTHENTICATED"
+    );
+  }, []);
 
   const finishAuthenticated = useCallback(
     async (id?: TrustIdIdentity | null, sessionToken?: string | null) => {
@@ -148,9 +177,9 @@ export function useAmbientTrustIdAuth(
         onAuthenticated?.(id);
       }
       await refresh();
-      setPhase("AUTHENTICATED");
+      setPhaseSafe("AUTHENTICATED");
     },
-    [onAuthenticated, refresh, setIdentity, storeSessionToken],
+    [onAuthenticated, refresh, setIdentity, setPhaseSafe, storeSessionToken],
   );
 
   const completePendingEnroll = useCallback(async () => {
@@ -227,7 +256,7 @@ export function useAmbientTrustIdAuth(
                   result.trustId
                 ) {
                   setApprovalPollToken(result.approvalPollToken);
-                  setPhase("NEEDS_APPROVAL");
+                  setPhaseSafe("NEEDS_APPROVAL");
                   onNeedsApproval?.({
                     trustId: result.trustId,
                     pollToken: result.approvalPollToken,
@@ -255,7 +284,7 @@ export function useAmbientTrustIdAuth(
         setError(
           "Fingerprint did not unlock this account. Retry face, or create a new Trust ID.",
         );
-        setPhase("OFFER_CREATE");
+        setPhaseSafe("OFFER_CREATE");
       } finally {
         setFingerprintBusy(false);
       }
@@ -266,14 +295,17 @@ export function useAmbientTrustIdAuth(
     finishAuthenticated,
     getDeviceFingerprint,
     onNeedsApproval,
+    setPhaseSafe,
     tryBoundInstallUnlock,
   ]);
 
   const applyMatchedResult = useCallback(
-    async (result: AmbientSignInResult) => {
+    async (result: AmbientSignInResult, runId?: number) => {
+      if (runId != null && runId !== runIdRef.current) return;
+
       if (result.needsMasterApproval && result.approvalPollToken && result.trustId) {
         setApprovalPollToken(result.approvalPollToken);
-        setPhase("NEEDS_APPROVAL");
+        setPhaseSafe("NEEDS_APPROVAL", runId);
         onNeedsApproval?.({
           trustId: result.trustId,
           pollToken: result.approvalPollToken,
@@ -285,7 +317,7 @@ export function useAmbientTrustIdAuth(
       // Fresh create: confirm on-device Master save, then fingerprint backup.
       if (result.enrolled && result.matched) {
         pendingEnrollRef.current = result;
-        setPhase("DEVICE_SAVED");
+        setPhaseSafe("DEVICE_SAVED", runId);
         return;
       }
 
@@ -302,13 +334,14 @@ export function useAmbientTrustIdAuth(
       }
 
       setError(result.error ?? "Biometric recognition failed");
-      setPhase("ERROR");
+      setPhaseSafe("ERROR", runId);
     },
-    [finishAuthenticated, onNeedsApproval],
+    [finishAuthenticated, onNeedsApproval, setPhaseSafe],
   );
 
   const runAmbient = useCallback(async () => {
-    setPhase("PROMPTING");
+    const runId = runIdRef.current;
+    setPhaseSafe("PROMPTING", runId);
     setError(null);
     setApprovalPollToken(null);
     setPreviousTrustId(null);
@@ -318,6 +351,7 @@ export function useAmbientTrustIdAuth(
 
     const sdk = createTrustIdSdk({ baseUrl: apiBaseUrl });
     const installId = getInstallId ? await getInstallId() : undefined;
+    if (runId !== runIdRef.current) return;
     pendingInstallRef.current = installId;
 
     let payload: MultiModalBiometricPayload | undefined;
@@ -326,28 +360,36 @@ export function useAmbientTrustIdAuth(
     } catch {
       payload = undefined;
     }
+    if (runId !== runIdRef.current) return;
 
     if (!payload?.face) {
-      // Stop searching immediately — let the user retry face or use fingerprint.
       setError(
         "No face detected. Retry the camera, use fingerprint if you already have a Trust ID, or create one.",
       );
-      setPhase("OFFER_CREATE");
+      setPhaseSafe("OFFER_CREATE", runId);
       return;
     }
 
     pendingPayloadRef.current = payload;
 
-    const cachedTrustId = getLastTrustId?.() ?? undefined;
-    const lookup = await sdk.faceLookup({
-      face: payload.face,
-      installId,
-      deviceFingerprint: payload.deviceFingerprint,
-      cachedTrustId,
-    });
+    let lookup;
+    try {
+      lookup = await sdk.faceLookup({
+        face: payload.face,
+        installId,
+        deviceFingerprint: payload.deviceFingerprint,
+        cachedTrustId: getLastTrustId?.() ?? undefined,
+      });
+    } catch (e) {
+      if (runId !== runIdRef.current) return;
+      setError(e instanceof Error ? e.message : "Face lookup failed");
+      setPhaseSafe("OFFER_CREATE", runId);
+      return;
+    }
+    if (runId !== runIdRef.current) return;
 
     if (lookup.status === "NOT_FOUND") {
-      // Stop spinner immediately — dual UI: Retry/Fingerprint | Create Trust ID.
+      // Hard stop — no more capture / lookup until the user picks an action.
       if (allowAutoEnroll) {
         const result = await sdk.ambientAuthenticate({
           captureFace,
@@ -357,12 +399,13 @@ export function useAmbientTrustIdAuth(
           allowAutoEnroll: true,
           installId,
         });
+        if (runId !== runIdRef.current) return;
         setLastResult(result);
-        await applyMatchedResult(result);
+        await applyMatchedResult(result, runId);
         return;
       }
       setError(null);
-      setPhase("OFFER_CREATE");
+      setPhaseSafe("OFFER_CREATE", runId);
       return;
     }
 
@@ -376,7 +419,7 @@ export function useAmbientTrustIdAuth(
         identity: lookup.identity,
       };
       setLastResult(result);
-      await applyMatchedResult(result);
+      await applyMatchedResult(result, runId);
       return;
     }
 
@@ -398,11 +441,11 @@ export function useAmbientTrustIdAuth(
     ) {
       pendingResultRef.current = result;
       setPreviousTrustId(lastLocal);
-      setPhase("SWITCH_ACCOUNT");
+      setPhaseSafe("SWITCH_ACCOUNT", runId);
       return;
     }
 
-    await applyMatchedResult(result);
+    await applyMatchedResult(result, runId);
   }, [
     allowAutoEnroll,
     apiBaseUrl,
@@ -413,6 +456,7 @@ export function useAmbientTrustIdAuth(
     getDeviceFingerprint,
     getInstallId,
     getLastTrustId,
+    setPhaseSafe,
   ]);
 
   const confirmCreateAccount = useCallback(() => {
@@ -422,7 +466,7 @@ export function useAmbientTrustIdAuth(
       setNonce((n) => n + 1);
       return;
     }
-    setPhase("ENROLLING");
+    setPhaseSafe("ENROLLING");
     setError(null);
     void (async () => {
       const sdk = createTrustIdSdk({ baseUrl: apiBaseUrl });
@@ -472,7 +516,7 @@ export function useAmbientTrustIdAuth(
       await applyMatchedResult(result);
     })().catch((e) => {
       setError(e instanceof Error ? e.message : "Could not create Trust ID");
-      setPhase("ERROR");
+      setPhaseSafe("ERROR");
     });
   }, [
     apiBaseUrl,
@@ -480,24 +524,25 @@ export function useAmbientTrustIdAuth(
     getDeviceFingerprint,
     getPushToken,
     persistMasterDeviceState,
+    setPhaseSafe,
   ]);
 
   const declineCreateAccount = useCallback(() => {
     pendingPayloadRef.current = null;
     setError("No Trust ID was created. Scan again when you are ready.");
-    setPhase("ERROR");
-  }, []);
+    setPhaseSafe("ERROR");
+  }, [setPhaseSafe]);
 
   const continueAfterDeviceSaved = useCallback(() => {
-    setPhase("OFFER_FINGERPRINT");
-  }, []);
+    setPhaseSafe("OFFER_FINGERPRINT");
+  }, [setPhaseSafe]);
 
   const confirmFingerprintBackup = useCallback(() => {
     if (!registerFingerprintBackup) {
       void completePendingEnroll();
       return;
     }
-    setPhase("SAVING_FINGERPRINT");
+    setPhaseSafe("SAVING_FINGERPRINT");
     setError(null);
     void (async () => {
       const ok = await registerFingerprintBackup();
@@ -515,7 +560,7 @@ export function useAmbientTrustIdAuth(
       );
       void completePendingEnroll();
     });
-  }, [completePendingEnroll, registerFingerprintBackup]);
+  }, [completePendingEnroll, registerFingerprintBackup, setPhaseSafe]);
 
   const skipFingerprintBackup = useCallback(() => {
     void completePendingEnroll();
@@ -551,12 +596,12 @@ export function useAmbientTrustIdAuth(
               ? "Access was denied on your Master Device."
               : "Approval request expired. Try again."),
         );
-        setPhase("ERROR");
+        setPhaseSafe("ERROR");
         return;
       }
       if (poll.status !== "approved" && poll.status !== "temporary") {
         setError("Still waiting for your Master Device to approve this terminal.");
-        setPhase("NEEDS_APPROVAL");
+        setPhaseSafe("NEEDS_APPROVAL");
         return;
       }
 
@@ -570,39 +615,46 @@ export function useAmbientTrustIdAuth(
         return;
       }
       setError("Approval completed but session could not be established.");
-      setPhase("ERROR");
+      setPhaseSafe("ERROR");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not claim approval");
-      setPhase("NEEDS_APPROVAL");
+      setPhaseSafe("NEEDS_APPROVAL");
     }
-  }, [apiBaseUrl, approvalPollToken, finishAuthenticated]);
+  }, [apiBaseUrl, approvalPollToken, finishAuthenticated, setPhaseSafe]);
 
   useEffect(() => {
     if (!enabled) return;
-    if (loading) {
-      setPhase("CHECKING");
-      return;
-    }
     if (identity) {
-      setPhase("AUTHENTICATED");
+      setPhaseSafe("AUTHENTICATED");
       return;
     }
 
-    if (phase === "AUTHENTICATED") {
-      setPhase("PROMPTING");
-      startedRef.current = false;
+    // Session probe in flight — keep current UI; never restart search from loading flips.
+    if (loading) return;
+
+    // Already waiting on the user — never auto re-search.
+    if (isUserChoicePhase(phaseRef.current) && phaseRef.current !== "AUTHENTICATED") {
+      return;
     }
 
-    if (startedRef.current && nonce === 0) return;
+    const scheduledRunId = ++runIdRef.current;
     startedRef.current = true;
 
     const t = window.setTimeout(() => {
       void runAmbient().catch((e) => {
+        if (scheduledRunId !== runIdRef.current) return;
         setError(e instanceof Error ? e.message : "Ambient auth failed");
-        setPhase("ERROR");
+        setPhaseSafe("OFFER_CREATE", scheduledRunId);
       });
     }, 400);
-    return () => window.clearTimeout(t);
+
+    return () => {
+      window.clearTimeout(t);
+      // Abort this scheduled/in-flight search only; a remount will schedule a new one.
+      if (runIdRef.current === scheduledRunId) {
+        runIdRef.current += 1;
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, loading, identity, nonce]);
 
@@ -646,7 +698,7 @@ export function useAmbientTrustIdAuth(
                 ? "Access was denied on your Master Device."
                 : "Approval request expired. Try again."),
           );
-          setPhase("ERROR");
+          setPhaseSafe("ERROR");
           return;
         }
       } catch {
@@ -678,7 +730,7 @@ export function useAmbientTrustIdAuth(
                 msg.status === "expired"
               ) {
                 setError("Access was denied on your Master Device.");
-                setPhase("ERROR");
+                setPhaseSafe("ERROR");
                 return;
               }
               void claimNow();
@@ -698,15 +750,20 @@ export function useAmbientTrustIdAuth(
       if (timer) window.clearTimeout(timer);
       guestWs?.close();
     };
-  }, [phase, approvalPollToken, apiBaseUrl, finishAuthenticated]);
+  }, [phase, approvalPollToken, apiBaseUrl, finishAuthenticated, setPhaseSafe]);
 
   const retry = useCallback(() => {
+    // Cancel any in-flight run, then allow a fresh search.
+    runIdRef.current += 1;
     startedRef.current = false;
     pendingResultRef.current = null;
-    pendingPayloadRef.current = null;
+    // Keep last face payload until a new capture replaces it so Create still works.
     pendingEnrollRef.current = null;
+    phaseRef.current = "PROMPTING";
+    setPhaseSafe("PROMPTING");
+    setError(null);
     setNonce((n) => n + 1);
-  }, []);
+  }, [setPhaseSafe]);
 
   return {
     phase: identity ? "AUTHENTICATED" : phase,
