@@ -211,7 +211,7 @@
 }
 
 .tid-ambient-splash-panel {
-  width: min(360px, 100%);
+  width: min(440px, 100%);
   text-align: center;
   padding: 1rem;
 }
@@ -231,6 +231,51 @@
 }
 
 .tid-ambient-splash-actions .tid-btn {
+  width: 100%;
+  justify-content: center;
+}
+
+.tid-ambient-choice-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin-top: 1.35rem;
+  width: min(420px, 100%);
+  margin-left: auto;
+  margin-right: auto;
+}
+
+@media (max-width: 420px) {
+  .tid-ambient-choice-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.tid-ambient-choice-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.85rem 0.75rem;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(15, 38, 36, 0.72);
+  text-align: center;
+}
+
+.tid-ambient-choice-card-primary {
+  border-color: rgba(45, 212, 191, 0.35);
+  background: rgba(45, 212, 191, 0.08);
+}
+
+.tid-ambient-choice-label {
+  margin: 0 0 0.15rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+.tid-ambient-choice-card .tid-btn {
   width: 100%;
   justify-content: center;
 }

@@ -3,7 +3,6 @@ import {
   useAmbientTrustIdAuth,
   type UseAmbientTrustIdAuthOptions,
 } from "../hooks/useAmbientTrustIdAuth.js";
-import { RegistrationPromptModal } from "./RegistrationPromptModal.js";
 
 export type TrustIdAmbientAuthProviderProps = UseAmbientTrustIdAuthOptions & {
   children: ReactNode;
@@ -14,10 +13,13 @@ function AmbientSplash({
   brand,
   msg,
   children,
+  spinning = false,
 }: {
   brand: string;
   msg: string;
   children?: ReactNode;
+  /** Only show the search ring while actively matching */
+  spinning?: boolean;
 }) {
   return (
     <div className="tid-ambient-splash" role="status" aria-live="polite">
@@ -26,7 +28,7 @@ function AmbientSplash({
         <h1 className="tid-silent-splash-brand">{brand}</h1>
         <p className="tid-ambient-splash-msg">{msg}</p>
         {children}
-        {!children ? (
+        {spinning && !children ? (
           <div className="tid-silent-splash-ring" aria-hidden="true" />
         ) : null}
       </div>
@@ -35,7 +37,7 @@ function AmbientSplash({
 }
 
 /**
- * Global identity-first auth shell ù lookup before any enroll write.
+ * Global identity-first auth shell ó lookup before any enroll write.
  */
 export function TrustIdAmbientAuthProvider({
   children,
@@ -45,13 +47,14 @@ export function TrustIdAmbientAuthProvider({
   const {
     phase,
     error,
+    fingerprintBusy,
     retry,
     confirmSwitchAccount,
     confirmCreateAccount,
-    declineCreateAccount,
     continueAfterDeviceSaved,
     confirmFingerprintBackup,
     skipFingerprintBackup,
+    useFingerprintLogin,
     continueAfterApproval,
     lastResult,
     previousTrustId,
@@ -62,51 +65,55 @@ export function TrustIdAmbientAuthProvider({
   }
 
   if (phase === "OFFER_CREATE") {
+    const canCreate = Boolean(
+      // Face payload is kept on NOT_FOUND; create needs it.
+      true,
+    );
     return (
-      <>
-        <AmbientSplash
-          brand={brand}
-          msg="Your face is not in the Trust ID registry yet."
-        >
-          <p className="tid-ambient-splash-msg" style={{ marginTop: "0.75rem" }}>
-            Create a Trust ID with this face. This phone becomes your Master Device.
+      <AmbientSplash brand={brand} msg="No matching face in the Trust ID registry.">
+        {error ? (
+          <p className="tid-ambient-splash-msg" style={{ marginTop: "0.65rem", color: "#fbbf24" }}>
+            {error}
           </p>
-          <div className="tid-ambient-splash-actions">
+        ) : (
+          <p className="tid-ambient-splash-msg" style={{ marginTop: "0.65rem" }}>
+            Already have an account? Retry face or unlock with fingerprint.
+            New here? Create a Trust ID on this Master Device.
+          </p>
+        )}
+        <div className="tid-ambient-choice-row" role="group" aria-label="Choose next step">
+          <div className="tid-ambient-choice-card">
+            <p className="tid-ambient-choice-label">Already have an account</p>
             <button
               type="button"
-              className="tid-btn tid-btn-primary"
-              onClick={confirmCreateAccount}
+              className="tid-btn"
+              onClick={retry}
+              disabled={fingerprintBusy}
             >
-              Create Trust ID
-            </button>
-            <button type="button" className="tid-btn tid-btn-ghost" onClick={retry}>
-              Scan face again
+              Retry face
             </button>
             <button
               type="button"
               className="tid-btn tid-btn-ghost"
-              onClick={declineCreateAccount}
+              onClick={useFingerprintLogin}
+              disabled={fingerprintBusy}
             >
-              Cancel
+              {fingerprintBusy ? "Checking fingerprintÖ" : "Use fingerprint"}
             </button>
           </div>
-        </AmbientSplash>
-        <RegistrationPromptModal
-          isOpen
-          title="No Trust ID Found"
-          message={
-            <>
-              We scanned your face, but there is no matching Trust ID on the
-              network.
-              <br />
-              <br />
-              Create one now? This device will be saved as your Master Device.
-            </>
-          }
-          onAccept={confirmCreateAccount}
-          onDecline={declineCreateAccount}
-        />
-      </>
+          <div className="tid-ambient-choice-card tid-ambient-choice-card-primary">
+            <p className="tid-ambient-choice-label">New user</p>
+            <button
+              type="button"
+              className="tid-btn tid-btn-primary"
+              onClick={confirmCreateAccount}
+              disabled={fingerprintBusy || !canCreate}
+            >
+              Create Trust ID
+            </button>
+          </div>
+        </div>
+      </AmbientSplash>
     );
   }
 
@@ -203,7 +210,7 @@ export function TrustIdAmbientAuthProvider({
           <p className="tid-ambient-splash-msg">
             Identity matched
             {lastResult?.trustId ? ` (${lastResult.trustId})` : ""}. Waiting for
-            your Master Device to allow this terminalù
+            your Master Device to allow this terminalÖ
           </p>
           <p className="tid-ambient-splash-msg">
             Approve the request on your primary phone, then tap Continue.
@@ -223,37 +230,50 @@ export function TrustIdAmbientAuthProvider({
   }
 
   if (phase === "ERROR") {
-    const canCreate = Boolean(lastResult?.enrolled === false || lastResult == null);
     return (
-      <div className="tid-ambient-splash" role="alert">
-        <div className="tid-ambient-splash-panel">
-          <h1 className="tid-silent-splash-brand">{brand}</h1>
-          <p className="tid-ambient-splash-msg">{error ?? "Verification paused"}</p>
-          <div className="tid-ambient-splash-actions">
-            <button type="button" className="tid-btn tid-btn-primary" onClick={retry}>
-              Retry face verification
+      <AmbientSplash brand={brand} msg={error ?? "Verification paused"}>
+        <div className="tid-ambient-choice-row" role="group" aria-label="Choose next step">
+          <div className="tid-ambient-choice-card">
+            <p className="tid-ambient-choice-label">Already have an account</p>
+            <button type="button" className="tid-btn" onClick={retry}>
+              Retry face
             </button>
-            {canCreate ? (
-              <button
-                type="button"
-                className="tid-btn tid-btn-ghost"
-                onClick={confirmCreateAccount}
-              >
-                Create Trust ID
-              </button>
-            ) : null}
+            <button
+              type="button"
+              className="tid-btn tid-btn-ghost"
+              onClick={useFingerprintLogin}
+              disabled={fingerprintBusy}
+            >
+              {fingerprintBusy ? "Checking fingerprintÖ" : "Use fingerprint"}
+            </button>
+          </div>
+          <div className="tid-ambient-choice-card tid-ambient-choice-card-primary">
+            <p className="tid-ambient-choice-label">New user</p>
+            <button
+              type="button"
+              className="tid-btn tid-btn-primary"
+              onClick={confirmCreateAccount}
+            >
+              Create Trust ID
+            </button>
           </div>
         </div>
-      </div>
+      </AmbientSplash>
     );
   }
 
+  const spinning =
+    phase === "CHECKING" ||
+    phase === "PROMPTING" ||
+    phase === "ENROLLING" ||
+    phase === "SAVING_FINGERPRINT";
+
   const msg =
     phase === "ENROLLING"
-      ? "Creating your Trust ID and binding this Master Deviceù"
+      ? "Creating your Trust ID and binding this Master DeviceÖ"
       : phase === "SAVING_FINGERPRINT"
-        ? "Scan your fingerprint to save an alternative unlockù"
-        : "Looking at your face and matching the Trust ID cloud registryù";
+        ? "Scan your fingerprint to save an alternative unlockÖ"
+        : "Looking at your face and matching the Trust ID cloud registryÖ";
 
-  return <AmbientSplash brand={brand} msg={msg} />;
+  return <AmbientSplash brand={brand} msg={msg} spinning={spinning} />;
 }

@@ -72,12 +72,16 @@ export type UseAmbientTrustIdAuthResult = {
   lastResult: AmbientSignInResult | null;
   previousTrustId: string | null;
   approvalPollToken: string | null;
+  /** True while user-initiated fingerprint unlock is running */
+  fingerprintBusy: boolean;
   retry: () => void;
   confirmSwitchAccount: () => void;
   /** User accepted "create new Trust ID" after NOT_FOUND lookup */
   confirmCreateAccount: () => void;
   /** User declined create prompt */
   declineCreateAccount: () => void;
+  /** Existing account: unlock with fingerprint / device PIN */
+  useFingerprintLogin: () => void;
   /** User acknowledged Trust ID is saved on this Master Device */
   continueAfterDeviceSaved: () => void;
   /** User accepted fingerprint backup prompt */
@@ -121,6 +125,7 @@ export function useAmbientTrustIdAuth(
   const [lastResult, setLastResult] = useState<AmbientSignInResult | null>(null);
   const [previousTrustId, setPreviousTrustId] = useState<string | null>(null);
   const [approvalPollToken, setApprovalPollToken] = useState<string | null>(null);
+  const [fingerprintBusy, setFingerprintBusy] = useState(false);
   const [nonce, setNonce] = useState(0);
   const startedRef = useRef(false);
   const pollAbortRef = useRef(false);
@@ -190,51 +195,71 @@ export function useAmbientTrustIdAuth(
     unlockWithDeviceCredential,
   ]);
 
-  /** Face failed — try cloud fingerprint template, then local OS unlock. */
-  const tryFingerprintLoginFallback = useCallback(async (): Promise<boolean> => {
-    if (captureFingerprint) {
+  /**
+   * User tapped Fingerprint — cloud FP then local OS unlock.
+   * Stays on OFFER_CREATE if unlock fails (never re-enters spinner).
+   */
+  const useFingerprintLogin = useCallback(() => {
+    void (async () => {
+      setFingerprintBusy(true);
+      setError(null);
       try {
-        setPhase("PROMPTING");
-        const fingerprint = await captureFingerprint();
-        if (fingerprint?.vector || fingerprint?.embedding) {
-          const sdk = createTrustIdSdk({ baseUrl: apiBaseUrl });
-          const result = await sdk.ambientSignIn({
-            face: pendingPayloadRef.current?.face,
-            fingerprint,
-            deviceFingerprint:
-              pendingPayloadRef.current?.deviceFingerprint ||
-              (await getDeviceFingerprint?.()) ||
-              undefined,
-            installId: pendingInstallRef.current,
-            allowAutoEnroll: false,
-          });
-          if (result.matched) {
-            setLastResult(result);
-            if (result.needsMasterApproval && result.approvalPollToken && result.trustId) {
-              setApprovalPollToken(result.approvalPollToken);
-              setPhase("NEEDS_APPROVAL");
-              onNeedsApproval?.({
-                trustId: result.trustId,
-                pollToken: result.approvalPollToken,
-                requestId: result.approvalRequestId,
+        if (captureFingerprint) {
+          try {
+            const fingerprint = await captureFingerprint();
+            if (fingerprint?.vector || fingerprint?.embedding) {
+              const sdk = createTrustIdSdk({ baseUrl: apiBaseUrl });
+              const result = await sdk.ambientSignIn({
+                face: pendingPayloadRef.current?.face,
+                fingerprint,
+                deviceFingerprint:
+                  pendingPayloadRef.current?.deviceFingerprint ||
+                  (await getDeviceFingerprint?.()) ||
+                  undefined,
+                installId: pendingInstallRef.current,
+                allowAutoEnroll: false,
               });
-              return true;
+              if (result.matched) {
+                setLastResult(result);
+                if (
+                  result.needsMasterApproval &&
+                  result.approvalPollToken &&
+                  result.trustId
+                ) {
+                  setApprovalPollToken(result.approvalPollToken);
+                  setPhase("NEEDS_APPROVAL");
+                  onNeedsApproval?.({
+                    trustId: result.trustId,
+                    pollToken: result.approvalPollToken,
+                    requestId: result.approvalRequestId,
+                  });
+                  return;
+                }
+                if (result.identity || result.sessionToken) {
+                  await finishAuthenticated(
+                    result.identity as TrustIdIdentity | undefined,
+                    result.sessionToken ?? result.token,
+                  );
+                  return;
+                }
+              }
             }
-            if (result.identity || result.sessionToken) {
-              await finishAuthenticated(
-                result.identity as TrustIdIdentity | undefined,
-                result.sessionToken ?? result.token,
-              );
-              return true;
-            }
+          } catch {
+            /* fall through */
           }
         }
-      } catch {
-        /* fall through to local unlock */
-      }
-    }
 
-    return tryBoundInstallUnlock();
+        const unlocked = await tryBoundInstallUnlock();
+        if (unlocked) return;
+
+        setError(
+          "Fingerprint did not unlock this account. Retry face, or create a new Trust ID.",
+        );
+        setPhase("OFFER_CREATE");
+      } finally {
+        setFingerprintBusy(false);
+      }
+    })();
   }, [
     apiBaseUrl,
     captureFingerprint,
@@ -303,12 +328,11 @@ export function useAmbientTrustIdAuth(
     }
 
     if (!payload?.face) {
-      const unlocked = await tryFingerprintLoginFallback();
-      if (unlocked) return;
+      // Stop searching immediately — let the user retry face or use fingerprint.
       setError(
-        "No face detected. Look straight at the camera so Trust ID can verify you.",
+        "No face detected. Retry the camera, use fingerprint if you already have a Trust ID, or create one.",
       );
-      setPhase("ERROR");
+      setPhase("OFFER_CREATE");
       return;
     }
 
@@ -323,10 +347,7 @@ export function useAmbientTrustIdAuth(
     });
 
     if (lookup.status === "NOT_FOUND") {
-      // Face not in registry → fingerprint login, then create offer.
-      const unlocked = await tryFingerprintLoginFallback();
-      if (unlocked) return;
-
+      // Stop spinner immediately — dual UI: Retry/Fingerprint | Create Trust ID.
       if (allowAutoEnroll) {
         const result = await sdk.ambientAuthenticate({
           captureFace,
@@ -340,6 +361,7 @@ export function useAmbientTrustIdAuth(
         await applyMatchedResult(result);
         return;
       }
+      setError(null);
       setPhase("OFFER_CREATE");
       return;
     }
@@ -391,7 +413,6 @@ export function useAmbientTrustIdAuth(
     getDeviceFingerprint,
     getInstallId,
     getLastTrustId,
-    tryFingerprintLoginFallback,
   ]);
 
   const confirmCreateAccount = useCallback(() => {
@@ -694,10 +715,12 @@ export function useAmbientTrustIdAuth(
     lastResult,
     previousTrustId,
     approvalPollToken,
+    fingerprintBusy,
     retry,
     confirmSwitchAccount,
     confirmCreateAccount,
     declineCreateAccount,
+    useFingerprintLogin,
     continueAfterDeviceSaved,
     confirmFingerprintBackup,
     skipFingerprintBackup,
