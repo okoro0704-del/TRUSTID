@@ -59,8 +59,18 @@ export type UseAmbientTrustIdAuthOptions = CaptureHandlers & {
     deviceId?: string | null;
   }) => Promise<void>;
   /**
-   * Prompt native fingerprint / device PIN. Return true when OS auth succeeds.
-   * Used when face fails on an already-bound install.
+   * Cryptographic unlock for a bound install (WebAuthn / hardware passkey).
+   * REQUIRED for face-fail fallback — local boolean auth is never trusted.
+   */
+  cryptographicInstallUnlock?: (installId: string) => Promise<{
+    ok: boolean;
+    identity?: TrustIdIdentity;
+    sessionToken?: string | null;
+    error?: string;
+  }>;
+  /**
+   * @deprecated Prefer cryptographicInstallUnlock. Local OS prompts alone
+   * are not accepted by the API.
    */
   unlockWithDeviceCredential?: (reason: string) => Promise<boolean>;
 };
@@ -116,6 +126,7 @@ export function useAmbientTrustIdAuth(
     storeSessionToken,
     getPushToken,
     persistMasterDeviceState,
+    cryptographicInstallUnlock,
     unlockWithDeviceCredential,
   } = options;
 
@@ -201,31 +212,33 @@ export function useAmbientTrustIdAuth(
 
   const tryBoundInstallUnlock = useCallback(async (): Promise<boolean> => {
     const installId = pendingInstallRef.current;
-    if (!installId || !hasBoundInstall?.() || !unlockWithDeviceCredential) {
+    if (!installId || !hasBoundInstall?.()) {
       return false;
     }
-    const ok = await unlockWithDeviceCredential(
-      "Face match failed. Verify with Fingerprint or Device PIN",
-    );
-    if (!ok) return false;
-    const sdk = createTrustIdSdk({ baseUrl: apiBaseUrl });
-    const unlocked = await sdk.installUnlock({ installId, localAuthOk: true });
-    if (!unlocked.matched) return false;
-    setLastResult(unlocked);
-    await finishAuthenticated(
-      unlocked.identity as TrustIdIdentity | undefined,
-      unlocked.sessionToken ?? unlocked.token,
-    );
-    return true;
+
+    // Prefer hardware-signed WebAuthn unlock — never trust a client boolean.
+    if (cryptographicInstallUnlock) {
+      const result = await cryptographicInstallUnlock(installId);
+      if (!result.ok) return false;
+      await finishAuthenticated(
+        result.identity,
+        result.sessionToken ?? undefined,
+      );
+      return true;
+    }
+
+    // Legacy path removed from API — keep a hard fail if not wired.
+    void unlockWithDeviceCredential;
+    return false;
   }, [
-    apiBaseUrl,
+    cryptographicInstallUnlock,
     finishAuthenticated,
     hasBoundInstall,
     unlockWithDeviceCredential,
   ]);
 
   /**
-   * User tapped Fingerprint — cloud FP then local OS unlock.
+   * User tapped Fingerprint / Passkey — cryptographic unlock first.
    * Stays on OFFER_CREATE if unlock fails (never re-enters spinner).
    */
   const useFingerprintLogin = useCallback(() => {
@@ -233,6 +246,9 @@ export function useAmbientTrustIdAuth(
       setFingerprintBusy(true);
       setError(null);
       try {
+        const unlocked = await tryBoundInstallUnlock();
+        if (unlocked) return;
+
         if (captureFingerprint) {
           try {
             const fingerprint = await captureFingerprint();
@@ -278,11 +294,8 @@ export function useAmbientTrustIdAuth(
           }
         }
 
-        const unlocked = await tryBoundInstallUnlock();
-        if (unlocked) return;
-
         setError(
-          "Fingerprint did not unlock this account. Retry face, or create a new Trust ID.",
+          "Hardware passkey unlock failed. Register a passkey in Account, retry face, or create a new Trust ID.",
         );
         setPhaseSafe("OFFER_CREATE");
       } finally {

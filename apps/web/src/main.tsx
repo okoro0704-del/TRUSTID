@@ -13,6 +13,10 @@ import { getRememberedAccount, rememberFromIdentity } from "./lib/rememberedAcco
 import { injectCapacitorSecurityBridges } from "./lib/security/nativeBridges";
 import { promptLocalDeviceCredential } from "./lib/localDeviceAuth";
 import {
+  unlockBoundInstallWithPasskey,
+  safeCaptureFingerprintBackup,
+} from "./lib/trustidBiometrics";
+import {
   storeSessionTokenSecure,
   storeMasterDeviceLocalState,
   peekCachedTrustId,
@@ -72,7 +76,19 @@ function AmbientShell({ children }: { children: React.ReactNode }) {
       }}
       allowAutoEnroll={false}
       hasBoundInstall={() => Boolean(getLocalOccupancy()?.trustId)}
+      cryptographicInstallUnlock={async (installId) => {
+        const result = await unlockBoundInstallWithPasskey(installId);
+        return {
+          ok: result.success,
+          identity: result.identity as
+            | import("@trustid/ui-react").TrustIdIdentity
+            | undefined,
+          sessionToken: result.sessionToken ?? null,
+          error: result.error,
+        };
+      }}
       unlockWithDeviceCredential={async (reason) => {
+        // Soft local UV only — API never accepts this alone.
         const result = await promptLocalDeviceCredential(reason);
         return result.ok;
       }}
@@ -85,12 +101,12 @@ function AmbientShell({ children }: { children: React.ReactNode }) {
         if (info.trustId) markLocalOccupancy(info.trustId);
       }}
       registerFingerprintBackup={async () => {
-        const fp = await captureFingerprintBackup(
+        const fp = await safeCaptureFingerprintBackup(
           "Scan your fingerprint to save a Trust ID backup",
         );
-        if (!fp) return false;
+        if (!fp.success || !fp.payload) return false;
         const sdk = createTrustIdSdk({ baseUrl: apiBaseUrl });
-        await sdk.enrollBiometric(fp);
+        await sdk.enrollBiometric(fp.payload);
         return true;
       }}
       onAuthenticated={(identity) => {

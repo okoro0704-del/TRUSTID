@@ -3,7 +3,11 @@ import { Link, useNavigate } from "react-router-dom";
 import { createTrustIdSdk } from "@trustid/sdk";
 import { api } from "../../lib/api";
 import { useAuth } from "../../lib/auth";
-import { captureFingerprintBackup } from "../../lib/ambientCapture";
+import {
+  getBiometricAvailability,
+  registerBiometricPasskey,
+  safeCaptureFingerprintBackup,
+} from "../../lib/trustidBiometrics";
 import { clearRememberedAccount } from "../../lib/rememberedAccount";
 import { useTopbarIdentity } from "../../lib/useTopbarIdentity";
 
@@ -34,7 +38,9 @@ export function AccountPage() {
   const [error, setError] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
   const [fpBusy, setFpBusy] = useState(false);
+  const [passkeyBusy, setPasskeyBusy] = useState(false);
   const [fpMessage, setFpMessage] = useState<string | null>(null);
+  const [passkeyMessage, setPasskeyMessage] = useState<string | null>(null);
 
   useEffect(() => {
     api<Prefs>("/account/preferences")
@@ -83,22 +89,58 @@ export function AccountPage() {
     setFpMessage(null);
     setError(null);
     try {
-      const fp = await captureFingerprintBackup(
+      const avail = await getBiometricAvailability();
+      if (!avail.available) {
+        setFpMessage(
+          avail.reason ??
+            "Biometrics unavailable. Enable fingerprint/Face ID in device settings.",
+        );
+        return;
+      }
+      const fp = await safeCaptureFingerprintBackup(
         "Scan your fingerprint to save a Trust ID backup",
       );
-      if (!fp) {
-        setFpMessage("Fingerprint capture cancelled or unavailable on this device.");
+      if (!fp.success || !fp.payload) {
+        setFpMessage(fp.error ?? "Fingerprint capture cancelled or unavailable.");
         return;
       }
       const sdk = createTrustIdSdk({
         baseUrl: import.meta.env.VITE_API_URL ?? "/api",
       });
-      await sdk.enrollBiometric(fp);
+      await sdk.enrollBiometric(fp.payload);
       setFpMessage("Fingerprint backup saved to your Trust ID cloud registry.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Fingerprint registration failed");
+      setError(
+        err instanceof Error ? err.message : "Fingerprint registration failed",
+      );
     } finally {
       setFpBusy(false);
+    }
+  }
+
+  async function onRegisterPasskey() {
+    if (!identity?.trustId) {
+      setError("Sign in first, then register a hardware passkey.");
+      return;
+    }
+    setPasskeyBusy(true);
+    setPasskeyMessage(null);
+    setError(null);
+    try {
+      const result = await registerBiometricPasskey({
+        trustId: identity.trustId,
+      });
+      if (!result.success) {
+        setPasskeyMessage(result.error ?? "Passkey enrollment failed.");
+        return;
+      }
+      setPasskeyMessage(
+        "Hardware-backed TrustID passkey registered. Face-fail unlock will use this key.",
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Passkey registration failed");
+    } finally {
+      setPasskeyBusy(false);
     }
   }
 
@@ -238,11 +280,29 @@ export function AccountPage() {
       </section>
 
       <section className="section account-under-photo">
+        <h2>Hardware passkey</h2>
+        <p className="sub">
+          Register a Secure Enclave / platform authenticator passkey. Face-fail
+          unlock requires this cryptographic key — local device flags are never
+          enough.
+        </p>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={passkeyBusy || !identity?.trustId}
+          onClick={() => void onRegisterPasskey()}
+        >
+          {passkeyBusy ? "Waiting for authenticator…" : "Setup hardware passkey"}
+        </button>
+        {passkeyMessage && <p className="notice">{passkeyMessage}</p>}
+      </section>
+
+      <section className="section account-under-photo">
         <h2>Biometric backup</h2>
         <p className="sub">
           Face is your portable Trust ID across web, PWA, and the Android app
-          (one face template per person). Fingerprint is an optional backup on
-          this device when the camera cannot match you.
+          (one face template per person). Fingerprint is an optional cloud backup
+          on this device when the camera cannot match you.
         </p>
         <button
           type="button"

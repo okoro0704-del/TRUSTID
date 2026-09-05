@@ -56,7 +56,7 @@ describe("register-trust-id + install-unlock", () => {
     expect(primary?.trustLevel).toBe("primary");
   });
 
-  it("unlocks bound install after local auth attestation", async () => {
+  it("rejects install-unlock without WebAuthn assertion", async () => {
     const installId = "44444444-4444-4444-8444-444444444444";
     const created = await app.inject({
       method: "POST",
@@ -72,18 +72,20 @@ describe("register-trust-id + install-unlock", () => {
       },
     });
     expect(created.statusCode).toBe(200);
-    const trustId = created.json().trustId as string;
 
-    const unlock = await app.inject({
+    const rejected = await app.inject({
       method: "POST",
       url: "/v1/auth/install-unlock",
       payload: { installId, localAuthOk: true },
     });
-    expect(unlock.statusCode).toBe(200);
-    const body = unlock.json();
-    expect(body.status).toBe("MATCH_FOUND");
-    expect(body.authenticatedVia).toBe("FINGERPRINT_FALLBACK");
-    expect(body.trustId).toBe(trustId);
-    expect(body.isMasterDevice).toBe(true);
+    expect(rejected.statusCode).toBeGreaterThanOrEqual(400);
+
+    const options = await app.inject({
+      method: "POST",
+      url: "/v1/auth/install-unlock/options",
+      payload: { installId },
+    });
+    expect(options.statusCode).toBe(403);
+    expect(options.json().error).toBe("passkey_required");
   });
 });

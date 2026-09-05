@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../../lib/api";
+import { useAuth } from "../../lib/auth";
+import {
+  getBiometricAvailability,
+  registerBiometricPasskey,
+} from "../../lib/trustidBiometrics";
 
 type EventRow = {
   id: string;
@@ -41,6 +46,7 @@ const HUB = [
 ];
 
 export function SecurityPage() {
+  const { identity } = useAuth();
   const [events, setEvents] = useState<EventRow[]>([]);
   const [logins, setLogins] = useState<LoginRow[]>([]);
   const [verification, setVerification] = useState<IdentityVerification | null>(
@@ -48,6 +54,9 @@ export function SecurityPage() {
   );
   const [filter, setFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [bioBusy, setBioBusy] = useState(false);
+  const [bioMessage, setBioMessage] = useState<string | null>(null);
+  const [bioError, setBioError] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -67,8 +76,56 @@ export function SecurityPage() {
       );
   }, [filter]);
 
+  async function handleBiometricToggle() {
+    setBioBusy(true);
+    setBioError(null);
+    setBioMessage(null);
+    try {
+      const avail = await getBiometricAvailability();
+      if (!avail.available) {
+        setBioError(
+          avail.reason ??
+            "Biometrics unavailable on this device. Enable Face ID / fingerprint in settings.",
+        );
+        return;
+      }
+      const result = await registerBiometricPasskey({
+        trustId: identity?.trustId,
+      });
+      if (!result.success) {
+        setBioError(result.error || "Biometric enrollment failed. Please try again.");
+        return;
+      }
+      setBioMessage("Hardware-backed TrustID passkey registered!");
+    } catch (err) {
+      setBioError(
+        err instanceof Error ? err.message : "Biometric enrollment failed",
+      );
+    } finally {
+      setBioBusy(false);
+    }
+  }
+
   return (
     <div className="dashboard">
+      <section className="section surface-block">
+        <h2>Hardware biometrics</h2>
+        <p className="sub">
+          Setup a Secure Enclave / platform passkey. Canceling the prompt shows
+          an inline error — the app will not quit.
+        </p>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={bioBusy || !identity?.trustId}
+          onClick={() => void handleBiometricToggle()}
+        >
+          {bioBusy ? "Waiting for authenticator…" : "Setup biometrics / passkey"}
+        </button>
+        {bioMessage && <p className="notice">{bioMessage}</p>}
+        {bioError && <p className="error">{bioError}</p>}
+      </section>
+
       <section className="section surface-block">
         <h2>Security hub</h2>
         <p className="sub">

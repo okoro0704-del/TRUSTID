@@ -329,11 +329,28 @@ export class TrustIdSdk {
   }
 
   /**
-   * Bound-install unlock after native fingerprint / device PIN succeeds.
+   * Bound-install unlock — requires a WebAuthn assertion signed by the
+   * hardware authenticator for the install's Trust ID. Never accepts localAuthOk.
    */
+  async installUnlockOptions(input: { installId: string }) {
+    return this.api<{
+      challenge: string;
+      timeout?: number;
+      rpId?: string;
+      allowCredentials?: Array<{ id: string; type?: string; transports?: string[] }>;
+      userVerification?: string;
+      trustId?: string;
+      challengeId?: string;
+      purpose?: string;
+    }>("/v1/auth/install-unlock/options", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
   async installUnlock(input: {
     installId: string;
-    localAuthOk?: boolean;
+    assertion: unknown;
   }): Promise<AmbientSignInResult & { authenticatedVia?: string; token?: string }> {
     const data = await this.api<{
       status?: string;
@@ -343,11 +360,12 @@ export class TrustIdSdk {
       sessionToken?: string;
       token?: string;
       isMasterDevice?: boolean;
+      message?: string;
     }>("/v1/auth/install-unlock", {
       method: "POST",
       body: JSON.stringify({
         installId: input.installId,
-        localAuthOk: input.localAuthOk ?? true,
+        assertion: input.assertion,
       }),
     });
     return {
@@ -356,7 +374,7 @@ export class TrustIdSdk {
       identity: data.identity,
       sessionToken: data.sessionToken ?? data.token,
       isMasterDevice: data.isMasterDevice ?? true,
-      authenticatedVia: data.authenticatedVia,
+      authenticatedVia: data.authenticatedVia ?? "webauthn_passkey",
       token: data.token ?? data.sessionToken,
     };
   }

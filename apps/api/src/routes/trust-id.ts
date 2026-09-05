@@ -17,6 +17,7 @@ import {
   registerTrustIdRequestSchema,
   registerPushTokenSchema,
   installUnlockSchema,
+  installUnlockOptionsSchema,
   bindMasterDeviceRequestSchema,
 } from "../modules/trust-id/schemas.js";
 import {
@@ -31,13 +32,15 @@ import {
 import {
   bindMasterDeviceForUser,
   registerTrustIdWithMasterDevice,
-  unlockSessionForBoundInstall,
 } from "../modules/trust-id/register.js";
 import { handleFastVectorMatch } from "../modules/trust-id/fast-vector-match.js";
 import { registerDevicePushToken } from "../modules/notifications/push.js";
 import { mintElfComCapabilityJwt } from "../modules/elfcom/capability.js";
+import { loginOptions, verifyLogin } from "../modules/authentication/webauthn.js";
+import { getInstallOccupancy } from "../modules/authentication/device-install.js";
 import { prisma } from "../db/client.js";
-import { BIOMETRIC_MODALITIES } from "@trustid/shared";
+import { BIOMETRIC_MODALITIES, DEVICE_STATUS } from "@trustid/shared";
+import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
 
 function httpError(err: unknown, reply: import("fastify").FastifyReply) {
   const e = err as { statusCode?: number; message?: string; code?: string };
@@ -212,31 +215,96 @@ export async function trustIdRoutes(app: FastifyInstance) {
   });
 
   /**
-   * After local fingerprint / device PIN succeeds on a bound install,
-   * re-issue the cloud session without requiring a face rematch.
+   * WebAuthn challenge for bound-install unlock.
+   * Resolves the install's Trust ID and returns allowCredentials for that user only.
+   */
+  app.post("/v1/auth/install-unlock/options", async (req, reply) => {
+    const body = installUnlockOptionsSchema.parse(req.body ?? {});
+    try {
+      const occ = await getInstallOccupancy(body.installId);
+      if (!occ.occupied || !occ.userId || !occ.trustId) {
+        return reply.code(404).send({
+          error: "install_unbound",
+          message: "This device is not bound to a Trust ID",
+        });
+      }
+
+      const credCount = await prisma.credential.count({
+        where: {
+          userId: occ.userId,
+          status: { not: DEVICE_STATUS.REVOKED },
+        },
+      });
+      if (credCount === 0) {
+        return reply.code(403).send({
+          error: "passkey_required",
+          message:
+            "No hardware passkey is registered for this Trust ID. Create one in Account → Passkeys, or sign in with face.",
+          trustId: occ.trustId,
+        });
+      }
+
+      const options = await loginOptions({ trustId: occ.trustId });
+      return {
+        ...options,
+        trustId: occ.trustId,
+        userVerification: "required",
+      };
+    } catch (err) {
+      return httpError(err, reply);
+    }
+  });
+
+  /**
+   * Cryptographic install unlock — WebAuthn assertion required.
+   * Client-side biometric booleans are never trusted.
    */
   app.post("/v1/auth/install-unlock", async (req, reply) => {
     const body = installUnlockSchema.parse(req.body ?? {});
-    if (!body.localAuthOk) {
-      return reply.code(401).send({
-        error: "local_auth_required",
-        message: "Device biometric or PIN verification required",
-      });
-    }
     try {
-      const result = await unlockSessionForBoundInstall({
-        installId: body.installId,
+      const occ = await getInstallOccupancy(body.installId);
+      if (!occ.occupied || !occ.userId || !occ.trustId) {
+        return reply.code(404).send({
+          error: "install_unbound",
+          message: "This device is not bound to a Trust ID",
+        });
+      }
+
+      // Cryptographically verify the hardware-signed challenge (creates session).
+      const verified = await verifyLogin({
+        response: body.assertion as AuthenticationResponseJSON,
         ...clientMeta(req),
       });
-      setSessionCookie(reply, result.sessionToken);
+
+      if (verified.trustId !== occ.trustId) {
+        return reply.code(403).send({
+          error: "passkey_user_mismatch",
+          message:
+            "This passkey belongs to a different Trust ID than the one bound to this device.",
+        });
+      }
+
+      if (!verified.sessionToken) {
+        return reply.code(500).send({
+          error: "session_missing",
+          message: "Passkey verified but no session was issued",
+        });
+      }
+
+      setSessionCookie(reply, verified.sessionToken);
+      const { getDashboardIdentity } = await import(
+        "../modules/identity/service.js"
+      );
+      const dash = await getDashboardIdentity(occ.userId, verified.sessionId);
+
       return {
         status: "MATCH_FOUND" as const,
-        authenticatedVia: result.authenticatedVia,
-        trustId: result.trustId,
-        identity: result.identity,
-        isMasterDevice: result.isMasterDevice,
-        ...sessionBody(result.sessionToken),
-        token: config.exposeSessionTokenInBody ? result.token : undefined,
+        authenticatedVia: "webauthn_passkey",
+        trustId: verified.trustId,
+        identity: dash,
+        isMasterDevice: true,
+        ...sessionBody(verified.sessionToken),
+        token: config.exposeSessionTokenInBody ? verified.sessionToken : undefined,
       };
     } catch (err) {
       return httpError(err, reply);

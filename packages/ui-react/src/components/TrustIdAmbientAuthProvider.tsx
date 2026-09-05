@@ -37,7 +37,7 @@ function AmbientSplash({
 }
 
 /**
- * Global identity-first auth shell ù lookup before any enroll write.
+ * Global identity-first auth shell ‚Äî lookup before any enroll write.
  */
 export function TrustIdAmbientAuthProvider({
   children,
@@ -70,7 +70,7 @@ export function TrustIdAmbientAuthProvider({
       true,
     );
     return (
-      <AmbientSplash brand={brand} msg="No matching face ó search stopped.">
+      <AmbientSplash brand={brand} msg="No matching face ‚Äî search stopped.">
         {error ? (
           <p className="tid-ambient-splash-msg" style={{ marginTop: "0.65rem", color: "#fbbf24" }}>
             {error}
@@ -98,7 +98,7 @@ export function TrustIdAmbientAuthProvider({
               onClick={useFingerprintLogin}
               disabled={fingerprintBusy}
             >
-              {fingerprintBusy ? "Checking fingerprintù" : "Use fingerprint"}
+              {fingerprintBusy ? "Verifying passkey‚Ä¶" : "Use passkey"}
             </button>
           </div>
           <div className="tid-ambient-choice-card tid-ambient-choice-card-primary">
@@ -210,7 +210,7 @@ export function TrustIdAmbientAuthProvider({
           <p className="tid-ambient-splash-msg">
             Identity matched
             {lastResult?.trustId ? ` (${lastResult.trustId})` : ""}. Waiting for
-            your Master Device to allow this terminalù
+            your Master Device to allow this terminal‚Ä¶
           </p>
           <p className="tid-ambient-splash-msg">
             Approve the request on your primary phone, then tap Continue.
@@ -244,7 +244,7 @@ export function TrustIdAmbientAuthProvider({
               onClick={useFingerprintLogin}
               disabled={fingerprintBusy}
             >
-              {fingerprintBusy ? "Checking fingerprintù" : "Use fingerprint"}
+              {fingerprintBusy ? "Verifying passkey‚Ä¶" : "Use passkey"}
             </button>
           </div>
           <div className="tid-ambient-choice-card tid-ambient-choice-card-primary">
@@ -270,10 +270,10 @@ export function TrustIdAmbientAuthProvider({
 
   const msg =
     phase === "ENROLLING"
-      ? "Creating your Trust ID and binding this Master Deviceù"
+      ? "Creating your Trust ID and binding this Master Device‚Ä¶"
       : phase === "SAVING_FINGERPRINT"
-        ? "Scan your fingerprint to save an alternative unlockù"
-        : "Looking at your face and matching the Trust ID cloud registryù";
+        ? "Scan your fingerprint to save an alternative unlock‚Ä¶"
+        : "Looking at your face and matching the Trust ID cloud registry‚Ä¶";
 
   return <AmbientSplash brand={brand} msg={msg} spinning={spinning} />;
 }

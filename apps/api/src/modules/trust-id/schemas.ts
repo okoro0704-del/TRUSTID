@@ -127,8 +127,15 @@ export const bindMasterDeviceRequestSchema = z.object({
 
 export const installUnlockSchema = z.object({
   installId: z.string().min(1).max(80),
-  /** Client attested local biometric / device-credential success */
-  localAuthOk: z.boolean().optional().default(true),
+  /**
+   * WebAuthn assertion — required. Client-side `localAuthOk` is rejected.
+   * Hardware Secure Enclave / platform authenticator must sign the server challenge.
+   */
+  assertion: z.any(),
+});
+
+export const installUnlockOptionsSchema = z.object({
+  installId: z.string().min(1).max(80),
 });
 
 export type MultiModalPayload = z.infer<typeof multiModalPayloadSchema>;
