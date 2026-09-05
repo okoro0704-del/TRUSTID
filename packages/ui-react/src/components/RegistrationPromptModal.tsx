@@ -38,7 +38,7 @@ export function RegistrationPromptModal({
         </p>
         <div className="tid-actions" style={{ flexDirection: "column", gap: "0.55rem" }}>
           <button type="button" className="tid-btn tid-btn-primary" onClick={onAccept}>
-            Yes, Create Trust ID
+            Create Trust ID
           </button>
           <button type="button" className="tid-btn tid-btn-ghost" onClick={onDecline}>
             Cancel

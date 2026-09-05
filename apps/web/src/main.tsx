@@ -65,6 +65,11 @@ function AmbientShell({ children }: { children: React.ReactNode }) {
         null
       }
       capturePayload={() => capture.payload()}
+      captureFingerprint={async () => {
+        return captureFingerprintBackup(
+          "Scan your fingerprint to unlock Trust ID",
+        );
+      }}
       allowAutoEnroll={false}
       hasBoundInstall={() => Boolean(getLocalOccupancy()?.trustId)}
       unlockWithDeviceCredential={async (reason) => {
@@ -77,6 +82,7 @@ function AmbientShell({ children }: { children: React.ReactNode }) {
       getPushToken={getNativePushToken}
       persistMasterDeviceState={async (info) => {
         await storeMasterDeviceLocalState(info);
+        if (info.trustId) markLocalOccupancy(info.trustId);
       }}
       registerFingerprintBackup={async () => {
         const fp = await captureFingerprintBackup(

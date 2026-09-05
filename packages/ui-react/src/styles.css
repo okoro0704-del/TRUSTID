@@ -50,7 +50,8 @@
 .tid-modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  /* Above ambient splash (1300) so Create / fingerprint prompts stay tappable */
+  z-index: 1400;
   background: rgba(0, 0, 0, 0.62);
   display: grid;
   place-items: center;
@@ -210,7 +211,7 @@
 }
 
 .tid-ambient-splash-panel {
-  width: min(320px, 100%);
+  width: min(360px, 100%);
   text-align: center;
   padding: 1rem;
 }
@@ -220,6 +221,32 @@
   opacity: 0.72;
   font-size: 0.9rem;
   line-height: 1.4;
+}
+
+.tid-ambient-splash-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  margin-top: 1.25rem;
+}
+
+.tid-ambient-splash-actions .tid-btn {
+  width: 100%;
+  justify-content: center;
+}
+
+.tid-ambient-saved-mark {
+  width: 3.25rem;
+  height: 3.25rem;
+  margin: 0 auto 0.85rem;
+  border-radius: 50%;
+  border: 2px solid rgba(45, 212, 191, 0.55);
+  background: rgba(45, 212, 191, 0.12);
+  display: grid;
+  place-items: center;
+  color: #2dd4bf;
+  font-size: 1.35rem;
+  font-weight: 700;
 }
 
 @keyframes tid-silent-spin {

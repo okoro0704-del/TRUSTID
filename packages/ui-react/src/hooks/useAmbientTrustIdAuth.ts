@@ -7,7 +7,6 @@ import {
 } from "@trustid/sdk";
 import { resolveGuestRealtimeUrl } from "../api/client.js";
 import { useTrustIdAuth as useTrustIdSession } from "../context/TrustIdAuthProvider.js";
-import { clearStaleAuthCaches } from "../lib/silentAuth.js";
 import type { TrustIdIdentity } from "../types.js";
 
 export type AmbientAuthPhase =
@@ -15,6 +14,9 @@ export type AmbientAuthPhase =
   | "PROMPTING"
   | "OFFER_CREATE"
   | "ENROLLING"
+  | "DEVICE_SAVED"
+  | "OFFER_FINGERPRINT"
+  | "SAVING_FINGERPRINT"
   | "SWITCH_ACCOUNT"
   | "NEEDS_APPROVAL"
   | "AUTHENTICATED"
@@ -37,6 +39,10 @@ export type UseAmbientTrustIdAuthOptions = CaptureHandlers & {
     pollToken: string;
     requestId?: string;
   }) => void;
+  /**
+   * Capture + enroll fingerprint backup after create.
+   * Return true when saved to the cloud registry.
+   */
   registerFingerprintBackup?: () => Promise<void | boolean>;
   /** True when this install already owns a Trust ID locally / occupancy cache */
   hasBoundInstall?: () => boolean;
@@ -72,11 +78,19 @@ export type UseAmbientTrustIdAuthResult = {
   confirmCreateAccount: () => void;
   /** User declined create prompt */
   declineCreateAccount: () => void;
+  /** User acknowledged Trust ID is saved on this Master Device */
+  continueAfterDeviceSaved: () => void;
+  /** User accepted fingerprint backup prompt */
+  confirmFingerprintBackup: () => void;
+  /** User skipped fingerprint backup */
+  skipFingerprintBackup: () => void;
   continueAfterApproval: () => void;
 };
 
 /**
  * Identity-first ambient auth — lookup on boot, enroll only after explicit consent.
+ * Create → confirm on-device Master save → fingerprint backup → authenticated.
+ * Login: face miss → cloud fingerprint → local device unlock → create offer.
  */
 export function useAmbientTrustIdAuth(
   options: UseAmbientTrustIdAuthOptions = {},
@@ -113,6 +127,7 @@ export function useAmbientTrustIdAuth(
   const pendingResultRef = useRef<AmbientSignInResult | null>(null);
   const pendingPayloadRef = useRef<MultiModalBiometricPayload | null>(null);
   const pendingInstallRef = useRef<string | undefined>(undefined);
+  const pendingEnrollRef = useRef<AmbientSignInResult | null>(null);
 
   const finishAuthenticated = useCallback(
     async (id?: TrustIdIdentity | null, sessionToken?: string | null) => {
@@ -132,6 +147,23 @@ export function useAmbientTrustIdAuth(
     },
     [onAuthenticated, refresh, setIdentity, storeSessionToken],
   );
+
+  const completePendingEnroll = useCallback(async () => {
+    const pending = pendingEnrollRef.current;
+    pendingEnrollRef.current = null;
+    if (!pending) {
+      await finishAuthenticated();
+      return;
+    }
+    if (pending.identity) {
+      await finishAuthenticated(
+        pending.identity as TrustIdIdentity,
+        pending.sessionToken ?? pending.token,
+      );
+      return;
+    }
+    await finishAuthenticated(undefined, pending.sessionToken ?? pending.token);
+  }, [finishAuthenticated]);
 
   const tryBoundInstallUnlock = useCallback(async (): Promise<boolean> => {
     const installId = pendingInstallRef.current;
@@ -158,6 +190,60 @@ export function useAmbientTrustIdAuth(
     unlockWithDeviceCredential,
   ]);
 
+  /** Face failed — try cloud fingerprint template, then local OS unlock. */
+  const tryFingerprintLoginFallback = useCallback(async (): Promise<boolean> => {
+    if (captureFingerprint) {
+      try {
+        setPhase("PROMPTING");
+        const fingerprint = await captureFingerprint();
+        if (fingerprint?.vector || fingerprint?.embedding) {
+          const sdk = createTrustIdSdk({ baseUrl: apiBaseUrl });
+          const result = await sdk.ambientSignIn({
+            face: pendingPayloadRef.current?.face,
+            fingerprint,
+            deviceFingerprint:
+              pendingPayloadRef.current?.deviceFingerprint ||
+              (await getDeviceFingerprint?.()) ||
+              undefined,
+            installId: pendingInstallRef.current,
+            allowAutoEnroll: false,
+          });
+          if (result.matched) {
+            setLastResult(result);
+            if (result.needsMasterApproval && result.approvalPollToken && result.trustId) {
+              setApprovalPollToken(result.approvalPollToken);
+              setPhase("NEEDS_APPROVAL");
+              onNeedsApproval?.({
+                trustId: result.trustId,
+                pollToken: result.approvalPollToken,
+                requestId: result.approvalRequestId,
+              });
+              return true;
+            }
+            if (result.identity || result.sessionToken) {
+              await finishAuthenticated(
+                result.identity as TrustIdIdentity | undefined,
+                result.sessionToken ?? result.token,
+              );
+              return true;
+            }
+          }
+        }
+      } catch {
+        /* fall through to local unlock */
+      }
+    }
+
+    return tryBoundInstallUnlock();
+  }, [
+    apiBaseUrl,
+    captureFingerprint,
+    finishAuthenticated,
+    getDeviceFingerprint,
+    onNeedsApproval,
+    tryBoundInstallUnlock,
+  ]);
+
   const applyMatchedResult = useCallback(
     async (result: AmbientSignInResult) => {
       if (result.needsMasterApproval && result.approvalPollToken && result.trustId) {
@@ -171,16 +257,14 @@ export function useAmbientTrustIdAuth(
         return;
       }
 
-      if (result.enrolled) setPhase("ENROLLING");
+      // Fresh create: confirm on-device Master save, then fingerprint backup.
+      if (result.enrolled && result.matched) {
+        pendingEnrollRef.current = result;
+        setPhase("DEVICE_SAVED");
+        return;
+      }
 
       if (result.matched && (result.identity || result.sessionToken)) {
-        if (result.enrolled && registerFingerprintBackup) {
-          try {
-            await registerFingerprintBackup();
-          } catch {
-            /* optional */
-          }
-        }
         if (result.identity) {
           await finishAuthenticated(
             result.identity as TrustIdIdentity,
@@ -195,7 +279,7 @@ export function useAmbientTrustIdAuth(
       setError(result.error ?? "Biometric recognition failed");
       setPhase("ERROR");
     },
-    [finishAuthenticated, onNeedsApproval, registerFingerprintBackup],
+    [finishAuthenticated, onNeedsApproval],
   );
 
   const runAmbient = useCallback(async () => {
@@ -205,7 +289,7 @@ export function useAmbientTrustIdAuth(
     setPreviousTrustId(null);
     pendingResultRef.current = null;
     pendingPayloadRef.current = null;
-    // Do not clear remembered account on every boot probe — only on logout.
+    pendingEnrollRef.current = null;
 
     const sdk = createTrustIdSdk({ baseUrl: apiBaseUrl });
     const installId = getInstallId ? await getInstallId() : undefined;
@@ -219,7 +303,7 @@ export function useAmbientTrustIdAuth(
     }
 
     if (!payload?.face) {
-      const unlocked = await tryBoundInstallUnlock();
+      const unlocked = await tryFingerprintLoginFallback();
       if (unlocked) return;
       setError(
         "No face detected. Look straight at the camera so Trust ID can verify you.",
@@ -230,7 +314,6 @@ export function useAmbientTrustIdAuth(
 
     pendingPayloadRef.current = payload;
 
-    // Lookup-only first — never writes a new Trust ID until user consents.
     const cachedTrustId = getLastTrustId?.() ?? undefined;
     const lookup = await sdk.faceLookup({
       face: payload.face,
@@ -240,8 +323,8 @@ export function useAmbientTrustIdAuth(
     });
 
     if (lookup.status === "NOT_FOUND") {
-      // Returning phone: face miss → fingerprint / PIN before create prompt.
-      const unlocked = await tryBoundInstallUnlock();
+      // Face not in registry → fingerprint login, then create offer.
+      const unlocked = await tryFingerprintLoginFallback();
       if (unlocked) return;
 
       if (allowAutoEnroll) {
@@ -275,7 +358,6 @@ export function useAmbientTrustIdAuth(
       return;
     }
 
-    // MATCH_FOUND
     const result: AmbientSignInResult = {
       matched: true,
       trustId: lookup.trustId ?? lookup.user?.trustId,
@@ -309,7 +391,7 @@ export function useAmbientTrustIdAuth(
     getDeviceFingerprint,
     getInstallId,
     getLastTrustId,
-    tryBoundInstallUnlock,
+    tryFingerprintLoginFallback,
   ]);
 
   const confirmCreateAccount = useCallback(() => {
@@ -345,7 +427,6 @@ export function useAmbientTrustIdAuth(
         });
       }
 
-      // Refresh master bind + push token when we have a session.
       if (result.trustId) {
         try {
           const fp =
@@ -385,6 +466,39 @@ export function useAmbientTrustIdAuth(
     setError("No Trust ID was created. Scan again when you are ready.");
     setPhase("ERROR");
   }, []);
+
+  const continueAfterDeviceSaved = useCallback(() => {
+    setPhase("OFFER_FINGERPRINT");
+  }, []);
+
+  const confirmFingerprintBackup = useCallback(() => {
+    if (!registerFingerprintBackup) {
+      void completePendingEnroll();
+      return;
+    }
+    setPhase("SAVING_FINGERPRINT");
+    setError(null);
+    void (async () => {
+      const ok = await registerFingerprintBackup();
+      if (ok === false) {
+        setError(
+          "Fingerprint was not saved. You can add it later in Account settings.",
+        );
+      }
+      await completePendingEnroll();
+    })().catch((e) => {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Fingerprint backup failed. You can add it later.",
+      );
+      void completePendingEnroll();
+    });
+  }, [completePendingEnroll, registerFingerprintBackup]);
+
+  const skipFingerprintBackup = useCallback(() => {
+    void completePendingEnroll();
+  }, [completePendingEnroll]);
 
   const confirmSwitchAccount = useCallback(() => {
     const pending = pendingResultRef.current;
@@ -569,6 +683,7 @@ export function useAmbientTrustIdAuth(
     startedRef.current = false;
     pendingResultRef.current = null;
     pendingPayloadRef.current = null;
+    pendingEnrollRef.current = null;
     setNonce((n) => n + 1);
   }, []);
 
@@ -583,6 +698,9 @@ export function useAmbientTrustIdAuth(
     confirmSwitchAccount,
     confirmCreateAccount,
     declineCreateAccount,
+    continueAfterDeviceSaved,
+    confirmFingerprintBackup,
+    skipFingerprintBackup,
     continueAfterApproval: () => {
       void continueAfterApproval();
     },

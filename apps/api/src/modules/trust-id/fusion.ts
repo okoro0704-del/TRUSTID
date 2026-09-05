@@ -332,8 +332,8 @@ export async function ambientSignInAndSession(input: {
   ip?: string;
   userAgent?: string;
 }) {
-  // Face is required to mint a new Trust ID. Returning installs may unlock via
-  // fingerprint alone after local OS biometric / device-credential fallback.
+  // Face is required to mint a new Trust ID. Login may use fingerprint alone
+  // (cloud template match) when face capture fails or is not recognized.
   const hasFace = Boolean(
     input.payload.face?.vector || input.payload.face?.embedding,
   );
@@ -341,28 +341,17 @@ export async function ambientSignInAndSession(input: {
     input.payload.fingerprint?.vector ||
       input.payload.fingerprint?.embedding,
   );
-  if (!hasFace) {
-    let returningInstall = false;
-    if (input.installId && hasFingerprint) {
-      try {
-        const occ = await getInstallOccupancy(input.installId);
-        returningInstall = occ.occupied;
-      } catch {
-        returningInstall = false;
-      }
-    }
-    if (!returningInstall) {
-      return {
-        matched: false as const,
-        fusion: {
-          matched: false,
-          accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
-          isMasterDevice: false,
-        },
-        error:
-          "No face detected. Look straight at the camera so Trust ID can verify you.",
-      };
-    }
+  if (!hasFace && !hasFingerprint) {
+    return {
+      matched: false as const,
+      fusion: {
+        matched: false,
+        accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
+        isMasterDevice: false,
+      },
+      error:
+        "No face detected. Look straight at the camera so Trust ID can verify you.",
+    };
   }
 
   let fusion = await matchMultiModalFusion({
