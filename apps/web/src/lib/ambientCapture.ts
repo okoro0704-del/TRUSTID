@@ -2,6 +2,7 @@ import { BIOMETRIC_FACE_CAPTURE_MIN_CONFIDENCE } from "@trustid/shared";
 import {
   captureNativeFingerprintTemplate,
   captureSilentFaceFromWebCamera,
+  captureSilentFaceEnrollmentFromWebCamera,
   createSilentCameraCapturer,
   detectDeviceBiometricContext,
   supportsSilentFaceCapture,
@@ -63,11 +64,27 @@ export async function captureFingerprintBackup(
  * Capture one face vector with the SAME JS model on web, PWA, and APK.
  * Prefer getUserMedia; fall back to native CameraX JPEG → same JS extractor.
  */
-async function captureUnifiedFaceOnce(): Promise<BiometricPayload | null> {
+/** Retry until a real face is in frame — never login on an empty camera spin. */
+async function captureUnifiedFace(
+  signal?: AbortSignal,
+): Promise<BiometricPayload | null> {
+  for (let i = 0; i < 4; i++) {
+    if (signal?.aborted) return null;
+    if (i > 0) await delay(250 + i * 150);
+    if (signal?.aborted) return null;
+    const face = await captureUnifiedFaceOnce(signal);
+    if (face) return face;
+  }
+  return null;
+}
+
+async function captureUnifiedFaceOnce(
+  signal?: AbortSignal,
+): Promise<BiometricPayload | null> {
   const min = BIOMETRIC_FACE_CAPTURE_MIN_CONFIDENCE;
 
   try {
-    const web = await captureSilentFaceFromWebCamera();
+    const web = await captureSilentFaceFromWebCamera(undefined, { signal });
     if (web?.errorCode) {
       // Surface model/PAD failures — do not invent a spatial vector
       console.warn("[TrustID] Face capture:", web.errorCode, web.errorMessage);
@@ -87,6 +104,8 @@ async function captureUnifiedFaceOnce(): Promise<BiometricPayload | null> {
     );
   }
 
+  if (signal?.aborted) return null;
+
   const nativeBridge = getNativeSilentFaceBridge();
   if (nativeBridge) {
     const capturer = createSilentCameraCapturer({ nativeBridge });
@@ -103,16 +122,6 @@ async function captureUnifiedFaceOnce(): Promise<BiometricPayload | null> {
   return null;
 }
 
-/** Retry until a real face is in frame — never login on an empty camera spin. */
-async function captureUnifiedFace(): Promise<BiometricPayload | null> {
-  for (let i = 0; i < 4; i++) {
-    if (i > 0) await delay(250 + i * 150);
-    const face = await captureUnifiedFaceOnce();
-    if (face) return face;
-  }
-  return null;
-}
-
 /**
  * Identity-first ambient capture — face is required.
  * Extraction: MediaPipe detect + ArcFace ONNX (512-D). Never spatial fallback.
@@ -120,16 +129,43 @@ async function captureUnifiedFace(): Promise<BiometricPayload | null> {
  */
 export async function captureWebAmbientSingleModal(
   _apiFetch?: ApiFetch,
+  options?: { signal?: AbortSignal },
 ): Promise<MultiModalBiometricPayload> {
-  const face = await captureUnifiedFace();
+  const face = await captureUnifiedFace(options?.signal);
   if (face) return { face };
   // Fail closed: empty / no-face frames must not proceed to enroll or match.
   return {};
 }
 
+/** Multi-frame enrollment capture for explicit Register Trust ID flow. */
+export async function captureWebAmbientEnrollment(
+  options?: { signal?: AbortSignal },
+): Promise<MultiModalBiometricPayload> {
+  if (options?.signal?.aborted) return {};
+  const enrolled = await captureSilentFaceEnrollmentFromWebCamera();
+  if (enrolled?.errorCode) {
+    console.warn(
+      "[TrustID] Enrollment capture:",
+      enrolled.errorCode,
+      enrolled.errorMessage,
+    );
+    return {};
+  }
+  if (
+    enrolled?.payload?.vector &&
+    enrolled.payload.vector.length === 512
+  ) {
+    return { face: enrolled.payload };
+  }
+  return {};
+}
+
 export function createWebAmbientCapture(apiFetch: ApiFetch) {
   return {
-    payload: () => captureWebAmbientSingleModal(apiFetch),
+    payload: (opts?: { signal?: AbortSignal }) =>
+      captureWebAmbientSingleModal(apiFetch, opts),
+    enrollmentPayload: (opts?: { signal?: AbortSignal }) =>
+      captureWebAmbientEnrollment(opts),
     captureFingerprintBackup,
     context: () =>
       detectDeviceBiometricContext(undefined, {

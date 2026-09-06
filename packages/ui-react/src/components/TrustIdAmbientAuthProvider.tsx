@@ -38,6 +38,7 @@ function AmbientSplash({
 
 /**
  * Global identity-first auth shell — lookup before any enroll write.
+ * NO_MATCH stops the scan; registration requires an explicit user action.
  */
 export function TrustIdAmbientAuthProvider({
   children,
@@ -64,24 +65,25 @@ export function TrustIdAmbientAuthProvider({
     return <>{children}</>;
   }
 
-  if (phase === "OFFER_CREATE") {
-    const canCreate = Boolean(
-      // Face payload is kept on NOT_FOUND; create needs it.
-      true,
-    );
+  if (phase === "NO_MATCH" || phase === "OFFER_CREATE") {
     return (
-      <AmbientSplash brand={brand} msg="No matching face — search stopped.">
+      <AmbientSplash brand={brand} msg="No Trust ID found">
+        <p className="tid-ambient-splash-msg" style={{ marginTop: "0.65rem" }}>
+          We couldn&apos;t find a Trust ID registered to this face.
+        </p>
         {error ? (
-          <p className="tid-ambient-splash-msg" style={{ marginTop: "0.65rem", color: "#fbbf24" }}>
+          <p
+            className="tid-ambient-splash-msg"
+            style={{ marginTop: "0.65rem", color: "#fbbf24" }}
+          >
             {error}
           </p>
-        ) : (
-          <p className="tid-ambient-splash-msg" style={{ marginTop: "0.65rem" }}>
-            Already have an account? Retry face or unlock with fingerprint.
-            New here? Create a Trust ID on this Master Device.
-          </p>
-        )}
-        <div className="tid-ambient-choice-row" role="group" aria-label="Choose next step">
+        ) : null}
+        <div
+          className="tid-ambient-choice-row"
+          role="group"
+          aria-label="Choose next step"
+        >
           <div className="tid-ambient-choice-card">
             <p className="tid-ambient-choice-label">Already have an account</p>
             <button
@@ -90,7 +92,7 @@ export function TrustIdAmbientAuthProvider({
               onClick={retry}
               disabled={fingerprintBusy}
             >
-              Retry face
+              Retry Face Scan
             </button>
             <button
               type="button"
@@ -98,18 +100,18 @@ export function TrustIdAmbientAuthProvider({
               onClick={useFingerprintLogin}
               disabled={fingerprintBusy}
             >
-              {fingerprintBusy ? "Verifying passkey…" : "Use passkey"}
+              {fingerprintBusy ? "Verifying…" : "Use Fingerprint"}
             </button>
           </div>
           <div className="tid-ambient-choice-card tid-ambient-choice-card-primary">
-            <p className="tid-ambient-choice-label">New user</p>
+            <p className="tid-ambient-choice-label">New here</p>
             <button
               type="button"
               className="tid-btn tid-btn-primary"
               onClick={confirmCreateAccount}
-              disabled={fingerprintBusy || !canCreate}
+              disabled={fingerprintBusy}
             >
-              Create Trust ID
+              Register Trust ID
             </button>
           </div>
         </div>
@@ -117,17 +119,18 @@ export function TrustIdAmbientAuthProvider({
     );
   }
 
-  if (phase === "DEVICE_SAVED") {
+  if (phase === "FACE_SAVED" || phase === "DEVICE_SAVED") {
     return (
-      <AmbientSplash
-        brand={brand}
-        msg={`Trust ID ${lastResult?.trustId ?? ""} is saved on this device.`}
-      >
+      <AmbientSplash brand={brand} msg="Face saved successfully">
         <div className="tid-ambient-saved-mark" aria-hidden="true">
-          ?
+          ✓
         </div>
         <p className="tid-ambient-splash-msg">
-          This phone is your Master Device. Approvals and sign-in start here.
+          Your Trust ID face identity has been saved to this device
+          {lastResult?.trustId ? ` (${lastResult.trustId})` : ""}.
+        </p>
+        <p className="tid-ambient-splash-msg" style={{ marginTop: "0.75rem" }}>
+          This phone is your Master Device. Next, add a fingerprint backup.
         </p>
         <div className="tid-ambient-splash-actions">
           <button
@@ -144,12 +147,10 @@ export function TrustIdAmbientAuthProvider({
 
   if (phase === "OFFER_FINGERPRINT") {
     return (
-      <AmbientSplash
-        brand={brand}
-        msg="Add a fingerprint as an alternative sign-in."
-      >
+      <AmbientSplash brand={brand} msg="Set up fingerprint backup">
         <p className="tid-ambient-splash-msg" style={{ marginTop: "0.75rem" }}>
-          If face match fails later, Trust ID can unlock with your fingerprint.
+          Your face is now registered. Add your fingerprint as a backup for this
+          device.
         </p>
         <div className="tid-ambient-splash-actions">
           <button
@@ -157,14 +158,48 @@ export function TrustIdAmbientAuthProvider({
             className="tid-btn tid-btn-primary"
             onClick={confirmFingerprintBackup}
           >
-            Add fingerprint
+            Register Fingerprint
           </button>
           <button
             type="button"
             className="tid-btn tid-btn-ghost"
             onClick={skipFingerprintBackup}
           >
-            Skip for now
+            Finish Later
+          </button>
+        </div>
+      </AmbientSplash>
+    );
+  }
+
+  if (phase === "FINGERPRINT_FAILED") {
+    return (
+      <AmbientSplash
+        brand={brand}
+        msg="Your face was saved, but fingerprint backup wasn't completed."
+      >
+        {error ? (
+          <p
+            className="tid-ambient-splash-msg"
+            style={{ marginTop: "0.65rem", color: "#fbbf24" }}
+          >
+            {error}
+          </p>
+        ) : null}
+        <div className="tid-ambient-splash-actions">
+          <button
+            type="button"
+            className="tid-btn tid-btn-primary"
+            onClick={confirmFingerprintBackup}
+          >
+            Try Fingerprint Again
+          </button>
+          <button
+            type="button"
+            className="tid-btn tid-btn-ghost"
+            onClick={skipFingerprintBackup}
+          >
+            Finish Later
           </button>
         </div>
       </AmbientSplash>
@@ -194,7 +229,7 @@ export function TrustIdAmbientAuthProvider({
               Continue as this face
             </button>
             <button type="button" className="tid-btn" onClick={retry}>
-              Retry face
+              Retry Face Scan
             </button>
           </div>
         </div>
@@ -230,13 +265,20 @@ export function TrustIdAmbientAuthProvider({
   }
 
   if (phase === "ERROR") {
+    const serviceDown = /BIOMETRIC_SERVICE_UNAVAILABLE|BIOMETRIC_MODEL_UNAVAILABLE/i.test(
+      error ?? "",
+    );
     return (
       <AmbientSplash brand={brand} msg={error ?? "Verification paused"}>
-        <div className="tid-ambient-choice-row" role="group" aria-label="Choose next step">
+        <div
+          className="tid-ambient-choice-row"
+          role="group"
+          aria-label="Choose next step"
+        >
           <div className="tid-ambient-choice-card">
-            <p className="tid-ambient-choice-label">Already have an account</p>
+            <p className="tid-ambient-choice-label">Try again</p>
             <button type="button" className="tid-btn" onClick={retry}>
-              Retry face
+              Retry Face Scan
             </button>
             <button
               type="button"
@@ -244,19 +286,30 @@ export function TrustIdAmbientAuthProvider({
               onClick={useFingerprintLogin}
               disabled={fingerprintBusy}
             >
-              {fingerprintBusy ? "Verifying passkey…" : "Use passkey"}
+              {fingerprintBusy ? "Verifying…" : "Use Fingerprint"}
             </button>
           </div>
-          <div className="tid-ambient-choice-card tid-ambient-choice-card-primary">
-            <p className="tid-ambient-choice-label">New user</p>
-            <button
-              type="button"
-              className="tid-btn tid-btn-primary"
-              onClick={confirmCreateAccount}
-            >
-              Create Trust ID
-            </button>
-          </div>
+          {!serviceDown ? (
+            <div className="tid-ambient-choice-card tid-ambient-choice-card-primary">
+              <p className="tid-ambient-choice-label">New here</p>
+              <button
+                type="button"
+                className="tid-btn tid-btn-primary"
+                onClick={confirmCreateAccount}
+              >
+                Register Trust ID
+              </button>
+            </div>
+          ) : (
+            <div className="tid-ambient-choice-card">
+              <p className="tid-ambient-choice-label">Service issue</p>
+              <p className="tid-ambient-splash-msg" style={{ fontSize: "0.9rem" }}>
+                Registration is not offered while the biometric service is
+                unavailable — a service failure is not proof that you have no
+                Trust ID.
+              </p>
+            </div>
+          )}
         </div>
       </AmbientSplash>
     );
@@ -270,10 +323,10 @@ export function TrustIdAmbientAuthProvider({
 
   const msg =
     phase === "ENROLLING"
-      ? "Creating your Trust ID and binding this Master Device…"
+      ? "Register your face — capturing enrollment samples…"
       : phase === "SAVING_FINGERPRINT"
-        ? "Scan your fingerprint to save an alternative unlock…"
-        : "Looking at your face and matching the Trust ID cloud registry…";
+        ? "Register fingerprint backup…"
+        : "Looking for your Trust ID…";
 
   return <AmbientSplash brand={brand} msg={msg} spinning={spinning} />;
 }

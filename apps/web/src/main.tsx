@@ -68,7 +68,8 @@ function AmbientShell({ children }: { children: React.ReactNode }) {
         getLocalOccupancy()?.trustId ??
         null
       }
-      capturePayload={() => capture.payload()}
+      capturePayload={(opts) => capture.payload(opts)}
+      captureEnrollmentPayload={(opts) => capture.enrollmentPayload(opts)}
       captureFingerprint={async () => {
         return captureFingerprintBackup(
           "Scan your fingerprint to unlock Trust ID",

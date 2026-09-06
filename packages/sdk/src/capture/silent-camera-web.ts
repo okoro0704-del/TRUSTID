@@ -78,9 +78,26 @@ function grabFrame(video: HTMLVideoElement): ImageData | null {
  */
 export async function captureSilentFaceFromWebCamera(
   getStream?: MediaStreamFactory,
+  options?: { signal?: AbortSignal },
 ): Promise<SilentWebCaptureResult | null> {
   if (typeof document === "undefined" || typeof navigator === "undefined") {
     return null;
+  }
+
+  const signal = options?.signal;
+  if (signal?.aborted) {
+    return {
+      confidence: 0,
+      payload: {
+        modality: BIOMETRIC_MODALITIES.FACE,
+        vector: [],
+        modelName: "none",
+        modelVersion: 0,
+        confidence: 0,
+      },
+      errorCode: BIOMETRIC_ERROR_CODES.NO_FACE,
+      errorMessage: "Capture aborted",
+    };
   }
 
   const streamFactory =
@@ -95,6 +112,8 @@ export async function captureSilentFaceFromWebCamera(
   let video: HTMLVideoElement | null = null;
   const pad = new MediaPipeBlinkPadDetector();
 
+  const aborted = () => Boolean(signal?.aborted);
+
   try {
     stream = await streamFactory({
       video: {
@@ -104,6 +123,20 @@ export async function captureSilentFaceFromWebCamera(
       },
       audio: false,
     });
+    if (aborted()) {
+      return {
+        confidence: 0,
+        payload: {
+          modality: BIOMETRIC_MODALITIES.FACE,
+          vector: [],
+          modelName: "none",
+          modelVersion: 0,
+          confidence: 0,
+        },
+        errorCode: BIOMETRIC_ERROR_CODES.NO_FACE,
+        errorMessage: "Capture aborted",
+      };
+    }
 
     video = createHiddenVideo();
     video.srcObject = stream;
@@ -135,6 +168,20 @@ export async function captureSilentFaceFromWebCamera(
     let lastEmbed: SilentWebCaptureResult | null = null;
 
     for (let i = 0; i < 24; i++) {
+      if (aborted()) {
+        return {
+          confidence: 0,
+          payload: {
+            modality: BIOMETRIC_MODALITIES.FACE,
+            vector: [],
+            modelName: "none",
+            modelVersion: 0,
+            confidence: 0,
+          },
+          errorCode: BIOMETRIC_ERROR_CODES.NO_FACE,
+          errorMessage: "Capture aborted",
+        };
+      }
       await new Promise((r) => setTimeout(r, 120));
       const frame = grabFrame(video);
       if (!frame) continue;

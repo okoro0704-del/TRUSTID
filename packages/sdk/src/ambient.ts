@@ -33,9 +33,15 @@ export type AmbientSignInResult = {
 };
 
 export type FaceLookupResult = {
-  status: "MATCH_FOUND" | "NOT_FOUND" | "PENDING_MASTER_APPROVAL";
+  status:
+    | "MATCH_FOUND"
+    | "NOT_FOUND"
+    | "PENDING_MASTER_APPROVAL"
+    /** ANN / matcher down — must NOT be treated as NO_MATCH */
+    | "SERVICE_UNAVAILABLE";
   message?: string;
   canRegister?: boolean;
+  errorCode?: string;
   trustId?: string;
   user?: { trustId?: string; displayName?: string };
   identity?: unknown;
