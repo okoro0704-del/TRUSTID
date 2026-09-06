@@ -53,6 +53,33 @@ function maxDistance(): number {
   return BIOMETRIC_PGVECTOR_MAX_DISTANCE;
 }
 
+/**
+ * Enrolled templates are `trustid_face_template_v1` envelopes (`primary` + gallery).
+ * Legacy raw number[] arrays are still accepted for read-compat.
+ */
+function parseStoredPrimaryVector(embeddingJson: string): number[] | null {
+  try {
+    const parsed = JSON.parse(embeddingJson) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed.length === BIOMETRIC_AI_EMBEDDING_DIMS
+        ? (parsed as number[])
+        : null;
+    }
+    if (parsed && typeof parsed === "object") {
+      const primary = (parsed as { primary?: unknown }).primary;
+      if (
+        Array.isArray(primary) &&
+        primary.length === BIOMETRIC_AI_EMBEDDING_DIMS
+      ) {
+        return primary as number[];
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
 function sessionBody(token: string | undefined) {
   if (config.exposeSessionTokenInBody && token) {
     return { sessionToken: token };
@@ -69,7 +96,7 @@ type OneToOneHit = {
 };
 
 /**
- * PATH A ù O(1) 1:1 verify against a known Trust ID template.
+ * PATH A ? O(1) 1:1 verify against a known Trust ID template.
  * Returns null when cache/DB miss or distance above threshold (fall through to 1:N).
  */
 export async function tryDirectOneToOneVerify(input: {
@@ -108,11 +135,8 @@ export async function tryDirectOneToOneVerify(input: {
       },
     });
     if (!row) return null;
-    try {
-      target = JSON.parse(row.embeddingJson) as number[];
-    } catch {
-      return null;
-    }
+    target = parseStoredPrimaryVector(row.embeddingJson);
+    if (!target) return null;
     userId = row.userId;
     embeddingId = row.id;
     source = "db";
@@ -124,7 +148,7 @@ export async function tryDirectOneToOneVerify(input: {
     });
   }
 
-  // Redis-only hit may omit userId ù resolve from Trust ID once.
+  // Redis-only hit may omit userId ? resolve from Trust ID once.
   if (!userId) {
     const user = await prisma.user.findUnique({
       where: { trustId },
@@ -193,7 +217,7 @@ export async function handleFastVectorMatch(
 
   // =========================================================================
   // PATH B (or Path A session mint): ambient match + session / approval
-  // After Path A verify, ambient hits hot cache ù still O(1) for known face.
+  // After Path A verify, ambient hits hot cache ? still O(1) for known face.
   // =========================================================================
   const result = await ambientSignInAndSession({
     payload: {
