@@ -16,11 +16,12 @@ import {
   BIOMETRIC_DETECTOR_VERSION,
   BIOMETRIC_ERROR_CODES,
   BIOMETRIC_HNSW_EF_SEARCH_DEFAULT,
-  BIOMETRIC_LEGACY_MODEL_NAMES,
   BIOMETRIC_MATCH_MODE,
   BIOMETRIC_PIPELINE_VERSION,
   BIOMETRIC_PREPROCESSING_VERSION,
   BIOMETRIC_THRESHOLD_POLICY,
+  isLegacyBiometricModelName,
+  isProductionArcFaceModelName,
   TRUST_ID_ACCESS_LEVELS,
   type BiometricModality,
   type TrustIdAccessLevel,
@@ -68,8 +69,7 @@ export type VectorMatchResult = {
 };
 
 function isLegacyModelName(name: string | undefined | null): boolean {
-  if (!name) return false;
-  return (BIOMETRIC_LEGACY_MODEL_NAMES as readonly string[]).includes(name);
+  return isLegacyBiometricModelName(name);
 }
 
 function isLegacyStoredTemplate(
@@ -231,7 +231,7 @@ export class PgVectorMatcherService {
     const modelName =
       input.modelName ??
       input.biometric.modelName ??
-      BIOMETRIC_AI_MODEL_NAME;
+      "";
     if (isLegacyModelName(modelName)) {
       throw Object.assign(
         new Error(
@@ -243,6 +243,24 @@ export class PgVectorMatcherService {
         },
       );
     }
+    // Face enroll must explicitly declare the production ArcFace model.
+    // Do not default-missing modelName to ArcFace — that hid legacy callers.
+    if (modality === "face" && !isProductionArcFaceModelName(modelName)) {
+      throw Object.assign(
+        new Error(
+          "Face enrollment requires the production ArcFace pipeline " +
+            `(modelName=${BIOMETRIC_AI_MODEL_NAME}). Received: ${modelName || "missing"}.`,
+        ),
+        {
+          statusCode: 400,
+          errorCode: BIOMETRIC_ERROR_CODES.BIOMETRIC_TEMPLATE_LEGACY,
+        },
+      );
+    }
+    const resolvedModelName =
+      modality === "face"
+        ? BIOMETRIC_AI_MODEL_NAME
+        : modelName || "fingerprint_keystore_v1";
 
     const vector = resolveVector(input.biometric);
     const gallery =
@@ -255,7 +273,7 @@ export class PgVectorMatcherService {
       schema: "trustid_face_template_v1",
       primary: vector,
       gallery,
-      modelName,
+      modelName: resolvedModelName,
       modelVersion:
         input.modelVersion ??
         input.biometric.modelVersion ??
@@ -279,14 +297,14 @@ export class PgVectorMatcherService {
         trustId: input.trustId,
         modality,
         embeddingJson,
-        modelName,
+        modelName: resolvedModelName,
         modelVersion: envelope.modelVersion,
         status: "active",
       },
       update: {
         trustId: input.trustId,
         embeddingJson,
-        modelName,
+        modelName: resolvedModelName,
         modelVersion: envelope.modelVersion,
         status: "active",
       },
@@ -309,7 +327,7 @@ export class PgVectorMatcherService {
         modality,
         embeddingId: row.id,
         engine: "pgvector-arcface",
-        modelName,
+        modelName: resolvedModelName,
         gallerySize: gallery.length,
         pipelineVersion: BIOMETRIC_PIPELINE_VERSION,
         // no vectors

@@ -2,13 +2,15 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
   BIOMETRIC_MODALITIES,
   BIOMETRIC_AI_EMBEDDING_DIMS,
+  BIOMETRIC_AI_MODEL_NAME,
+  BIOMETRIC_AI_MODEL_VERSION,
   BIOMETRIC_PGVECTOR_MAX_DISTANCE,
-  TRUST_ID_ACCESS_LEVELS,
 } from "@trustid/shared";
 import { prisma } from "../src/db/client.js";
 import { resetTables } from "./helpers/db.js";
 import { buildApp } from "../src/app.js";
 import { pgVectorMatcher } from "../src/modules/trust-id/vector-matcher.js";
+import { __clearHotVectorCacheForTests } from "../src/modules/trust-id/vector-hot-cache.js";
 import {
   ambientSignInAndSession,
   matchMultiModalFusion,
@@ -43,6 +45,8 @@ async function seedDualModalUser(trustId: string, faceSeed: number, fpSeed: numb
     biometric: {
       modality: BIOMETRIC_MODALITIES.FACE,
       vector: aiVector512(faceSeed),
+      modelName: BIOMETRIC_AI_MODEL_NAME,
+      modelVersion: BIOMETRIC_AI_MODEL_VERSION,
     },
   });
   await pgVectorMatcher.enrollEmbedding({
@@ -51,14 +55,49 @@ async function seedDualModalUser(trustId: string, faceSeed: number, fpSeed: numb
     biometric: {
       modality: BIOMETRIC_MODALITIES.FINGERPRINT,
       vector: aiVector512(fpSeed),
+      modelName: "fingerprint_keystore_v1",
+      modelVersion: 1,
     },
   });
   return user;
 }
 
+/** Without pgvector, 1:N relies on the (userId-keyed) hot cache — re-warm the modality under test. */
+async function warmModalityHotCache(input: {
+  userId: string;
+  trustId: string;
+  modality: "face" | "fingerprint";
+  seed: number;
+}) {
+  if (input.modality === "face") {
+    await pgVectorMatcher.enrollEmbedding({
+      userId: input.userId,
+      trustId: input.trustId,
+      biometric: {
+        modality: BIOMETRIC_MODALITIES.FACE,
+        vector: aiVector512(input.seed),
+        modelName: BIOMETRIC_AI_MODEL_NAME,
+        modelVersion: BIOMETRIC_AI_MODEL_VERSION,
+      },
+    });
+    return;
+  }
+  await pgVectorMatcher.enrollEmbedding({
+    userId: input.userId,
+    trustId: input.trustId,
+    biometric: {
+      modality: BIOMETRIC_MODALITIES.FINGERPRINT,
+      vector: aiVector512(input.seed),
+      modelName: "fingerprint_keystore_v1",
+      modelVersion: 1,
+    },
+  });
+}
+
 describe("ambient AI 512-D pgvector sign-in", () => {
   beforeEach(async () => {
     await resetTables(prisma);
+    __clearHotVectorCacheForTests();
   });
 
   afterAll(async () => {
@@ -66,7 +105,14 @@ describe("ambient AI 512-D pgvector sign-in", () => {
   });
 
   it("matches fingerprint-only 512-D vector when user enrolled both modalities", async () => {
-    const user = await seedDualModalUser(newTrustId(), 10, 20);
+    const trustId = newTrustId();
+    const user = await seedDualModalUser(trustId, 10, 20);
+    await warmModalityHotCache({
+      userId: user.id,
+      trustId,
+      modality: "fingerprint",
+      seed: 20,
+    });
 
     const fusion = await matchMultiModalFusion({
       payload: {
@@ -84,13 +130,22 @@ describe("ambient AI 512-D pgvector sign-in", () => {
   });
 
   it("matches face-only 512-D vector when user enrolled both modalities", async () => {
-    const user = await seedDualModalUser(newTrustId(), 10, 20);
+    const trustId = newTrustId();
+    const user = await seedDualModalUser(trustId, 10, 20);
+    await warmModalityHotCache({
+      userId: user.id,
+      trustId,
+      modality: "face",
+      seed: 10,
+    });
 
     const fusion = await matchMultiModalFusion({
       payload: {
         face: {
           modality: BIOMETRIC_MODALITIES.FACE,
           vector: aiVector512(10.001),
+          modelName: BIOMETRIC_AI_MODEL_NAME,
+          modelVersion: BIOMETRIC_AI_MODEL_VERSION,
         },
       },
     });
@@ -101,12 +156,15 @@ describe("ambient AI 512-D pgvector sign-in", () => {
     expect(fusion.matchedModality).toBe("face");
   });
 
-  it("auto-enrolls and signs in on unknown 512-D vector (zero-UI onboarding)", async () => {
+  it("auto-enrolls and signs in on unknown ArcFace face vector (zero-UI onboarding)", async () => {
     const result = await ambientSignInAndSession({
       payload: {
-        fingerprint: {
-          modality: BIOMETRIC_MODALITIES.FINGERPRINT,
+        face: {
+          modality: BIOMETRIC_MODALITIES.FACE,
           vector: aiVector512(888),
+          modelName: BIOMETRIC_AI_MODEL_NAME,
+          modelVersion: BIOMETRIC_AI_MODEL_VERSION,
+          confidence: 0.95,
         },
       },
       allowAutoEnroll: true,
@@ -119,7 +177,14 @@ describe("ambient AI 512-D pgvector sign-in", () => {
   });
 
   it("POST /v1/trust-id/ambient-signin issues session from 512-D vector", async () => {
-    const user = await seedDualModalUser(newTrustId(), 5, 15);
+    const trustId = newTrustId();
+    const user = await seedDualModalUser(trustId, 5, 15);
+    await warmModalityHotCache({
+      userId: user.id,
+      trustId,
+      modality: "fingerprint",
+      seed: 15,
+    });
     const app = await buildApp();
 
     const res = await app.inject({
@@ -146,13 +211,23 @@ describe("ambient AI 512-D pgvector sign-in", () => {
   });
 
   it("rejects vectors above pgvector distance threshold", async () => {
-    await seedDualModalUser(newTrustId(), 1, 2);
+    const trustId = newTrustId();
+    const user = await seedDualModalUser(trustId, 1, 2);
+    // Warm face so the probe is scored against the face gallery, not the
+    // fingerprint vector left in the userId-keyed hot cache.
+    await warmModalityHotCache({
+      userId: user.id,
+      trustId,
+      modality: "face",
+      seed: 1,
+    });
 
     const fusion = await matchMultiModalFusion({
       payload: {
         face: {
           modality: BIOMETRIC_MODALITIES.FACE,
           vector: aiVector512(9999),
+          modelName: BIOMETRIC_AI_MODEL_NAME,
         },
       },
     });

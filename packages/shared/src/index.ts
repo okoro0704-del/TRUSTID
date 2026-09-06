@@ -417,6 +417,20 @@ export const BIOMETRIC_LEGACY_MODEL_NAMES = [
   "spatial_fallback_dev_v1",
 ] as const;
 
+export function isLegacyBiometricModelName(
+  name: string | undefined | null,
+): boolean {
+  if (!name) return false;
+  return (BIOMETRIC_LEGACY_MODEL_NAMES as readonly string[]).includes(name);
+}
+
+/** True only for the current production ArcFace recognizer id */
+export function isProductionArcFaceModelName(
+  name: string | undefined | null,
+): boolean {
+  return name === BIOMETRIC_AI_MODEL_NAME;
+}
+
 /**
  * Legacy operating cosine *distance* (1 - similarity).
  * STATUS: UNCALIBRATED — not derived from a labeled ArcFace evaluation.

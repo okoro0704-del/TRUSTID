@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  BIOMETRIC_AI_EMBEDDING_DIMS,
+  BIOMETRIC_AI_MODEL_NAME,
+  BIOMETRIC_AI_MODEL_VERSION,
+  isProductionArcFaceModelName,
+} from "@trustid/shared";
+import {
   createTrustIdSdk,
   type AmbientSignInResult,
   type CaptureHandlers,
@@ -8,6 +14,15 @@ import {
 import { resolveGuestRealtimeUrl } from "../api/client.js";
 import { useTrustIdAuth as useTrustIdSession } from "../context/TrustIdAuthProvider.js";
 import type { TrustIdIdentity } from "../types.js";
+
+function isProductionArcFaceFace(
+  face: MultiModalBiometricPayload["face"] | undefined | null,
+): boolean {
+  if (!face?.vector || face.vector.length !== BIOMETRIC_AI_EMBEDDING_DIMS) {
+    return false;
+  }
+  return isProductionArcFaceModelName(face.modelName);
+}
 
 /**
  * Ambient authentication phases (single state machine).
@@ -611,6 +626,7 @@ export function useAmbientTrustIdAuth(
 
   const confirmCreateAccount = useCallback(() => {
     // Explicit registration only — never from a silent path.
+    // Identification probe must NOT become the enrollment template.
     setPhaseSafe("ENROLLING");
     setError(null);
     abortCapture();
@@ -619,43 +635,90 @@ export function useAmbientTrustIdAuth(
 
     void (async () => {
       const sdk = createTrustIdSdk({ baseUrl: apiBaseUrl });
-      let payload = pendingPayloadRef.current;
+      // Drop any identification-only face — registration starts a new session.
+      const identificationProbe = pendingPayloadRef.current;
+      pendingPayloadRef.current = null;
 
-      // Prefer dedicated multi-frame enrollment capture when available.
+      let enrolledFace: MultiModalBiometricPayload["face"] | undefined;
+
+      // Prefer dedicated multi-frame enrollment capture.
       if (captureEnrollmentPayload) {
         try {
           const enrolled = await captureEnrollmentPayload({
             signal: ac.signal,
           });
-          if (enrolled?.face?.vector?.length === 512) {
-            payload = {
-              ...payload,
-              ...enrolled,
-              face: enrolled.face,
-            };
-            pendingPayloadRef.current = payload;
-          }
-        } catch {
-          /* fall back to pending identification face */
+          enrolledFace = enrolled?.face;
+        } catch (e) {
+          setError(
+            e instanceof Error
+              ? e.message
+              : "REGISTRATION_FAILED — Enrollment capture failed.",
+          );
+          setPhaseSafe("ERROR");
+          return;
+        }
+      } else if (capturePayload) {
+        // Fresh capture — do not reuse the NO_MATCH identification probe.
+        try {
+          const fresh = await capturePayload({ signal: ac.signal });
+          enrolledFace = fresh?.face;
+        } catch (e) {
+          setError(
+            e instanceof Error
+              ? e.message
+              : "REGISTRATION_FAILED — Face capture failed.",
+          );
+          setPhaseSafe("ERROR");
+          return;
         }
       }
 
-      if (!payload?.face?.vector && !payload?.face?.embedding) {
+      // Identification probe is never the enrollment template (even if ArcFace).
+      void identificationProbe;
+
+      if (!isProductionArcFaceFace(enrolledFace)) {
+        const badModel = enrolledFace?.modelName ?? "missing";
         setError(
-          "REGISTRATION_FAILED — No face template available. Retry face scan, then Register.",
+          badModel &&
+          /spatial_fallback|mobile_facenet/i.test(String(badModel))
+            ? "REGISTRATION_FAILED — Legacy spatial/non-ArcFace template rejected. Retry Register after models load."
+            : "REGISTRATION_FAILED — Production ArcFace face enrollment required. Check camera/models, then tap Register again.",
         );
         setPhaseSafe("ERROR");
         return;
       }
 
+      // Build a clean enrollment payload — no legacy embedding field, no stale state.
+      const face = {
+        modality: "face" as const,
+        vector: enrolledFace!.vector!,
+        modelName: BIOMETRIC_AI_MODEL_NAME,
+        modelVersion: BIOMETRIC_AI_MODEL_VERSION,
+        confidence: enrolledFace!.confidence,
+        deviceFingerprint: enrolledFace!.deviceFingerprint,
+      };
+      const payload: MultiModalBiometricPayload = { face };
+      pendingPayloadRef.current = payload;
+
+      console.info(
+        JSON.stringify({
+          scope: "ambient_register",
+          event: "arcface_enroll_submit",
+          modelName: face.modelName,
+          modelVersion: face.modelVersion,
+          embeddingDims: face.vector.length,
+          // never log vector / image
+        }),
+      );
+
       const pushToken = getPushToken ? await getPushToken() : null;
       const installId = pendingInstallRef.current;
       const result = await sdk.registerTrustId({
-        ...payload,
+        face,
         installId,
         deviceName: "Master Phone",
         deviceFingerprint:
-          payload.deviceFingerprint ||
+          face.deviceFingerprint ||
           (await getDeviceFingerprint?.()) ||
           installId,
         pushToken: pushToken ?? undefined,
@@ -682,7 +745,7 @@ export function useAmbientTrustIdAuth(
       if (result.trustId) {
         try {
           const fp =
-            payload.deviceFingerprint ||
+            face.deviceFingerprint ||
             (await getDeviceFingerprint?.()) ||
             installId;
           if (fp) {
@@ -718,6 +781,7 @@ export function useAmbientTrustIdAuth(
     abortCapture,
     apiBaseUrl,
     captureEnrollmentPayload,
+    capturePayload,
     getDeviceFingerprint,
     getPushToken,
     persistMasterDeviceState,

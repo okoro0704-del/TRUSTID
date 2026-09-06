@@ -1,4 +1,7 @@
-import { BIOMETRIC_FACE_CAPTURE_MIN_CONFIDENCE } from "@trustid/shared";
+import {
+  BIOMETRIC_AI_MODEL_NAME,
+  BIOMETRIC_FACE_CAPTURE_MIN_CONFIDENCE,
+} from "@trustid/shared";
 import {
   captureNativeFingerprintTemplate,
   captureSilentFaceFromWebCamera,
@@ -153,9 +156,17 @@ export async function captureWebAmbientEnrollment(
   }
   if (
     enrolled?.payload?.vector &&
-    enrolled.payload.vector.length === 512
+    enrolled.payload.vector.length === 512 &&
+    enrolled.payload.modelName === BIOMETRIC_AI_MODEL_NAME
   ) {
     return { face: enrolled.payload };
+  }
+  if (enrolled?.payload?.modelName) {
+    console.warn(
+      "[TrustID] Enrollment rejected non-ArcFace model:",
+      enrolled.payload.modelName,
+      // never log vector
+    );
   }
   return {};
 }

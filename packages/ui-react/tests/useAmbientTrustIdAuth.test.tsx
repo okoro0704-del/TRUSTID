@@ -45,7 +45,7 @@ function wrapper({ children }: { children: ReactNode }) {
   );
 }
 
-function facePayload() {
+function facePayload(overrides: Record<string, unknown> = {}) {
   return {
     face: {
       modality: "face" as const,
@@ -53,6 +53,7 @@ function facePayload() {
       modelName: "insightface_arcface_w600k_mbf_v1",
       modelVersion: 1,
       confidence: 0.9,
+      ...overrides,
     },
   };
 }
@@ -184,6 +185,7 @@ describe("useAmbientTrustIdAuth state machine", () => {
 
   it("registration reaches FACE_SAVED; fingerprint failure does not auto-login", async () => {
     const capturePayload = vi.fn(async () => facePayload());
+    const captureEnrollmentPayload = vi.fn(async () => facePayload());
     const registerFingerprintBackup = vi.fn(async () => false);
     const { result } = renderHook(
       () =>
@@ -191,6 +193,7 @@ describe("useAmbientTrustIdAuth state machine", () => {
           enabled: true,
           allowAutoEnroll: false,
           capturePayload,
+          captureEnrollmentPayload,
           registerFingerprintBackup,
         }),
       { wrapper },
@@ -204,6 +207,13 @@ describe("useAmbientTrustIdAuth state machine", () => {
 
     await waitFor(() => expect(result.current.phase).toBe("FACE_SAVED"));
     expect(registerTrustId).toHaveBeenCalled();
+    const submitted = registerTrustId.mock.calls[0]?.[0] as {
+      face?: { modelName?: string; vector?: number[]; embedding?: number[] };
+    };
+    expect(submitted.face?.modelName).toBe("insightface_arcface_w600k_mbf_v1");
+    expect(submitted.face?.vector).toHaveLength(512);
+    expect(submitted.face?.embedding).toBeUndefined();
+    expect(captureEnrollmentPayload).toHaveBeenCalled();
 
     act(() => {
       result.current.continueAfterDeviceSaved();
@@ -218,6 +228,63 @@ describe("useAmbientTrustIdAuth state machine", () => {
       expect(result.current.phase).toBe("FINGERPRINT_FAILED"),
     );
     expect(result.current.phase).not.toBe("AUTHENTICATED");
+  });
+
+  it("rejects legacy spatial identification probe and does not submit it", async () => {
+    const legacyProbe = facePayload({
+      modelName: "spatial_fallback_v1",
+    });
+    const capturePayload = vi.fn(async () => legacyProbe);
+    // Enrollment fails closed (empty) — must not fall back to legacy probe.
+    const captureEnrollmentPayload = vi.fn(async () => ({}));
+    const { result } = renderHook(
+      () =>
+        useAmbientTrustIdAuth({
+          enabled: true,
+          allowAutoEnroll: false,
+          capturePayload,
+          captureEnrollmentPayload,
+        }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.phase).toBe("NO_MATCH"));
+
+    act(() => {
+      result.current.confirmCreateAccount();
+    });
+
+    await waitFor(() => expect(result.current.phase).toBe("ERROR"));
+    expect(registerTrustId).not.toHaveBeenCalled();
+    expect(result.current.error).toMatch(/Legacy|ArcFace|REGISTRATION_FAILED/i);
+  });
+
+  it("does not reuse identification probe when enrollment returns ArcFace", async () => {
+    const idProbe = facePayload({ confidence: 0.5 });
+    const enrollFace = facePayload({ confidence: 0.95 });
+    const capturePayload = vi.fn(async () => idProbe);
+    const captureEnrollmentPayload = vi.fn(async () => enrollFace);
+    const { result } = renderHook(
+      () =>
+        useAmbientTrustIdAuth({
+          enabled: true,
+          allowAutoEnroll: false,
+          capturePayload,
+          captureEnrollmentPayload,
+        }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.phase).toBe("NO_MATCH"));
+    act(() => {
+      result.current.confirmCreateAccount();
+    });
+    await waitFor(() => expect(result.current.phase).toBe("FACE_SAVED"));
+    expect(captureEnrollmentPayload).toHaveBeenCalled();
+    const submitted = registerTrustId.mock.calls[0]?.[0] as {
+      face?: { confidence?: number };
+    };
+    expect(submitted.face?.confidence).toBe(0.95);
   });
 
   it("stale scan result cannot overwrite a newer user-choice phase", async () => {
