@@ -626,7 +626,7 @@ export function useAmbientTrustIdAuth(
 
   const confirmCreateAccount = useCallback(() => {
     // Explicit registration only — never from a silent path.
-    // Identification probe must NOT become the enrollment template.
+    // Legacy probes are never enrolled; ArcFace from the NO_MATCH scan may be.
     setPhaseSafe("ENROLLING");
     setError(null);
     abortCapture();
@@ -635,19 +635,29 @@ export function useAmbientTrustIdAuth(
 
     void (async () => {
       const sdk = createTrustIdSdk({ baseUrl: apiBaseUrl });
-      // Drop any identification-only face — registration starts a new session.
       const identificationProbe = pendingPayloadRef.current;
       pendingPayloadRef.current = null;
 
       let enrolledFace: MultiModalBiometricPayload["face"] | undefined;
+      let enrollSource: "probe" | "enrollment" | "fresh" | "none" = "none";
 
-      // Prefer dedicated multi-frame enrollment capture.
-      if (captureEnrollmentPayload) {
+      // 1) Reuse the ArcFace face that just produced NO_MATCH — same production
+      //    pipeline, no second camera pass / blink gate that often fails closed.
+      if (isProductionArcFaceFace(identificationProbe?.face)) {
+        enrolledFace = identificationProbe!.face;
+        enrollSource = "probe";
+      }
+
+      // 2) Optional multi-frame enrollment (blink + quality aggregate).
+      if (!enrolledFace && captureEnrollmentPayload) {
         try {
           const enrolled = await captureEnrollmentPayload({
             signal: ac.signal,
           });
-          enrolledFace = enrolled?.face;
+          if (isProductionArcFaceFace(enrolled?.face)) {
+            enrolledFace = enrolled!.face;
+            enrollSource = "enrollment";
+          }
         } catch (e) {
           setError(
             e instanceof Error
@@ -657,11 +667,18 @@ export function useAmbientTrustIdAuth(
           setPhaseSafe("ERROR");
           return;
         }
-      } else if (capturePayload) {
-        // Fresh capture — do not reuse the NO_MATCH identification probe.
+      }
+
+      // 3) Fresh single-frame capture (same path as identity scan).
+      if (!enrolledFace && capturePayload) {
         try {
           const fresh = await capturePayload({ signal: ac.signal });
-          enrolledFace = fresh?.face;
+          if (isProductionArcFaceFace(fresh?.face)) {
+            enrolledFace = fresh!.face;
+            enrollSource = "fresh";
+          } else if (fresh?.face && !isProductionArcFaceFace(fresh.face)) {
+            enrolledFace = fresh.face; // surface legacy rejection below
+          }
         } catch (e) {
           setError(
             e instanceof Error
@@ -673,16 +690,13 @@ export function useAmbientTrustIdAuth(
         }
       }
 
-      // Identification probe is never the enrollment template (even if ArcFace).
-      void identificationProbe;
-
       if (!isProductionArcFaceFace(enrolledFace)) {
         const badModel = enrolledFace?.modelName ?? "missing";
         setError(
           badModel &&
           /spatial_fallback|mobile_facenet/i.test(String(badModel))
-            ? "REGISTRATION_FAILED — Legacy spatial/non-ArcFace template rejected. Retry Register after models load."
-            : "REGISTRATION_FAILED — Production ArcFace face enrollment required. Check camera/models, then tap Register again.",
+            ? "REGISTRATION_FAILED — Legacy spatial/non-ArcFace template rejected. Retry face scan, then Register."
+            : "REGISTRATION_FAILED — No face template available. Retry face scan, then Register.",
         );
         setPhaseSafe("ERROR");
         return;
@@ -704,6 +718,7 @@ export function useAmbientTrustIdAuth(
         JSON.stringify({
           scope: "ambient_register",
           event: "arcface_enroll_submit",
+          source: enrollSource,
           modelName: face.modelName,
           modelVersion: face.modelVersion,
           embeddingDims: face.vector.length,

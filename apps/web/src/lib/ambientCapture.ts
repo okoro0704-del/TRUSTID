@@ -145,28 +145,45 @@ export async function captureWebAmbientEnrollment(
   options?: { signal?: AbortSignal },
 ): Promise<MultiModalBiometricPayload> {
   if (options?.signal?.aborted) return {};
-  const enrolled = await captureSilentFaceEnrollmentFromWebCamera();
-  if (enrolled?.errorCode) {
+  try {
+    const enrolled = await captureSilentFaceEnrollmentFromWebCamera();
+    if (
+      enrolled?.payload?.vector &&
+      enrolled.payload.vector.length === 512 &&
+      enrolled.payload.modelName === BIOMETRIC_AI_MODEL_NAME
+    ) {
+      return { face: enrolled.payload };
+    }
+    if (enrolled?.errorCode) {
+      console.warn(
+        "[TrustID] Enrollment capture:",
+        enrolled.errorCode,
+        enrolled.errorMessage,
+      );
+    } else if (enrolled?.payload?.modelName) {
+      console.warn(
+        "[TrustID] Enrollment rejected non-ArcFace model:",
+        enrolled.payload.modelName,
+        // never log vector
+      );
+    }
+  } catch (err) {
     console.warn(
-      "[TrustID] Enrollment capture:",
-      enrolled.errorCode,
-      enrolled.errorMessage,
+      "[TrustID] Enrollment capture failed:",
+      err instanceof Error ? err.message : err,
     );
-    return {};
   }
+
+  // Fall back to the same single-frame ArcFace path used for identity scan.
+  // Blink/multi-frame enrollment is preferred but must not block Register.
+  if (options?.signal?.aborted) return {};
+  const face = await captureUnifiedFace(options?.signal);
   if (
-    enrolled?.payload?.vector &&
-    enrolled.payload.vector.length === 512 &&
-    enrolled.payload.modelName === BIOMETRIC_AI_MODEL_NAME
+    face?.vector &&
+    face.vector.length === 512 &&
+    face.modelName === BIOMETRIC_AI_MODEL_NAME
   ) {
-    return { face: enrolled.payload };
-  }
-  if (enrolled?.payload?.modelName) {
-    console.warn(
-      "[TrustID] Enrollment rejected non-ArcFace model:",
-      enrolled.payload.modelName,
-      // never log vector
-    );
+    return { face };
   }
   return {};
 }
