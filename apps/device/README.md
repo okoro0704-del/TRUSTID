@@ -66,13 +66,32 @@ Synced copies live under `android/app/src/main/java/...` and `ios/App/App/plugin
 ### Build a debug APK (Windows)
 
 ```bash
-npm run cap:sync -w @trustid/device
-cd apps/device/android
-# requires Android SDK + JDK 17 (Android Studio JBR works)
-.\gradlew.bat assembleDebug
+# From repo root — sync + assemble + copy to stable path
+npm run android:apk -w @trustid/device
 ```
 
-APK output: `apps/device/android/app/build/outputs/apk/debug/app-debug.apk`
+Stable install file (always overwrite this same path):
+
+```text
+TrustID-debug.apk
+```
+
+Also written to: `artifacts/apk/TrustID-debug.apk`  
+Gradle output: `apps/device/android/app/build/outputs/apk/debug/app-debug.apk`
+
+### Live updates on launch (default)
+
+The Capacitor shell loads **https://trustedid.netlify.app** by default.
+After you push to `main` and Netlify deploys, reopen the app to get web/UI/auth changes without reinstalling.
+
+Rebuild the APK when native plugins or Capacitor config change.
+
+Opt out of live web (use bundled `web/dist` only):
+
+```bash
+set CAP_USE_LIVE_WEB=0
+npm run android:apk -w @trustid/device
+```
 
 ### iOS (macOS)
 

@@ -27,3 +27,5 @@ apps/device/ios/App/Podfile.lock
 *.tsbuildinfo
 artifacts/biometric-evaluation/subjects/
 artifacts/biometric-evaluation/exports/
+TrustID-debug.apk
+artifacts/apk/

@@ -1,0 +1,39 @@
+---
+description: After production TrustID work, rebuild the Android APK to a fixed install path
+alwaysApply: true
+---
+
+# Always refresh the installable APK
+
+When TrustID changes are production-ready (especially web UX, auth, ambient scan, device plugins):
+
+1. Follow deploy-after-production (commit + push `main` ? Netlify).
+2. Rebuild the debug APK so the user can reinstall without hunting Gradle output:
+
+```bash
+npm run android:apk -w @trustid/device
+```
+
+3. The build must leave a stable file at:
+
+```text
+TrustID-debug.apk
+```
+
+in the repo root (`c:\Users\Hp\Desktop\TRUST ID\TrustID-debug.apk`).
+
+4. Do this without waiting to be asked — the user installs by tapping that same file.
+
+## Live web updates (already in Capacitor)
+
+The APK loads `https://trustedid.netlify.app` by default (`CAP_USE_LIVE_WEB` ? `0`).
+Web/UI/auth features update on app launch after Netlify deploy — no reinstall needed.
+
+Rebuild the APK when:
+
+- native Android/iOS plugin code changes
+- Capacitor config / permissions / manifest change
+- the user asks for a fresh installable binary
+- first-time setup or live URL / signing changes
+
+Do not rebuild for docs-only or API-only changes that never affect the device shell.

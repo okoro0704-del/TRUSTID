@@ -10,6 +10,7 @@ When TrustID changes are production-ready (features, UX, fixes the user can use 
 1. Commit with a clear message (follow the repo git safety protocol).
 2. Push to `origin` on the current branch (`main` unless told otherwise).
 3. Confirm Netlify auto-deploy for `trustedid` when the push is to `main` (site: https://trustedid.netlify.app).
-4. Do this without waiting to be asked again — the user prefers automatic GitHub + Netlify after every production change.
+4. Rebuild/copy the Android APK when the change affects the device shell or the user needs a reinstall (see `always-rebuild-apk` rule). Live web features reach the APK automatically via Netlify on launch.
+5. Do this without waiting to be asked again — the user prefers automatic GitHub + Netlify after every production change.
 
 Do not push WIP experiments, secrets, or `*.tsbuildinfo` / build artifacts unless they are intentionally tracked.
