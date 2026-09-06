@@ -1,0 +1,77 @@
+{
+  "generatedAt": "2026-09-06T08:38:27.282Z",
+  "commitHint": "7f8d197+",
+  "BIOMETRIC_EVIDENCE_STATUS": "BLOCKED_BY_DATASET",
+  "PIPELINE_STATUS": "PASS",
+  "MODEL_STATUS": "PASS",
+  "BIOMETRIC_ACCURACY_STATUS": "UNMEASURED",
+  "THRESHOLD_STATUS": "UNCALIBRATED",
+  "PAD_STATUS": "INCOMPLETE",
+  "SEARCH_STATUS": "PARTIAL",
+  "SECURITY_STATUS": "PARTIAL",
+  "10B_READINESS_STATUS": "BLOCKED",
+  "dataset": null,
+  "subjects": 0,
+  "genuineTrials": null,
+  "impostorTrials": null,
+  "eer": null,
+  "threshold_0_35": {
+    "far": null,
+    "frr": null,
+    "tar": null,
+    "status": "NOT_MEASURED"
+  },
+  "calibratedThreshold": null,
+  "identification": {
+    "rank1": null,
+    "rank5": null,
+    "rank10": null,
+    "status": "NOT_MEASURED"
+  },
+  "annCandidateRecall": {
+    "status": "NOT_MEASURED"
+  },
+  "searchLatency": {
+    "status": "NOT_MEASURED"
+  },
+  "pgvector": {
+    "status": "ENVIRONMENT_BLOCKED",
+    "reason": "DATABASE_URL unavailable in evidence environment"
+  },
+  "multiFrameEnrollment": {
+    "status": "NOT_MEASURED"
+  },
+  "pad": {
+    "status": "INCOMPLETE"
+  },
+  "security": {
+    "fullGalleryFallback": "REMOVED_FAIL_CLOSED",
+    "regressionTest": "PASS (vector-matcher-fail-closed.test.ts)"
+  },
+  "MEASURED_FACTS": [
+    "ArcFace pipeline I/O measured previously (input.1 ? 512-D)",
+    "Full-gallery Node fallback removed; ANN failure ? BIOMETRIC_SERVICE_UNAVAILABLE",
+    "Fail-closed regression tests PASS"
+  ],
+  "UNMEASURED_ITEMS": [
+    "FAR/FRR/EER/TAR on labeled faces",
+    "Operating points at FAR 1e-2�1e-6",
+    "1:N Rank-N / FPIR / FNIR",
+    "ANN candidate recall vs exact",
+    "Live pgvector HNSW scale",
+    "Multi-frame vs single-frame accuracy delta",
+    "PAD anti-spoof metrics"
+  ],
+  "DATASET_LIMITATIONS": "No labeled face dataset with subject_id + images/embeddings from the production pipeline is present in the repository or evidence environment.",
+  "SECURITY_LIMITATIONS": [
+    "THRESHOLD_STATUS=UNCALIBRATED (0.35 is a legacy placeholder)",
+    "PAD_STATUS=INCOMPLETE (blink ? presentation-attack detection)"
+  ],
+  "REMAINING_BLOCKERS": [
+    "Provide labeled production-pipeline dataset (see DATASET_SPEC.md)",
+    "Calibrate threshold from measured FAR/FRR",
+    "Run live pgvector HNSW with DATABASE_URL",
+    "Validated PAD evaluation"
+  ],
+  "sufficientFor10BArchitectureDesign": false
+}

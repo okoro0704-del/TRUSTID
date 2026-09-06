@@ -74,6 +74,21 @@ export function parseLabeledDataset(raw: unknown): LabeledBiometricDataset {
         : undefined,
       qualityScore:
         typeof row.qualityScore === "number" ? row.qualityScore : undefined,
+      split: typeof row.split === "string" ? row.split : undefined,
+      sessionId:
+        typeof row.sessionId === "string"
+          ? row.sessionId
+          : typeof row.session_id === "string"
+            ? row.session_id
+            : undefined,
+      imagePath:
+        typeof row.imagePath === "string"
+          ? row.imagePath
+          : typeof row.image_path === "string"
+            ? row.image_path
+            : typeof row.path === "string"
+              ? row.path
+              : undefined,
     };
   });
 

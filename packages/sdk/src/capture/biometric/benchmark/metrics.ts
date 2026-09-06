@@ -10,11 +10,13 @@ import type {
   IdentificationScaleReport,
   LabeledBiometricDataset,
   LabeledSample,
+  OperatingPointReport,
   PairScore,
   TemplateQualityReport,
   ThresholdCalibration,
   VerificationReport,
 } from "./types.js";
+import { farEstimability, wilsonInterval95 } from "./stats.js";
 
 export function cosineSimilarity(a: number[], b: number[]): number {
   const n = Math.min(a.length, b.length);
@@ -47,7 +49,7 @@ function percentile(sortedAsc: number[], p: number): number {
   return sortedAsc[idx]!;
 }
 
-/** Build all unordered genuine pairs + sampled impostor pairs. */
+/** Build all unordered genuine pairs + unique sampled impostor pairs. */
 export function buildPairScores(
   dataset: LabeledBiometricDataset,
   options: { maxImpostorPairs?: number; seed?: number } = {},
@@ -85,9 +87,10 @@ export function buildPairScores(
     return seed / 0x100000000;
   };
 
+  const seen = new Set<string>();
   let impostors = 0;
   let attempts = 0;
-  const maxAttempts = maxImp * 20;
+  const maxAttempts = maxImp * 40;
   while (impostors < maxImp && attempts < maxAttempts && ids.length >= 2) {
     attempts++;
     const ia = ids[Math.floor(rand() * ids.length)]!;
@@ -97,6 +100,12 @@ export function buildPairScores(
     const sb = byId.get(ib)!;
     const a = sa[Math.floor(rand() * sa.length)]!;
     const b = sb[Math.floor(rand() * sb.length)]!;
+    const key =
+      a.sampleId < b.sampleId
+        ? `${a.sampleId}|${b.sampleId}`
+        : `${b.sampleId}|${a.sampleId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     pairs.push({
       identityA: ia,
       identityB: ib,
@@ -115,16 +124,33 @@ function ratesAtThreshold(
   genuine: number[],
   impostor: number[],
   thrSim: number,
-): { far: number; frr: number; tar: number } {
-  const far =
-    impostor.length === 0
-      ? NaN
-      : impostor.filter((s) => s >= thrSim).length / impostor.length;
-  const frr =
-    genuine.length === 0
-      ? NaN
-      : genuine.filter((s) => s < thrSim).length / genuine.length;
-  return { far, frr, tar: 1 - frr };
+): {
+  far: number;
+  frr: number;
+  tar: number;
+  trr: number;
+  tp: number;
+  tn: number;
+  fp: number;
+  fn: number;
+} {
+  let tp = 0;
+  let fn = 0;
+  for (const s of genuine) {
+    if (s >= thrSim) tp++;
+    else fn++;
+  }
+  let fp = 0;
+  let tn = 0;
+  for (const s of impostor) {
+    if (s >= thrSim) fp++;
+    else tn++;
+  }
+  const far = impostor.length === 0 ? NaN : fp / impostor.length;
+  const frr = genuine.length === 0 ? NaN : fn / genuine.length;
+  const tar = genuine.length === 0 ? NaN : tp / genuine.length;
+  const trr = impostor.length === 0 ? NaN : tn / impostor.length;
+  return { far, frr, tar, trr, tp, tn, fp, fn };
 }
 
 /** TAR at target FAR via highest similarity threshold that still meets FAR. */
@@ -132,30 +158,58 @@ export function tarAtTargetFar(
   genuine: number[],
   impostor: number[],
   targetFar: number,
-): number | null {
-  if (!genuine.length || !impostor.length) return null;
-  const sortedImp = [...impostor].sort((a, b) => b - a);
-  // Threshold: accept if sim >= t. FAR = fraction impostor >= t.
-  // Find largest t such that FAR <= targetFar.
-  let bestTar: number | null = null;
+): {
+  tar: number | null;
+  thresholdSimilarity: number | null;
+  actualFar: number | null;
+  frr: number | null;
+  trr: number | null;
+} {
+  if (!genuine.length || !impostor.length) {
+    return {
+      tar: null,
+      thresholdSimilarity: null,
+      actualFar: null,
+      frr: null,
+      trr: null,
+    };
+  }
   const candidates = [...new Set([...genuine, ...impostor])].sort(
     (a, b) => b - a,
   );
   for (const t of candidates) {
-    const { far, tar } = ratesAtThreshold(genuine, impostor, t);
-    if (far <= targetFar) {
-      bestTar = tar;
-      break;
+    const r = ratesAtThreshold(genuine, impostor, t);
+    if (r.far <= targetFar) {
+      return {
+        tar: r.tar,
+        thresholdSimilarity: t,
+        actualFar: r.far,
+        frr: r.frr,
+        trr: r.trr,
+      };
     }
   }
-  // Also try continuous threshold from impostor order stats
-  if (bestTar == null && sortedImp.length) {
-    const k = Math.floor(targetFar * sortedImp.length);
-    const t = k <= 0 ? sortedImp[0]! + 1e-9 : sortedImp[Math.min(k, sortedImp.length - 1)]!;
-    const { far, tar } = ratesAtThreshold(genuine, impostor, t);
-    if (far <= targetFar) bestTar = tar;
-  }
-  return bestTar;
+  return {
+    tar: null,
+    thresholdSimilarity: null,
+    actualFar: null,
+    frr: null,
+    trr: null,
+  };
+}
+
+export function filterDatasetBySplit(
+  dataset: LabeledBiometricDataset,
+  split: string,
+): LabeledBiometricDataset {
+  const samples = dataset.samples.filter(
+    (s) => (s.split ?? "all").toLowerCase() === split.toLowerCase(),
+  );
+  return {
+    ...dataset,
+    name: `${dataset.name}:${split}`,
+    samples,
+  };
 }
 
 export function computeVerificationReport(
@@ -164,6 +218,7 @@ export function computeVerificationReport(
     operatingThresholdDistance?: number;
     farTargets?: number[];
     maxImpostorPairs?: number;
+    split?: string;
   } = {},
 ): VerificationReport {
   const operatingDistance = options.operatingThresholdDistance ?? 0.35;
@@ -172,13 +227,21 @@ export function computeVerificationReport(
     1e-2, 1e-3, 1e-4, 1e-5, 1e-6,
   ];
 
-  const pairs = buildPairScores(dataset, {
+  const working =
+    options.split != null
+      ? filterDatasetBySplit(dataset, options.split)
+      : dataset;
+
+  const subjectCount = new Set(working.samples.map((s) => s.identityId)).size;
+  const pairs = buildPairScores(working, {
     maxImpostorPairs: options.maxImpostorPairs,
   });
   const genuine = pairs.filter((p) => p.genuine).map((p) => p.similarity);
   const impostor = pairs.filter((p) => !p.genuine).map((p) => p.similarity);
+  const genuineDistances = genuine.map((s) => 1 - s);
+  const impostorDistances = impostor.map((s) => 1 - s);
 
-  const status = dataset.syntheticPlumbingOnly
+  const status = working.syntheticPlumbingOnly
     ? "SYNTHETIC_PLUMBING_ONLY"
     : genuine.length < 2 || impostor.length < 10
       ? "INSUFFICIENT_DATA"
@@ -192,9 +255,15 @@ export function computeVerificationReport(
     const r = ratesAtThreshold(genuine, impostor, t);
     return {
       thresholdSimilarity: t,
+      thresholdDistance: 1 - t,
       far: r.far,
       frr: r.frr,
       tar: r.tar,
+      trr: r.trr,
+      tp: r.tp,
+      tn: r.tn,
+      fp: r.fp,
+      fn: r.fn,
     };
   });
 
@@ -211,33 +280,85 @@ export function computeVerificationReport(
     }
   }
 
+  const operatingPoints: OperatingPointReport[] = farTargets.map((targetFar) => {
+    const est = farEstimability(impostor.length, targetFar);
+    if (est.status !== "ESTIMABLE") {
+      return {
+        targetFar,
+        estimability: "NOT_ESTIMABLE_WITH_CURRENT_SAMPLE_SIZE",
+        estimabilityReason: est.reason,
+        actualFar: null,
+        thresholdSimilarity: null,
+        thresholdDistance: null,
+        tar: null,
+        frr: null,
+        trr: null,
+        genuineTrials: genuine.length,
+        impostorTrials: impostor.length,
+      };
+    }
+    const hit = tarAtTargetFar(genuine, impostor, targetFar);
+    const thrSim = hit.thresholdSimilarity;
+    const r =
+      thrSim != null ? ratesAtThreshold(genuine, impostor, thrSim) : null;
+    return {
+      targetFar,
+      estimability: "ESTIMABLE",
+      actualFar: hit.actualFar,
+      thresholdSimilarity: hit.thresholdSimilarity,
+      thresholdDistance:
+        hit.thresholdSimilarity != null ? 1 - hit.thresholdSimilarity : null,
+      tar: hit.tar,
+      frr: hit.frr,
+      trr: hit.trr,
+      genuineTrials: genuine.length,
+      impostorTrials: impostor.length,
+      farCi95:
+        r != null ? wilsonInterval95(r.fp, impostor.length) : null,
+      tarCi95: r != null ? wilsonInterval95(r.tp, genuine.length) : null,
+    };
+  });
+
   const tarAtFar: Record<string, number | null> = {};
-  for (const far of farTargets) {
-    tarAtFar[`FAR_${far}`] = tarAtTargetFar(genuine, impostor, far);
+  for (const op of operatingPoints) {
+    tarAtFar[`FAR_${op.targetFar}`] =
+      op.estimability === "ESTIMABLE" ? op.tar : null;
   }
 
   const atOp = ratesAtThreshold(genuine, impostor, operatingSim);
 
   return {
     kind: "BIOMETRIC_1_1_VERIFICATION",
-    datasetName: dataset.name,
-    modelName: dataset.modelName,
-    modelVersion: dataset.modelVersion,
+    datasetName: working.name,
+    modelName: working.modelName,
+    modelVersion: working.modelVersion,
+    subjectCount,
+    imageCount: working.samples.length,
     genuineCount: genuine.length,
     impostorCount: impostor.length,
     genuineSimilarities: genuine,
     impostorSimilarities: impostor,
+    genuineDistances,
+    impostorDistances,
     genuineMean: mean(genuine),
     genuineStd: std(genuine),
     impostorMean: mean(impostor),
     impostorStd: std(impostor),
+    genuineDistanceMean: mean(genuineDistances),
+    impostorDistanceMean: mean(impostorDistances),
     eer,
     eerThresholdSimilarity: eerThr,
+    eerThresholdDistance: eerThr != null ? 1 - eerThr : null,
     roc,
+    operatingPoints,
     tarAtFar,
     farAtThreshold: Number.isFinite(atOp.far) ? atOp.far : null,
     frrAtThreshold: Number.isFinite(atOp.frr) ? atOp.frr : null,
+    tarAtThreshold: Number.isFinite(atOp.tar) ? atOp.tar : null,
+    trrAtThreshold: Number.isFinite(atOp.trr) ? atOp.trr : null,
     operatingThresholdSimilarity: operatingSim,
+    operatingThresholdDistance: operatingDistance,
+    split: options.split,
     status,
   };
 }

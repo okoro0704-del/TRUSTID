@@ -1,6 +1,6 @@
 /**
  * Labeled biometric evaluation types.
- * Accuracy claims require real face embeddings from the production pipeline —
+ * Accuracy claims require real face embeddings from the production pipeline 
  * never synthetic random vectors.
  */
 
@@ -35,6 +35,10 @@ export type LabeledSample = {
   demographics?: DemographicLabels;
   failureModes?: FailureModeTag[];
   qualityScore?: number;
+  /** Optional split label: train | development | validation | test */
+  split?: string;
+  sessionId?: string;
+  imagePath?: string;
 };
 
 export type LabeledBiometricDataset = {
@@ -45,7 +49,7 @@ export type LabeledBiometricDataset = {
   embeddingDims: number;
   samples: LabeledSample[];
   /**
-   * When true, results are plumbing/math checks only — NOT biometric accuracy.
+   * When true, results are plumbing/math checks only  NOT biometric accuracy.
    */
   syntheticPlumbingOnly?: boolean;
 };
@@ -61,10 +65,36 @@ export type PairScore = {
 };
 
 export type FarFrrPoint = {
+  /** Cosine similarity threshold: accept if similarity >= this */
   thresholdSimilarity: number;
+  /** Cosine distance threshold: accept if distance <= this (= 1 - similarity) */
+  thresholdDistance: number;
   far: number;
   frr: number;
   tar: number;
+  trr: number;
+  tp: number;
+  tn: number;
+  fp: number;
+  fn: number;
+};
+
+export type OperatingPointReport = {
+  targetFar: number;
+  estimability:
+    | "ESTIMABLE"
+    | "NOT_ESTIMABLE_WITH_CURRENT_SAMPLE_SIZE";
+  estimabilityReason?: string;
+  actualFar: number | null;
+  thresholdSimilarity: number | null;
+  thresholdDistance: number | null;
+  tar: number | null;
+  frr: number | null;
+  trr: number | null;
+  genuineTrials: number;
+  impostorTrials: number;
+  farCi95?: { low: number; high: number } | null;
+  tarCi95?: { low: number; high: number } | null;
 };
 
 export type VerificationReport = {
@@ -72,21 +102,34 @@ export type VerificationReport = {
   datasetName: string;
   modelName: string;
   modelVersion: number;
+  subjectCount: number;
+  imageCount: number;
   genuineCount: number;
   impostorCount: number;
+  /** Cosine similarities (higher = more similar). Distance = 1 - similarity. */
   genuineSimilarities: number[];
   impostorSimilarities: number[];
+  genuineDistances: number[];
+  impostorDistances: number[];
   genuineMean: number;
   genuineStd: number;
   impostorMean: number;
   impostorStd: number;
+  genuineDistanceMean: number;
+  impostorDistanceMean: number;
   eer: number | null;
   eerThresholdSimilarity: number | null;
+  eerThresholdDistance: number | null;
   roc: FarFrrPoint[];
+  operatingPoints: OperatingPointReport[];
   tarAtFar: Record<string, number | null>;
   farAtThreshold: number | null;
   frrAtThreshold: number | null;
+  tarAtThreshold: number | null;
+  trrAtThreshold: number | null;
   operatingThresholdSimilarity: number;
+  operatingThresholdDistance: number;
+  split?: string;
   status: "MEASURED" | "INSUFFICIENT_DATA" | "SYNTHETIC_PLUMBING_ONLY";
 };
 

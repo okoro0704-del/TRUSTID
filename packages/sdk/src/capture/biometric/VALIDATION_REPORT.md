@@ -1,221 +1,191 @@
 # ArcFace Pipeline Scientific Validation Report
 
-**Commits:** `7a4fb8c` (pipeline) · `56fa5f3` (envelope fix) · hardening phase (fail-closed + Top-K)  
-**Updated:** 2026-09-06  
-**Scope:** Harden existing implementation. No 10B redesign. No invented accuracy/PAD metrics.
+**Baseline commit:** `7f8d197`  
+**Evidence date:** 2026-09-06  
+**Evidence package:** `artifacts/biometric-evidence/`
 
 ---
 
-## Executive status
-
-| Key | Status |
-|-----|--------|
-| **PIPELINE_STATUS** | `PASS` |
-| **MODEL_STATUS** | `PASS` (I/O measured) |
-| **BIOMETRIC_ACCURACY_STATUS** | `UNMEASURED` |
-| **THRESHOLD_STATUS** | `UNCALIBRATED` |
-| **PAD_STATUS** | `INCOMPLETE` |
-| **SEARCH_STATUS** | `PARTIAL` (Top-K+rerank implemented; live HNSW scale `NOT_RUN` without DATABASE_URL) |
-| **SECURITY_STATUS** | `PARTIAL` (full-gallery fallback removed; see security section) |
-| **10B_READINESS_STATUS** | `BLOCKED` |
-
-Evidence tags used below: **MEASURED** · **INFERRED** · **NOT MEASURED** · **NOT IMPLEMENTED**
-
----
-
-## 1. Pipeline verification — MEASURED / PASS
+## EXECUTIVE SUMMARY
 
 ```text
-capture ? MediaPipe landmarks ? 5-pt ArcFace align ? 112×112 RGB NCHW
-? (x-127.5)/128 ? w600k_mbf ? 512-D ? L2 ? cosine distance
+BIOMETRIC_EVIDENCE_STATUS = BLOCKED_BY_DATASET
 ```
 
-| Stage | Status |
-|-------|--------|
-| Detector / alignment / preprocess / model versions bound on enroll | PASS |
-| Enroll vs auth recognition path identical | PASS |
-| Multi-frame enrollment path | PASS (`captureSilentFaceEnrollmentFromWebCamera` + `enrollFromImageFrames`) |
-| Auth silent capture | Single accepted frame + blink liveness (by design) |
+The production ArcFace pipeline and fail-closed search hardening remain structurally validated. **No labeled face dataset** with subject IDs and production-pipeline embeddings is available in this repository or evidence environment. Therefore **no biometric accuracy, threshold calibration, Rank-N, or PAD anti-spoof metrics are reported.**
+
+Synthetic plumbing and Node brute-force ANN timings are **not** biometric accuracy.
 
 ---
 
-## 2. Model verification — MEASURED / PASS
+## PIPELINE — PASS (prior MEASURED)
 
-| Property | Value | Evidence |
-|----------|-------|----------|
-| Input | `input.1` `[1,3,112,112]` float32 | MEASURED |
-| Norm | `(x-127.5)/128` RGB NCHW | MEASURED (code) |
-| Output | `516` `[1,512]` float32 | MEASURED |
-| Raw L2 | not unit | MEASURED |
-| App L2 | yes | MEASURED |
-| Hidden projection | none | MEASURED |
-
----
-
-## 3. Benchmark dataset — NOT MEASURED
-
-No labeled face dataset is checked into the repo.
-
-Harness:
-
-```bash
-node scripts/run-biometric-benchmark.mjs --dataset labeled.json --out report.json
+```text
+capture ? MediaPipe ? 5-pt align ? 112×112 RGB NCHW ? (x-127.5)/128
+? w600k_mbf ? 512-D ? L2 ? cosine distance
 ```
 
-Dataset schema supports `subject_id`, `imagePath`, `split`, `sessionId`, plus **required** 512-D embeddings from the **exact** production pipeline. Demographics only if ground-truth labels exist (never inferred).
+Lower cosine **distance** = greater similarity (`distance = 1 - similarity`).
 
-`--plumbing-only` = metric math only ? **not** accuracy evidence.
+## MODEL — PASS (prior MEASURED)
+
+| Property | Value |
+|----------|--------|
+| Input | `input.1` `[1,3,112,112]` float32 |
+| Output | `[1,512]` float32 |
+| App L2 | yes |
+| Projection | none |
 
 ---
 
-## 4–7. 1:1 results / ROC / EER / FAR–FRR / threshold — NOT MEASURED
+## DATASET
+
+| Item | Value |
+|------|--------|
+| Dataset used | **none** |
+| Subjects | **0** |
+| Images | **0** |
+| Genuine trials | **NOT MEASURED** |
+| Impostor trials | **NOT MEASURED** |
+
+See `DATASET_SPEC.md` for the exact required schema and FAR sample-size table.
+
+## DATASET LIMITATIONS
+
+- No `subject_id` + image/`embedding` corpus checked in
+- No development/test subject-disjoint splits available
+- Cannot estimate FAR at 1e-2…1e-6
+- Cannot calibrate `0.35`
+
+---
+
+## 1:1 VERIFICATION
 
 | Metric | Status |
 |--------|--------|
-| Genuine/impostor distributions | NOT MEASURED |
-| FAR / FRR / TAR / TRR / ROC / EER | NOT MEASURED |
-| TAR @ FAR 1e-2 … 1e-6 | NOT MEASURED |
-| Production threshold selection | **THRESHOLD_STATUS = UNCALIBRATED** |
+| FAR / FRR / TAR / TRR / ROC / EER | **NOT MEASURED** |
+| Genuine / impostor score distributions | **NOT MEASURED** |
+| Operating points FAR 1e-2…1e-6 | **NOT ESTIMABLE** (no trials) |
 
-Legacy operating distance `0.35` remains in code as a placeholder. See `THRESHOLD_POLICY.md`.
+## THRESHOLD CALIBRATION
 
-Gate: `BIOMETRIC_REQUIRE_CALIBRATED_THRESHOLD=true` ? fail closed with `BIOMETRIC_THRESHOLD_UNCALIBRATED`.
+| Item | Value |
+|------|--------|
+| Current threshold | cosine distance **0.35** (legacy placeholder) |
+| FAR @ 0.35 | **NOT MEASURED** |
+| FRR @ 0.35 | **NOT MEASURED** |
+| TAR @ 0.35 | **NOT MEASURED** |
+| Proposed calibrated threshold | **none** |
+| **THRESHOLD_STATUS** | **UNCALIBRATED** |
 
----
+`BIOMETRIC_REQUIRE_CALIBRATED_THRESHOLD` gate is **unchanged** (not weakened).
 
-## 8. 1:N results — NOT MEASURED (architecture hardened)
+## 1:N IDENTIFICATION
 
-Logical identify path (implemented):
+| Metric | Status |
+|--------|--------|
+| Rank-1 / 5 / 10 | **NOT MEASURED** |
+| FPIR / FNIR | **NOT MEASURED** |
+| Candidate recall @ K=10/50/100 | **NOT MEASURED** |
 
-```text
-probe ? ANN Top-K (10|50|100) ? exact cosine rerank ? threshold ? identity | NO_MATCH
-```
+Architecture (implemented, not accuracy-proven): Top-K ? exact rerank ? threshold ? identity/`NO_MATCH`.
+
+## SEARCH INFRASTRUCTURE
 
 | Item | Status |
 |------|--------|
-| Top-1-only accept | REMOVED |
-| Rank-1/5/10 on labeled galleries | NOT MEASURED |
-| Galleries 10K / 100K / 1M biometric | NOT MEASURED |
+| Node brute-force synthetic (prior) | infra-only; **not** recognition accuracy |
+| Live ANN recall vs exact | **NOT MEASURED** |
+| Latency p50/p95/p99 (identify stages) | **NOT MEASURED** (no labeled probes) |
 
----
+## PGVECTOR
 
-## 9. ANN / pgvector results
-
-| Experiment | Status |
-|------------|--------|
-| Node brute-force synthetic 10K/100K | MEASURED previously (infra only) |
-| Live pgvector HNSW 10K/100K/1M | **NOT_RUN** without `DATABASE_URL` |
+```text
+status = ENVIRONMENT_BLOCKED
+reason = DATABASE_URL unavailable
+```
 
 ```bash
 DATABASE_URL=postgres://... node scripts/run-pgvector-hnsw-benchmark.mjs \
-  --sizes 10000,100000,1000000 --top-k 10,50,100 \
-  --m 16 --ef-construction 64 --ef-search 64
+  --sizes 10000,100000,1000000 --top-k 10,50,100
 ```
 
-Configurable: `m`, `efConstruction`, `efSearch`, `K`. Synthetic vectors only.
+## MULTI-FRAME ENROLLMENT
 
----
+Implementation exists (`captureSilentFaceEnrollmentFromWebCamera`, quality-weighted mean).  
+Accuracy delta vs single-frame: **NOT MEASURED**.
 
-## 10. PAD status — INCOMPLETE
+## PAD
 
-| Layer | Coverage |
-|-------|----------|
-| FACE DETECTION | MediaPipe |
-| FACE QUALITY | Heuristic gate |
-| ACTIVE LIVENESS | Blink blendshapes |
-| PRESENTATION ATTACK DETECTION | **INCOMPLETE** |
-| MiniFASNet | **NOT PRESENT** / **NOT IMPLEMENTED** |
+```text
+PAD_STATUS = INCOMPLETE
+```
 
-Blink does **not** claim protection against print, replay, screen, 3D-mask, or deepfake injection.
+Blink = active liveness only. **Not** print/replay/mask/deepfake PAD. No fabricated PAD metrics.
 
-Formal interface: `toFormalPadResult` / `getPadDeploymentStatus()` ? `PAD_STATUS = INCOMPLETE`.
-
----
-
-## 11. Enrollment aggregation — IMPLEMENTED (accuracy effect NOT MEASURED)
-
-- Quality filter via pipeline rejection
-- Duplicate-frame skip (`sim ? 0.995`)
-- Quality-weighted mean ? L2 primary
-- Gallery vectors stored in envelope
-- Auth remains single-frame + blink
-
-Effect on FAR/FRR vs single-frame: **NOT MEASURED** (needs labeled multi-shot set).
-
----
-
-## 12. Security findings — PARTIAL
+## SECURITY
 
 | Control | Status |
 |---------|--------|
-| Full-gallery `matchInMemory` fallback | **REMOVED** — fail closed `BIOMETRIC_SERVICE_UNAVAILABLE` |
-| Bounded ANN Top-K + statement timeout | IMPLEMENTED |
-| Vectors in structured match logs | Avoided (redacted) |
-| Audit events store distance/metadata not raw vectors | PASS (current paths) |
-| TLS in transit | INFERRED (platform HTTPS) — ops must enforce |
-| Encryption at rest | INFERRED / platform-dependent — **NOT MEASURED** here |
-| Legacy template rejection | PASS |
-| Model version on envelope | PASS |
-| Replay protection of biometric HTTP payloads | PARTIAL / platform session+WebAuthn — dedicated biometric nonce **NOT IMPLEMENTED** as dedicated control |
-| Prefer master-device crypto over global 1:N | PRESERVED (Path A 1:1 when `cachedTrustId`) |
+| Full-gallery Node fallback | **REMOVED** — fail closed |
+| Regression `vector-matcher-fail-closed.test.ts` | **PASS** (executed 2026-09-06) |
+| Threshold calibrated | **NO** |
 
-Regression tests: `apps/api/tests/vector-matcher-fail-closed.test.ts`.
+## LIMITATIONS
 
----
+1. Blocked by missing labeled dataset  
+2. Uncalibrated threshold  
+3. Incomplete PAD  
+4. No live pgvector evidence in this environment  
+5. 10B architecture **not** justified  
 
-## 13. Known limitations
+## BENCHMARK CHANGES (this evidence pass)
 
-1. No labeled biometric accuracy numbers  
-2. Threshold uncalibrated  
-3. PAD incomplete  
-4. Live HNSW scale unbenchmarked in CI  
-5. Without pgvector, 1:N fail-closed (hot cache ?256 still works)  
-6. 10B architecture not designed / not claimed  
+Audit fixes (benchmark only — not production recognition):
 
----
-
-## 14. Explicit 10B readiness — BLOCKED
-
-Required before designing/claiming 10B-scale identification:
-
-1. Labeled FAR/FRR/EER/TAR through this pipeline  
-2. Calibrated threshold policy (`CALIBRATED`)  
-3. 1:N Rank/FPIR/FNIR on real galleries the data supports  
-4. Live HNSW metrics at 1M+ with Top-K recall  
-5. Validated PAD (or explicit risk acceptance)  
-6. Shard/ops model based on measured QPS/latency — not Node brute-force  
-
-**Do not claim 10 billion identities supported.**
+1. Deduplicate impostor pair sampling  
+2. Report TP/TN/FP/FN, TRR, cosine **distance** alongside similarity  
+3. FAR target estimability gate (`NOT_ESTIMABLE_WITH_CURRENT_SAMPLE_SIZE` when impostor trials < 1/FAR)  
+4. Wilson 95% CI when estimable  
+5. Optional development/test split evaluation  
+6. CSV + `report.json` evidence export under `--out-dir`  
+7. Default no-dataset path writes `BLOCKED_BY_DATASET` evidence package  
 
 ---
 
-## Completed (this hardening phase)
+## FINAL STATUS
 
-- Removed full-gallery Node fallback; fail-closed ANN unavailable  
-- Explicit 1:1 verify vs 1:N identify APIs/semantics  
-- Top-K ANN + exact cosine rerank + threshold NO_MATCH  
-- Threshold policy doc + `UNCALIBRATED` status + optional hard gate  
-- Multi-frame enrollment capture + quality-weighted aggregation  
-- Formal PAD status = INCOMPLETE  
-- pgvector Top-K SQL helper + live HNSW bench script  
-- Regression tests for fail-closed / rerank / enrollment / PAD  
+```text
+PIPELINE_STATUS              PASS
+MODEL_STATUS                 PASS
+BIOMETRIC_ACCURACY_STATUS    UNMEASURED
+THRESHOLD_STATUS             UNCALIBRATED
+PAD_STATUS                   INCOMPLETE
+SEARCH_STATUS                PARTIAL
+SECURITY_STATUS              PARTIAL
+10B_READINESS_STATUS         BLOCKED
+BIOMETRIC_EVIDENCE_STATUS    BLOCKED_BY_DATASET
+```
 
-## Remaining blockers
+### MEASURED_FACTS
+- Pipeline/model I/O (prior)
+- Fail-closed ANN path + regression PASS
 
-1. Labeled dataset evaluation  
-2. Threshold calibration  
-3. Live pgvector scale numbers  
-4. Complete PAD model  
-5. Biometric payload replay nonce (dedicated) if required by threat model  
+### UNMEASURED_ITEMS
+- All labeled FAR/FRR/EER/TAR/Rank-N/PAD accuracy metrics
 
-## Evidence required before production biometric launch
+### DATASET_LIMITATIONS
+- No compliant labeled corpus present
 
-- Measured FAR/FRR/EER/TAR @ target FARs  
-- Versioned `CALIBRATED` threshold policy  
-- Fail-closed tests green in CI  
-- PAD risk decision documented  
-- Prefer master-device / 1:1 for routine auth  
+### SECURITY_LIMITATIONS
+- Uncalibrated threshold; incomplete PAD
 
-## Evidence required before 10B design
+### REMAINING_BLOCKERS
+1. Labeled production-pipeline dataset (`DATASET_SPEC.md`)
+2. Threshold calibration from measured operating points
+3. Live pgvector HNSW with `DATABASE_URL`
+4. Validated PAD evaluation
 
-- All of the above, plus measured ANN capacity curves and shard strategy inputs — **no redesign in this phase**
+### Sufficient to proceed to 10B architecture design?
+
+**NO.**

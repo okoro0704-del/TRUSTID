@@ -41,6 +41,11 @@ describe("biometric benchmark harness", () => {
     expect(v.status).toBe("SYNTHETIC_PLUMBING_ONLY");
     expect(v.genuineCount).toBeGreaterThan(0);
     expect(v.impostorCount).toBeGreaterThan(0);
+    expect(v.operatingPoints.length).toBeGreaterThan(0);
+    expect(v.genuineDistances).toHaveLength(v.genuineCount);
+    // Low FAR targets must be marked not estimable on tiny plumbing sets
+    const ultra = v.operatingPoints.find((p) => p.targetFar === 1e-6);
+    expect(ultra?.estimability).toBe("NOT_ESTIMABLE_WITH_CURRENT_SAMPLE_SIZE");
 
     const cal = calibrateThreshold(v, BIOMETRIC_PGVECTOR_MAX_DISTANCE);
     expect(cal.status).toBe("SYNTHETIC_PLUMBING_ONLY");
