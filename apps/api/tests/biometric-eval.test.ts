@@ -106,6 +106,13 @@ describe("biometric-eval internal collector", () => {
     });
     expect(exported.statusCode).toBe(200);
     expect(exported.json().validation.DATASET_VALID).toBe(true);
+    const labeledPath = join(dataRoot, "exports", "labeled.json");
+    const { readFileSync } = await import("node:fs");
+    const labeled = JSON.parse(readFileSync(labeledPath, "utf8"));
+    expect(labeled.consent_attestation.participants[0].consent_given).toBe(
+      true,
+    );
+    expect(labeled.samples[0].imageSha256 ?? null).toBeNull();
 
     const del = await app.inject({
       method: "DELETE",
@@ -113,6 +120,17 @@ describe("biometric-eval internal collector", () => {
       headers: { "x-eval-biometric-secret": secret },
     });
     expect(del.statusCode).toBe(200);
+
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(join(dataRoot, "exports", "labeled.json"))).toBe(false);
+
+    const exportedAgain = await app.inject({
+      method: "POST",
+      url: "/internal/biometric-eval/export",
+      headers: { "x-eval-biometric-secret": secret },
+    });
+    expect(exportedAgain.statusCode).toBe(200);
+    expect(exportedAgain.json().validation.stats.subjects).toBe(0);
   });
 
   it("rejects oversized/non-image payloads", async () => {

@@ -41,21 +41,21 @@ export const EVAL_PIPELINE_RECORD = {
 export const EVAL_SESSION_PROTOCOL = [
   {
     key: "enrollment_neutral",
-    title: "Session 1 — Enrollment (neutral)",
+    title: "Session 1  Enrollment (neutral)",
     guidance:
       "Sit in normal indoor light. Look straight at the camera. Neutral expression. Capture at least 3 good frames.",
     conditionTags: ["neutral", "indoor_lighting"],
   },
   {
     key: "lighting_and_expression",
-    title: "Session 2 — Lighting / expression",
+    title: "Session 2  Lighting / expression",
     guidance:
       "After a short break, vary lighting slightly and use a natural expression. At least 3 good frames.",
     conditionTags: ["lighting_variation", "expression_variation"],
   },
   {
     key: "pose_and_distance",
-    title: "Session 3 — Pose / distance",
+    title: "Session 3  Pose / distance",
     guidance:
       "After another break, change distance slightly and turn your head a little. Glasses on/off if applicable. At least 3 good frames.",
     conditionTags: ["pose_variation", "distance_variation"],
@@ -362,6 +362,16 @@ export function storeCapture(input: {
     if (mime === "image/jpeg" && !isJpeg) {
       throw Object.assign(new Error("Invalid JPEG"), { statusCode: 400 });
     }
+    imageSha256 = createHash("sha256").update(buf).digest("hex");
+    // Reject identical image content reused across any session/subject
+    for (const existing of listAllCaptures()) {
+      if (existing.imageSha256 && existing.imageSha256 === imageSha256) {
+        throw Object.assign(
+          new Error("FRAME_REJECTED reason=DUPLICATE_IMAGE_HASH"),
+          { statusCode: 409, errorCode: "DUPLICATE_IMAGE_HASH" },
+        );
+      }
+    }
     const ext = mime === "image/jpeg" ? "jpg" : "png";
     const rel = `subjects/${meta.subject_id}/sessions/${input.sessionId}/images/${captureId}.${ext}`;
     const abs = join(evalRoot(), ...rel.split("/"));
@@ -371,7 +381,21 @@ export function storeCapture(input: {
     ensureDir(dirname(abs));
     writeFileSync(abs, buf);
     imagePath = rel;
-    imageSha256 = createHash("sha256").update(buf).digest("hex");
+  }
+
+  // Reject bit-identical embeddings re-used across sessions for same subject
+  const embFp = input.embedding.map((x) => Number(x).toPrecision(12)).join(",");
+  for (const existing of listAllCaptures()) {
+    if (existing.subject_id !== meta.subject_id) continue;
+    const prevFp = existing.embedding
+      .map((x) => Number(x).toPrecision(12))
+      .join(",");
+    if (prevFp === embFp) {
+      throw Object.assign(
+        new Error("FRAME_REJECTED reason=DUPLICATE_EMBEDDING"),
+        { statusCode: 409, errorCode: "DUPLICATE_EMBEDDING" },
+      );
+    }
   }
 
   const record: EvalCaptureRecord = {
@@ -454,6 +478,11 @@ export function deleteParticipant(subjectId: string): void {
     throw Object.assign(new Error("Not found"), { statusCode: 404 });
   }
   rmSync(dir, { recursive: true, force: true });
+  // Invalidate stale export so deleted biometrics cannot remain in labeled.json
+  const exportPath = join(evalRoot(), "exports", "labeled.json");
+  if (existsSync(exportPath)) {
+    rmSync(exportPath, { force: true });
+  }
   refreshManifest();
 }
 

@@ -10,6 +10,7 @@ import {
 import {
   EVAL_DATASET_NAME,
   EVAL_DATASET_VERSION,
+  getParticipant,
   type EvalCaptureRecord,
 } from "./store.js";
 
@@ -47,6 +48,23 @@ function assignSplits(
 export function buildLabeledExportFromCaptures(captures: EvalCaptureRecord[]) {
   const subjects = [...new Set(captures.map((c) => c.subject_id))].sort();
   const splits = assignSplits(subjects);
+
+  const consentParticipants = subjects.map((sid) => {
+    const meta = getParticipant(sid);
+    if (!meta?.consent?.consent_given) {
+      throw Object.assign(
+        new Error(`Missing consent for subject ${sid}`),
+        { statusCode: 400, errorCode: "CONSENT_REQUIRED" },
+      );
+    }
+    return {
+      subject_id: sid,
+      consent_given: true as const,
+      consent_timestamp: meta.consent.consent_timestamp,
+      dataset_version: meta.consent.dataset_version,
+    };
+  });
+
   return {
     name: EVAL_DATASET_NAME,
     datasetVersion: EVAL_DATASET_VERSION,
@@ -54,6 +72,10 @@ export function buildLabeledExportFromCaptures(captures: EvalCaptureRecord[]) {
     modelVersion: BIOMETRIC_AI_MODEL_VERSION,
     pipelineVersion: BIOMETRIC_PIPELINE_VERSION,
     embeddingDims: BIOMETRIC_AI_EMBEDDING_DIMS,
+    consent_attestation: {
+      all_subjects_consented: true,
+      participants: consentParticipants,
+    },
     samples: captures.map((c) => ({
       sampleId: c.sampleId,
       subject_id: c.subject_id,
@@ -61,6 +83,7 @@ export function buildLabeledExportFromCaptures(captures: EvalCaptureRecord[]) {
       sessionId: c.sessionId,
       split: splits.get(c.subject_id) ?? "development",
       imagePath: c.imagePath,
+      imageSha256: c.imageSha256,
       embedding: c.embedding,
       failureModes: c.conditionTags,
       qualityScore: c.qualityScore,

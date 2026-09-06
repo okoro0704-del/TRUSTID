@@ -125,4 +125,59 @@ describe("biometric evaluation dataset", () => {
     });
     expect(r.errors.some((e) => e.code === "DUPLICATE_IMAGE_HASH")).toBe(true);
   });
+
+  it("detects duplicate embeddings and cross-subject session ids", () => {
+    const v = emb(9);
+    const r = validateLabeledDatasetJson({
+      modelName: EVAL_PIPELINE_RECORD.modelName,
+      modelVersion: 1,
+      samples: [
+        {
+          subject_id: "subj000000000001",
+          sampleId: "a",
+          sessionId: "sess_shared",
+          split: "development",
+          embedding: v,
+        },
+        {
+          subject_id: "subj000000000002",
+          sampleId: "b",
+          sessionId: "sess_shared",
+          split: "test",
+          embedding: v,
+        },
+      ],
+    });
+    expect(r.errors.some((e) => e.code === "DUPLICATE_EMBEDDING")).toBe(true);
+    expect(r.errors.some((e) => e.code === "DUPLICATE_SESSION_ID")).toBe(true);
+  });
+
+  it("requires consent attestation subjects to cover samples", () => {
+    const r = validateLabeledDatasetJson({
+      modelName: EVAL_PIPELINE_RECORD.modelName,
+      modelVersion: 1,
+      consent_attestation: {
+        all_subjects_consented: true,
+        participants: [
+          {
+            subject_id: "other",
+            consent_given: true,
+            consent_timestamp: "2026-01-01T00:00:00.000Z",
+            dataset_version: "1.0.0",
+          },
+        ],
+      },
+      samples: [
+        {
+          subject_id: "subj000000000001",
+          sampleId: "a",
+          split: "development",
+          embedding: emb(1),
+        },
+      ],
+    });
+    expect(r.errors.some((e) => e.code === "CONSENT_SUBJECT_MISSING")).toBe(
+      true,
+    );
+  });
 });

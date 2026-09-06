@@ -106,9 +106,17 @@ export type LabeledExportSample = {
   sessionId: string;
   split: "development" | "validation" | "test";
   imagePath?: string;
+  imageSha256?: string;
   embedding: number[];
   failureModes?: string[];
   qualityScore?: number;
+};
+
+export type LabeledExportConsentParticipant = {
+  subject_id: string;
+  consent_given: true;
+  consent_timestamp: string;
+  dataset_version: string;
 };
 
 export type LabeledExportDataset = {
@@ -118,5 +126,10 @@ export type LabeledExportDataset = {
   modelVersion: number;
   pipelineVersion: string;
   embeddingDims: number;
+  /** Consent records for every subject represented in samples */
+  consent_attestation?: {
+    all_subjects_consented: boolean;
+    participants: LabeledExportConsentParticipant[];
+  };
   samples: LabeledExportSample[];
 };

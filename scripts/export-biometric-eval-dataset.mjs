@@ -22,11 +22,22 @@ function readJson(p) {
   return JSON.parse(readFileSync(p, "utf8"));
 }
 
-function listCaptures() {
+function listCapturesAndConsent() {
   const subjectsDir = join(dataRoot, "subjects");
-  if (!existsSync(subjectsDir)) return [];
-  const out = [];
+  if (!existsSync(subjectsDir)) return { captures: [], consentBySubject: new Map() };
+  const captures = [];
+  const consentBySubject = new Map();
   for (const sid of readdirSync(subjectsDir)) {
+    const metaPath = join(subjectsDir, sid, "meta.json");
+    if (!existsSync(metaPath)) continue;
+    const meta = readJson(metaPath);
+    if (meta?.status === "deleted") continue;
+    if (!meta?.consent?.consent_given) continue;
+    consentBySubject.set(sid, {
+      consent_given: true,
+      consent_timestamp: meta.consent.consent_timestamp,
+      dataset_version: meta.consent.dataset_version,
+    });
     const sessionsDir = join(subjectsDir, sid, "sessions");
     if (!existsSync(sessionsDir)) continue;
     for (const sess of readdirSync(sessionsDir)) {
@@ -34,11 +45,11 @@ function listCaptures() {
       if (!existsSync(capDir)) continue;
       for (const f of readdirSync(capDir)) {
         if (!f.endsWith(".json")) continue;
-        out.push(readJson(join(capDir, f)));
+        captures.push(readJson(join(capDir, f)));
       }
     }
   }
-  return out;
+  return { captures, consentBySubject };
 }
 
 async function loadExport() {
@@ -68,9 +79,9 @@ async function loadExport() {
   }
 }
 
-const captures = listCaptures();
+const { captures, consentBySubject } = listCapturesAndConsent();
 const { exportMod, validateMod } = await loadExport();
-const labeled = exportMod.buildLabeledExport({ captures });
+const labeled = exportMod.buildLabeledExport({ captures, consentBySubject });
 const validation = validateMod.validateLabeledDatasetJson(labeled);
 const outDir = join(dataRoot, "exports");
 mkdirSync(outDir, { recursive: true });

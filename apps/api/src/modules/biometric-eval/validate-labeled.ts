@@ -1,6 +1,6 @@
 /**
  * Validate a labeled.json biometric evaluation dataset (DATASET_SPEC.md).
- * Pure functions ó no Node fs ó so browser/tests can share logic.
+ * Pure functions ù no Node fs ù so browser/tests can share logic.
  */
 import {
   BIOMETRIC_AI_EMBEDDING_DIMS,
@@ -98,10 +98,52 @@ export function validateLabeledDatasetJson(
   const sampleIds = new Set<string>();
   const imagePaths = new Set<string>();
   const imageHashes = new Map<string, string>();
+  const embeddingFingerprints = new Map<string, string>();
+  const sessionOwners = new Map<string, string>();
   const splits: Record<string, number> = {};
   const sessionKeys = new Set<string>();
-
   const list = Array.isArray(samples) ? samples : [];
+
+  // Consent attestation (collector exports)
+  const consentBlock = obj.consent_attestation;
+  const consentedSubjects = new Set<string>();
+  if (consentBlock && typeof consentBlock === "object") {
+    const participants = (consentBlock as { participants?: unknown })
+      .participants;
+    if (!Array.isArray(participants) || participants.length === 0) {
+      errors.push({
+        code: "CONSENT_ATTESTATION_EMPTY",
+        message: "consent_attestation.participants must be a non-empty array",
+      });
+    } else {
+      for (const p of participants) {
+        if (!p || typeof p !== "object") continue;
+        const row = p as Record<string, unknown>;
+        const sid = String(row.subject_id ?? "");
+        if (!sid || row.consent_given !== true) {
+          errors.push({
+            code: "CONSENT_INVALID",
+            message: `consent row missing subject_id or consent_given=true`,
+          });
+          continue;
+        }
+        if (!row.consent_timestamp) {
+          errors.push({
+            code: "CONSENT_TIMESTAMP_MISSING",
+            message: `consent_timestamp missing for ${sid}`,
+          });
+        }
+        consentedSubjects.add(sid);
+      }
+    }
+  } else if (list.length > 0) {
+    warnings.push({
+      code: "CONSENT_ATTESTATION_MISSING",
+      message:
+        "consent_attestation absent; collector exports should include it",
+    });
+  }
+
   for (let i = 0; i < list.length; i++) {
     const s = list[i] as RawSample;
     const pathPrefix = `samples[${i}]`;
@@ -138,6 +180,18 @@ export function validateLabeledDatasetJson(
         message: "embedding must be finite numbers",
         path: pathPrefix,
       });
+    } else {
+      // Exact duplicate embedding detection (bit-identical float sequence)
+      const fp = emb.map((x) => Number(x).toPrecision(12)).join(",");
+      const prevEmb = embeddingFingerprints.get(fp);
+      if (prevEmb && prevEmb !== sampleId) {
+        errors.push({
+          code: "DUPLICATE_EMBEDDING",
+          message: `identical embedding shared by ${prevEmb} and ${sampleId}`,
+          path: pathPrefix,
+        });
+      }
+      embeddingFingerprints.set(fp, sampleId);
     }
 
     const split = splitOf(s);
@@ -203,14 +257,44 @@ export function validateLabeledDatasetJson(
       imageHashes.set(hash, sampleId);
     }
 
+    const sessionId = String(s.sessionId ?? "");
+    if (sessionId && sid) {
+      const owner = sessionOwners.get(sessionId);
+      if (owner && owner !== sid) {
+        errors.push({
+          code: "DUPLICATE_SESSION_ID",
+          message: `sessionId ${sessionId} claimed by subjects ${owner} and ${sid}`,
+          path: pathPrefix,
+        });
+      }
+      sessionOwners.set(sessionId, sid);
+      sessionKeys.add(`${sid}::${sessionId}`);
+    }
+
     if (!sid) continue;
 
-    const sessionId = String(s.sessionId ?? "");
-    if (sessionId) sessionKeys.add(`${sid}::${sessionId}`);
+    if (consentedSubjects.size > 0 && !consentedSubjects.has(sid)) {
+      errors.push({
+        code: "CONSENT_SUBJECT_MISSING",
+        message: `subject ${sid} appears in samples without consent_attestation`,
+        path: pathPrefix,
+      });
+    }
 
     const arr = subjectSamples.get(sid) ?? [];
     arr.push(s);
     subjectSamples.set(sid, arr);
+  }
+
+  if (consentedSubjects.size > 0) {
+    for (const sid of consentedSubjects) {
+      if (!subjectSamples.has(sid)) {
+        warnings.push({
+          code: "CONSENT_ORPHAN_SUBJECT",
+          message: `consent listed for ${sid} but no samples present`,
+        });
+      }
+    }
   }
 
   // Subject-disjoint splits: a subject must not appear in more than one split

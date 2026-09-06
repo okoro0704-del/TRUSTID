@@ -34,7 +34,7 @@ can produce real biometric evidence.
 
 Participants must check an explicit consent box before a `subject_id` is created.
 
-Stored:
+Stored on participant meta and re-exported as `consent_attestation` in `labeled.json`:
 
 ```text
 consent_given
@@ -42,13 +42,13 @@ consent_timestamp
 dataset_version
 ```
 
-Capture APIs refuse participants without consent.
+Capture APIs refuse participants without consent. Export fails if any sample subject lacks consent meta.
 
 ## 4. Participant workflow
 
 1. Unlock with evaluation secret  
 2. Consent  
-3. Receive random `subject_id` (UUID hex ó not email/phone)  
+3. Receive random `subject_id` (UUID hex ù not email/phone)  
 4. Run Session 1 ? 2 ? 3 (separate sessions, not one continuous stream)  
 5. Capture ?3 accepted frames per session via production pipeline  
 6. Admin exports `labeled.json`
@@ -72,6 +72,8 @@ FRAME_REJECTED reason=LOW_QUALITY
 | `enrollment_neutral` | Normal indoor, neutral face |
 | `lighting_and_expression` | Lighting / expression variation |
 | `pose_and_distance` | Pose / distance / glasses if applicable |
+
+Each session gets a new `sessionId` (UUID). The collector UI stops and restarts the camera between sessions so capture is not one continuous stream.
 
 ## 7. Quality control
 
@@ -114,7 +116,7 @@ Writes `artifacts/biometric-evaluation/exports/labeled.json` (or `TRUSTID_EVAL_D
 
 ## 12. Retention / deletion
 
-`DELETE /internal/biometric-eval/participants/:subjectId` removes images, embeddings, and session metadata for that subject and refreshes the manifest.
+`DELETE /internal/biometric-eval/participants/:subjectId` removes images, embeddings, and session metadata for that subject, deletes any existing `exports/labeled.json`, and refreshes the manifest. Re-export after deletion.
 
 ## 13. Benchmark procedure
 
@@ -131,7 +133,7 @@ node scripts/run-biometric-benchmark.mjs \
 
 ## 14. Known limitations
 
-- `PAD_STATUS = INCOMPLETE` ó active blink is recorded as `active_liveness_check`, not anti-spoof  
+- `PAD_STATUS = INCOMPLETE` ù active blink is recorded as `active_liveness_check`, not anti-spoof  
 - Collection UI does not show similarity scores  
 - Evidence stays blocked until real volunteers are collected and benchmarked  
 - Does not change ArcFace / thresholds / 1:N architecture  
