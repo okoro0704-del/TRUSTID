@@ -17,7 +17,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@trustid/shared": "*"
+    "@mediapipe/tasks-vision": "^0.10.18",
+    "@trustid/shared": "*",
+    "onnxruntime-web": "^1.21.0"
   },
   "devDependencies": {
     "jsdom": "^26.0.0",

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import {
   BIOMETRIC_FACE_EMBEDDING_DIMS,
-  BIOMETRIC_AI_EMBEDDING_DIMS,
+  BIOMETRIC_ERROR_CODES,
   BIOMETRIC_MODALITIES,
 } from "@trustid/shared";
 import { vectorizeFaceFromRgba } from "../src/capture/face-vectorizer.js";
@@ -34,7 +34,9 @@ describe("silent-camera-web", () => {
     document.body.innerHTML = "";
   });
 
-  it("stops camera tracks immediately after capture", async () => {
+  it(
+    "stops camera tracks and does not invent spatial embeddings on model miss",
+    async () => {
     const stop = vi.fn();
     const fakeRgba = new Uint8ClampedArray(32 * 32 * 4);
     for (let i = 0; i < fakeRgba.length; i += 4) {
@@ -74,11 +76,22 @@ describe("silent-camera-web", () => {
     });
 
     const result = await captureSilentFaceFromWebCamera(getStream);
-    expect(result?.payload.modality).toBe(BIOMETRIC_MODALITIES.FACE);
-    expect(result?.payload.vector).toHaveLength(BIOMETRIC_AI_EMBEDDING_DIMS);
     expect(stop).toHaveBeenCalledTimes(1);
     expect(video.remove).toHaveBeenCalled();
-  });
+    // Without MediaPipe/ONNX models in jsdom, must fail closed — never spatial 512-D
+    if (result?.payload.vector?.length) {
+      expect(result.payload.modelName).not.toMatch(/spatial_fallback/);
+    } else {
+      expect(
+        result?.errorCode === BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_UNAVAILABLE ||
+          result?.errorCode === BIOMETRIC_ERROR_CODES.NO_FACE ||
+          result?.errorCode === BIOMETRIC_ERROR_CODES.LIVENESS_FAILED ||
+          result == null,
+      ).toBe(true);
+    }
+  },
+    15_000,
+  );
 });
 
 describe("SilentCameraCapturer", () => {
@@ -99,19 +112,25 @@ describe("SilentCameraCapturer", () => {
     expect(payload?.modality).toBe(BIOMETRIC_MODALITIES.FINGERPRINT);
   });
 
-  it("returns face payload from native bridge when confidence is sufficient", async () => {
+  it("rejects legacy native embedding-only captures (require jpeg → ArcFace)", async () => {
     const embedding = Array.from({ length: BIOMETRIC_FACE_EMBEDDING_DIMS }, (_, i) =>
       i === 0 ? 1 : 0,
     );
     const capturer = new SilentCameraCapturer({
       nativeBridge: {
         isAvailable: async () => ({ available: true }),
+        // Legacy path: embedding without jpeg — must not authenticate
         captureFaceVector: async () => ({ embedding, confidence: 0.9 }),
       },
+      runWebAuthn: async () => ({
+        id: "cred-id",
+        rawId: "raw",
+        response: { authenticatorData: "ad", signature: "sig" },
+      }),
     });
 
     const payload = await capturer.captureWithFallback();
-    expect(payload?.modality).toBe(BIOMETRIC_MODALITIES.FACE);
-    expect(payload?.embedding).toHaveLength(BIOMETRIC_FACE_EMBEDDING_DIMS);
+    // Face path fails closed; fingerprint/WebAuthn fallback may apply
+    expect(payload?.modality).not.toBe(BIOMETRIC_MODALITIES.FACE);
   });
 });

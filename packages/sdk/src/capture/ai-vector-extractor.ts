@@ -1,42 +1,39 @@
-import { BIOMETRIC_AI_EMBEDDING_DIMS, BIOMETRIC_AI_MODEL_NAME, BIOMETRIC_MODALITIES } from "@trustid/shared";
+/**
+ * Public face biometric extractor API.
+ * Production path: MediaPipe detect → ArcFace align/embed.
+ * spatial_fallback_v1 is DEV/TEST only and never used silently.
+ */
+import {
+  BIOMETRIC_AI_EMBEDDING_DIMS,
+  BIOMETRIC_ERROR_CODES,
+  BIOMETRIC_MODALITIES,
+} from "@trustid/shared";
 import { detectFacePresence } from "./face-presence.js";
 import { vectorizeFaceFromRgba } from "./face-vectorizer.js";
+import {
+  extractFaceEmbeddingFromImageData,
+  type FacePipelineOptions,
+} from "./biometric/pipeline.js";
+import type { AIVectorPayload } from "./biometric/types.js";
+import { BiometricPipelineError } from "./biometric/errors.js";
 
-export type AIVectorPayload = {
-  modality: typeof BIOMETRIC_MODALITIES.FACE | typeof BIOMETRIC_MODALITIES.FINGERPRINT;
-  vector: number[];
-  modelName: string;
-  modelVersion: number;
-  confidence: number;
-};
+export type { AIVectorPayload } from "./biometric/types.js";
+export type { FacePipelineOptions };
 
-export type AIVectorExtractorOptions = {
-  /** Base URL for face-api model weights (optional peer: @vladmandic/face-api) */
+export type AIVectorExtractorOptions = FacePipelineOptions & {
+  /**
+   * @deprecated Ignored. Production never loads arbitrary unverified URLs
+   * without the TrustID model manifest + integrity check.
+   */
   modelBaseUrl?: string;
-  /** Optional ONNX MobileFaceNet model URL (optional peer: onnxruntime-web) */
+  /** @deprecated Removed — face-api path deleted. */
   onnxModelUrl?: string;
+  /**
+   * Explicit DEV/TEST flag. When true, spatial_fallback_dev_v1 may be used
+   * ONLY if real models are unavailable. Default false.
+   */
+  allowSpatialDevFallback?: boolean;
 };
-
-function normalize512(v: number[]): number[] {
-  const out =
-    v.length === BIOMETRIC_AI_EMBEDDING_DIMS ? [...v] : projectTo512(v);
-  const norm = Math.sqrt(out.reduce((s, x) => s + x * x, 0));
-  if (norm === 0) return out;
-  return out.map((x) => x / norm);
-}
-
-/** Deterministic projection to 512-D preserving similarity structure */
-export function projectTo512(v: number[]): number[] {
-  const out = new Array<number>(BIOMETRIC_AI_EMBEDDING_DIMS).fill(0);
-  for (let i = 0; i < BIOMETRIC_AI_EMBEDDING_DIMS; i++) {
-    let sum = 0;
-    for (let j = 0; j < v.length; j++) {
-      sum += v[j]! * Math.cos((i + 1) * (j + 1) * 0.017);
-    }
-    out[i] = sum;
-  }
-  return normalize512(out);
-}
 
 function captureFrameFromVideo(video: HTMLVideoElement): ImageData | null {
   const width = video.videoWidth;
@@ -56,83 +53,99 @@ function captureFrameFromVideo(video: HTMLVideoElement): ImageData | null {
   return imageData;
 }
 
-async function tryImport(moduleName: string): Promise<unknown | null> {
-  try {
-    return await import(/* @vite-ignore */ moduleName);
-  } catch {
-    return null;
-  }
+/**
+ * @deprecated Do not use for face identity. Kept for fingerprint keystore
+ * hashing helpers only — NOT a biometric projection.
+ */
+export function projectTo512(v: number[]): number[] {
+  const out = new Array<number>(BIOMETRIC_AI_EMBEDDING_DIMS).fill(0);
+  const n = Math.min(v.length, BIOMETRIC_AI_EMBEDDING_DIMS);
+  for (let i = 0; i < n; i++) out[i] = v[i] ?? 0;
+  const norm = Math.sqrt(out.reduce((s, x) => s + x * x, 0));
+  if (norm === 0) return out;
+  return out.map((x) => x / norm);
+}
+
+function spatialDevOnly(imageData: ImageData): AIVectorPayload | null {
+  const presence = detectFacePresence(
+    imageData.data,
+    imageData.width,
+    imageData.height,
+  );
+  if (!presence.present) return null;
+  const { embedding, confidence } = vectorizeFaceFromRgba(
+    imageData.data,
+    imageData.width,
+    imageData.height,
+    BIOMETRIC_AI_EMBEDDING_DIMS,
+  );
+  const score = Math.min(confidence, presence.confidence);
+  if (score < 0.42) return null;
+  return {
+    modality: BIOMETRIC_MODALITIES.FACE,
+    vector: embedding,
+    modelName: "spatial_fallback_dev_v1",
+    modelVersion: 1,
+    confidence: score,
+    errorCode: BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_UNAVAILABLE,
+    errorMessage: "DEV spatial fallback — not valid for production identity",
+  };
 }
 
 /**
- * On-device AI face vector extractor.
- * Uses optional @vladmandic/face-api or onnxruntime-web when installed;
- * otherwise in-memory spatial projection (512-D, zero disk).
+ * On-device face embedding extractor (production ArcFace pipeline).
  */
 export class AIVectorExtractor {
-  private faceApi: {
-    nets: {
-      ssdMobilenetv1: { loadFromUri: (u: string) => Promise<void> };
-      faceLandmark68Net: { loadFromUri: (u: string) => Promise<void> };
-      faceRecognitionNet: { loadFromUri: (u: string) => Promise<void> };
-    };
-    detectSingleFace: (input: HTMLCanvasElement) => {
-      withFaceLandmarks: () => {
-        withFaceDescriptor: () => Promise<{
-          descriptor: Float32Array | number[];
-          detection: { score: number };
-        } | null>;
-      };
-    };
-  } | null = null;
-  private faceApiReady = false;
-  private onnxSession: {
-    run: (feeds: Record<string, unknown>) => Promise<Record<string, { data: Float32Array }>>;
-  } | null = null;
   private readonly options: AIVectorExtractorOptions;
+  private ready = false;
+  private lastError: string | null = null;
 
   constructor(options: AIVectorExtractorOptions = {}) {
     this.options = options;
   }
 
   async loadModels(): Promise<void> {
-    if (this.options.onnxModelUrl) {
-      const ort = await tryImport("onnxruntime-web");
-      if (ort && typeof ort === "object" && "InferenceSession" in ort) {
-        const InferenceSession = (ort as { InferenceSession: { create: (url: string, opts: unknown) => Promise<unknown> } })
-          .InferenceSession;
-        try {
-          this.onnxSession = (await InferenceSession.create(this.options.onnxModelUrl, {
-            executionProviders: ["wasm"],
-          })) as AIVectorExtractor["onnxSession"];
-          return;
-        } catch {
-          /* fall through */
-        }
-      }
-    }
+    // Eager warm-up with a hard timeout so jsdom/tests fail closed quickly
+    const base = this.options.modelBaseUrl ?? "/models/trustid";
+    const warm = (async () => {
+      const { getSharedFaceLandmarker } = await import("./biometric/detector-mediapipe.js");
+      const { getArcFaceSession } = await import("./biometric/recognizer-arcface.js");
+      await getSharedFaceLandmarker(base);
+      await getArcFaceSession(base);
+    })();
 
-    if (!this.options.modelBaseUrl) return;
+    const timeout = new Promise<never>((_, reject) => {
+      setTimeout(
+        () => reject(new Error("Biometric model warm-up timed out")),
+        3_000,
+      );
+    });
 
-    const mod = await tryImport("@vladmandic/face-api");
-    if (!mod || typeof mod !== "object" || !("nets" in mod)) return;
-
-    this.faceApi = mod as AIVectorExtractor["faceApi"];
-    const base = this.options.modelBaseUrl.replace(/\/$/, "");
     try {
-      await Promise.all([
-        this.faceApi!.nets.ssdMobilenetv1.loadFromUri(base),
-        this.faceApi!.nets.faceLandmark68Net.loadFromUri(base),
-        this.faceApi!.nets.faceRecognitionNet.loadFromUri(base),
-      ]);
-      this.faceApiReady = true;
-    } catch {
-      this.faceApiReady = false;
+      await Promise.race([warm, timeout]);
+      this.ready = true;
+      this.lastError = null;
+    } catch (err) {
+      this.ready = false;
+      this.lastError = err instanceof Error ? err.message : String(err);
+      if (!this.options.allowSpatialDevFallback) {
+        throw new BiometricPipelineError(
+          BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_UNAVAILABLE,
+          this.lastError,
+        );
+      }
     }
   }
 
+  isReady(): boolean {
+    return this.ready;
+  }
+
+  getLastError(): string | null {
+    return this.lastError;
+  }
+
   async fromCameraStream(video: HTMLVideoElement): Promise<AIVectorPayload | null> {
-    // Retry a few frames so autofocus / exposure can settle — never accept an empty spin.
     for (let attempt = 0; attempt < 6; attempt++) {
       if (attempt > 0) {
         await new Promise((r) => setTimeout(r, 180 + attempt * 80));
@@ -140,11 +153,11 @@ export class AIVectorExtractor {
       const imageData = captureFrameFromVideo(video);
       if (!imageData) continue;
       try {
-        let result: AIVectorPayload | null = null;
-        if (this.onnxSession) result = await this.inferOnnx(imageData);
-        else if (this.faceApiReady && this.faceApi) result = await this.inferFaceApi(imageData);
-        else result = this.inferSpatial(imageData);
-        if (result && result.confidence >= 0.42) return result;
+        const result = await this.fromImageData(imageData);
+        if (result && !result.errorCode) return result;
+        if (result?.errorCode === BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_UNAVAILABLE) {
+          return result;
+        }
       } finally {
         imageData.data.fill(0);
       }
@@ -153,106 +166,44 @@ export class AIVectorExtractor {
   }
 
   async fromImageData(imageData: ImageData): Promise<AIVectorPayload | null> {
-    try {
-      if (this.onnxSession) return await this.inferOnnx(imageData);
-      if (this.faceApiReady && this.faceApi) return await this.inferFaceApi(imageData);
-      return this.inferSpatial(imageData);
-    } finally {
-      imageData.data.fill(0);
+    const result = await extractFaceEmbeddingFromImageData(imageData, {
+      modelBaseUrl: this.options.modelBaseUrl ?? "/models/trustid",
+      rejectMultipleFaces: this.options.rejectMultipleFaces,
+      allowDevPadBypass: this.options.allowDevPadBypass,
+      pad: this.options.pad,
+      preliminaryQualityGate: (img: ImageData) => {
+        // Optional cheap gate — never establishes identity face presence alone
+        const p = detectFacePresence(img.data, img.width, img.height);
+        return p.present || p.confidence > 0.2;
+      },
+    });
+
+    if (result.ok) return result.payload;
+
+    if (
+      result.code === BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_UNAVAILABLE &&
+      this.options.allowSpatialDevFallback
+    ) {
+      return spatialDevOnly(imageData);
     }
-  }
-
-  private inferSpatial(imageData: ImageData): AIVectorPayload | null {
-    const presence = detectFacePresence(
-      imageData.data,
-      imageData.width,
-      imageData.height,
-    );
-    if (!presence.present) return null;
-
-    const { embedding, confidence } = vectorizeFaceFromRgba(
-      imageData.data,
-      imageData.width,
-      imageData.height,
-      BIOMETRIC_AI_EMBEDDING_DIMS,
-    );
-    const score = Math.min(confidence, presence.confidence);
-    if (score < 0.42) return null;
 
     return {
       modality: BIOMETRIC_MODALITIES.FACE,
-      vector: embedding,
-      modelName: "spatial_fallback_v1",
-      modelVersion: 1,
-      confidence: score,
-    };
-  }
-
-  private async inferFaceApi(imageData: ImageData): Promise<AIVectorPayload | null> {
-    const faceapi = this.faceApi!;
-    const canvas = document.createElement("canvas");
-    canvas.width = imageData.width;
-    canvas.height = imageData.height;
-    const ctx = canvas.getContext("2d")!;
-    ctx.putImageData(imageData, 0, 0);
-
-    const detection = await faceapi
-      .detectSingleFace(canvas)
-      .withFaceLandmarks()
-      .withFaceDescriptor();
-
-    canvas.width = 0;
-    canvas.height = 0;
-
-    if (!detection) return this.inferSpatial(imageData);
-
-    const descriptor = Array.from(detection.descriptor as ArrayLike<number>);
-    const score = detection.detection.score;
-    if (score < 0.5) return null;
-    return {
-      modality: BIOMETRIC_MODALITIES.FACE,
-      vector: projectTo512(descriptor),
-      modelName: BIOMETRIC_AI_MODEL_NAME,
-      modelVersion: 1,
-      confidence: score,
-    };
-  }
-
-  private async inferOnnx(imageData: ImageData): Promise<AIVectorPayload | null> {
-    const ort = await tryImport("onnxruntime-web");
-    if (!ort || typeof ort !== "object" || !("Tensor" in ort) || !this.onnxSession) {
-      return this.inferSpatial(imageData);
-    }
-
-    const Tensor = (ort as { Tensor: new (type: string, data: Float32Array, dims: number[]) => unknown })
-      .Tensor;
-    const input = new Float32Array(imageData.width * imageData.height * 3);
-    let o = 0;
-    for (let i = 0; i < imageData.data.length; i += 4) {
-      input[o++] = (imageData.data[i] ?? 0) / 255;
-      input[o++] = (imageData.data[i + 1] ?? 0) / 255;
-      input[o++] = (imageData.data[i + 2] ?? 0) / 255;
-    }
-
-    const tensor = new Tensor("float32", input, [1, 3, imageData.height, imageData.width]);
-    const outputs = await this.onnxSession.run({ input: tensor });
-    const first = Object.values(outputs)[0];
-    if (!first?.data) return this.inferSpatial(imageData);
-
-    const raw = Array.from(first.data);
-    return {
-      modality: BIOMETRIC_MODALITIES.FACE,
-      vector: normalize512(raw),
-      modelName: BIOMETRIC_AI_MODEL_NAME,
-      modelVersion: 1,
-      confidence: 0.85,
+      vector: [],
+      modelName: "none",
+      modelVersion: 0,
+      confidence: 0,
+      errorCode: result.code,
+      errorMessage: result.message,
     };
   }
 }
 
 let sharedExtractor: AIVectorExtractor | null = null;
 
-export function createAIVectorExtractor(options?: AIVectorExtractorOptions): AIVectorExtractor {
+export function createAIVectorExtractor(
+  options?: AIVectorExtractorOptions,
+): AIVectorExtractor {
   return new AIVectorExtractor(options);
 }
 
@@ -261,7 +212,11 @@ export async function getSharedAIVectorExtractor(
 ): Promise<AIVectorExtractor> {
   if (!sharedExtractor) {
     sharedExtractor = new AIVectorExtractor(options);
-    await sharedExtractor.loadModels();
+    try {
+      await sharedExtractor.loadModels();
+    } catch {
+      // Caller inspects payloads / errors; do not spatial-fallback here.
+    }
   }
   return sharedExtractor;
 }
@@ -269,5 +224,16 @@ export async function getSharedAIVectorExtractor(
 export const aiVectorExtractor = {
   create: createAIVectorExtractor,
   getShared: getSharedAIVectorExtractor,
+  /** @deprecated Not a biometric transform */
   projectTo512,
 };
+
+export { extractFaceEmbeddingFromImageData } from "./biometric/pipeline.js";
+export { enrollFromImageFrames, buildFaceTemplateEnvelope } from "./biometric/enrollment.js";
+export {
+  FailClosedPadDetector,
+  DevBypassPadDetector,
+  MediaPipeBlinkPadDetector,
+  createProductionPadDetector,
+} from "./biometric/pad.js";
+export type { FacePresentationAttackDetector, FacePadResult } from "./biometric/types.js";

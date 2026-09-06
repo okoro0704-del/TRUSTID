@@ -64,10 +64,12 @@ export async function captureSilentFaceFromNative(
       const imageData = await jpegBase64ToImageData(result.jpegBase64);
       if (!imageData) return null;
       try {
-        const extractor = await getSharedAIVectorExtractor();
+        const extractor = await getSharedAIVectorExtractor({
+          modelBaseUrl: "/models/trustid",
+          allowDevPadBypass: false,
+        });
         const ai = await extractor.fromImageData(imageData);
-        if (!ai) return null;
-        // Prefer JS presence/quality — never inflate with a loose native score.
+        if (!ai || ai.errorCode || !ai.vector?.length) return null;
         const confidence = Math.min(result.confidence, ai.confidence);
         return {
           confidence,

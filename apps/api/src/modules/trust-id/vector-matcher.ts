@@ -2,6 +2,9 @@ import {
   AUDIT_EVENTS,
   BIOMETRIC_AI_EMBEDDING_DIMS,
   BIOMETRIC_AI_MODEL_NAME,
+  BIOMETRIC_AI_MODEL_VERSION,
+  BIOMETRIC_ERROR_CODES,
+  BIOMETRIC_LEGACY_MODEL_NAMES,
   BIOMETRIC_PGVECTOR_MAX_DISTANCE,
   TRUST_ID_ACCESS_LEVELS,
   type BiometricModality,
@@ -32,26 +35,71 @@ export type VectorMatchResult = {
   isMasterDevice: boolean;
   cacheHit?: boolean;
   durationMs?: number;
+  error?: string;
+  errorCode?: string;
 };
+
+function isLegacyModelName(name: string | undefined | null): boolean {
+  if (!name) return false;
+  return (BIOMETRIC_LEGACY_MODEL_NAMES as readonly string[]).includes(name);
+}
+
+function isLegacyStoredTemplate(
+  modelName: string | undefined | null,
+  embeddingJson: string,
+): boolean {
+  if (isLegacyModelName(modelName)) return true;
+  const parsed = parseStoredVector(embeddingJson);
+  // Raw JSON arrays are pre-ArcFace spatial/legacy enrollments
+  return parsed.legacy === true;
+}
+
+function parseStoredVector(embeddingJson: string): {
+  vector: number[];
+  modelName?: string;
+  gallery?: number[][];
+  legacy: boolean;
+} {
+  try {
+    const parsed = JSON.parse(embeddingJson) as unknown;
+    if (Array.isArray(parsed)) {
+      return { vector: parsed as number[], legacy: true };
+    }
+    if (parsed && typeof parsed === "object") {
+      const obj = parsed as {
+        schema?: string;
+        primary?: number[];
+        gallery?: number[][];
+        modelName?: string;
+      };
+      if (obj.primary && Array.isArray(obj.primary)) {
+        return {
+          vector: obj.primary,
+          gallery: obj.gallery,
+          modelName: obj.modelName,
+          legacy: isLegacyModelName(obj.modelName),
+        };
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return { vector: [], legacy: true };
+}
 
 function normalizeVector(v: number[]): number[] {
   const len = v.length;
-  const out =
-    len === BIOMETRIC_AI_EMBEDDING_DIMS
-      ? v
-      : resizeVector(v, BIOMETRIC_AI_EMBEDDING_DIMS);
-  const norm = Math.sqrt(out.reduce((s, x) => s + x * x, 0));
-  if (norm === 0) return out;
-  return out.map((x) => x / norm);
-}
-
-function resizeVector(v: number[], dims: number): number[] {
-  if (v.length === dims) return [...v];
-  const out = new Array<number>(dims).fill(0);
-  for (let i = 0; i < dims; i++) {
-    out[i] = v[i % v.length] ?? 0;
+  if (len !== BIOMETRIC_AI_EMBEDDING_DIMS) {
+    throw Object.assign(
+      new Error(
+        `Invalid embedding length ${len}; expected ${BIOMETRIC_AI_EMBEDDING_DIMS}`,
+      ),
+      { statusCode: 400, errorCode: BIOMETRIC_ERROR_CODES.EMBEDDING_FAILED },
+    );
   }
-  return out;
+  const norm = Math.sqrt(v.reduce((s, x) => s + x * x, 0));
+  if (norm === 0) return v;
+  return v.map((x) => x / norm);
 }
 
 function cosineDistance(a: number[], b: number[]): number {
@@ -105,8 +153,34 @@ export class PgVectorMatcherService {
     userAgent?: string;
   }) {
     const { modality } = input.biometric;
+    const modelName =
+      input.modelName ??
+      input.biometric.modelName ??
+      BIOMETRIC_AI_MODEL_NAME;
+    if (isLegacyModelName(modelName)) {
+      throw Object.assign(
+        new Error(
+          "Legacy spatial/non-ArcFace templates cannot be enrolled. Use the production face pipeline.",
+        ),
+        {
+          statusCode: 400,
+          errorCode: BIOMETRIC_ERROR_CODES.BIOMETRIC_TEMPLATE_LEGACY,
+        },
+      );
+    }
+
     const vector = resolveVector(input.biometric);
-    const embeddingJson = JSON.stringify(vector);
+    const envelope = {
+      schema: "trustid_face_template_v1",
+      primary: vector,
+      gallery: [vector],
+      modelName,
+      modelVersion:
+        input.modelVersion ??
+        input.biometric.modelVersion ??
+        BIOMETRIC_AI_MODEL_VERSION,
+    };
+    const embeddingJson = JSON.stringify(envelope);
 
     const row = await prisma.biometricEmbedding.upsert({
       where: {
@@ -120,15 +194,15 @@ export class PgVectorMatcherService {
         trustId: input.trustId,
         modality,
         embeddingJson,
-        modelName: input.modelName ?? BIOMETRIC_AI_MODEL_NAME,
-        modelVersion: input.modelVersion ?? 1,
+        modelName,
+        modelVersion: envelope.modelVersion,
         status: "active",
       },
       update: {
         trustId: input.trustId,
         embeddingJson,
-        modelName: input.modelName ?? BIOMETRIC_AI_MODEL_NAME,
-        modelVersion: input.modelVersion ?? 1,
+        modelName,
+        modelVersion: envelope.modelVersion,
         status: "active",
       },
     });
@@ -146,7 +220,12 @@ export class PgVectorMatcherService {
       userId: input.userId,
       actorType: "user",
       actorId: input.userId,
-      metadata: { modality, embeddingId: row.id, engine: "pgvector-ai" },
+      metadata: {
+        modality,
+        embeddingId: row.id,
+        engine: "pgvector-arcface",
+        modelName,
+      },
       ip: input.ip,
       userAgent: input.userAgent,
     });
@@ -165,6 +244,19 @@ export class PgVectorMatcherService {
   }): Promise<VectorMatchResult> {
     const started = performance.now();
     const { modality, deviceFingerprint } = input.biometric;
+
+    if (isLegacyModelName(input.biometric.modelName)) {
+      return {
+        matched: false,
+        accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
+        isMasterDevice: false,
+        errorCode: BIOMETRIC_ERROR_CODES.BIOMETRIC_TEMPLATE_LEGACY,
+        error:
+          "Probe embedding uses a legacy/non-ArcFace model. Re-capture with the production face pipeline.",
+        durationMs: performance.now() - started,
+      };
+    }
+
     const probe = resolveVector(input.biometric);
     const threshold = maxDistance();
 
@@ -201,6 +293,27 @@ export class PgVectorMatcherService {
         isMasterDevice: false,
         durationMs,
         cacheHit: false,
+        errorCode: BIOMETRIC_ERROR_CODES.NO_MATCH,
+      };
+    }
+
+    // Reject matches against legacy gallery templates
+    const stored = await prisma.biometricEmbedding.findUnique({
+      where: { id: best.embeddingId },
+      select: { modelName: true, embeddingJson: true },
+    });
+    if (
+      !stored ||
+      isLegacyStoredTemplate(stored.modelName, stored.embeddingJson)
+    ) {
+      return {
+        matched: false,
+        accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
+        isMasterDevice: false,
+        durationMs,
+        errorCode: BIOMETRIC_ERROR_CODES.BIOMETRIC_TEMPLATE_LEGACY,
+        error:
+          "Matched template is legacy/incompatible. Re-enroll face biometrics.",
       };
     }
 
@@ -209,11 +322,12 @@ export class PgVectorMatcherService {
       data: { lastMatchedAt: new Date() },
     }).catch(() => undefined);
 
+    const enrolled = parseStoredVector(stored.embeddingJson).vector;
     void cacheUserVector({
       userId: best.userId,
       trustId: best.trustId,
       embeddingId: best.embeddingId,
-      vector: probe,
+      vector: enrolled.length ? enrolled : probe,
     });
 
     const master = await isMasterTerminal(best.userId, deviceFingerprint);
@@ -235,7 +349,7 @@ export class PgVectorMatcherService {
         similarity,
         accessLevel,
         isMasterDevice: master,
-        engine: "pgvector-ai",
+        engine: "pgvector-arcface",
         cacheHit: "cacheHit" in best && best.cacheHit,
         durationMs,
       },
@@ -353,8 +467,9 @@ export class PgVectorMatcherService {
     } | null = null;
 
     for (const c of candidates) {
-      const stored = JSON.parse(c.embeddingJson) as number[];
-      const distance = cosineDistance(probe, normalizeVector(stored));
+      const parsed = parseStoredVector(c.embeddingJson);
+      if (parsed.legacy || !parsed.vector.length) continue;
+      const distance = cosineDistance(probe, normalizeVector(parsed.vector));
       if (!best || distance < best.distance) {
         best = {
           embeddingId: c.id,

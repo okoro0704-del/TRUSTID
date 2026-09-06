@@ -1,11 +1,6 @@
-import {
-  BIOMETRIC_AI_EMBEDDING_DIMS,
-  BIOMETRIC_AI_MODEL_NAME,
-  BIOMETRIC_MODALITIES,
-} from "@trustid/shared";
+import { BIOMETRIC_AI_EMBEDDING_DIMS, BIOMETRIC_MODALITIES } from "@trustid/shared";
 import type { BiometricPayload } from "../index.js";
 import { embeddingFromBytes } from "./embedding.js";
-import { projectTo512 } from "./ai-vector-extractor.js";
 
 export type FingerprintTemplateBridge = {
   captureFingerprintTemplate(options?: {
@@ -32,11 +27,13 @@ function decodeBase64(raw: string): Uint8Array {
   return out;
 }
 
-/** Build a stable 512-D fingerprint-backup vector from Keystore public key bytes. */
+/**
+ * Stable 512-D fingerprint-backup vector from Keystore public key bytes.
+ * NOT a face biometric and NOT ArcFace — modality fingerprint only.
+ */
 export function fingerprintVectorFromPublicKey(publicKeyBase64: string): number[] {
   const bytes = decodeBase64(publicKeyBase64);
-  const base = embeddingFromBytes(bytes, BIOMETRIC_AI_EMBEDDING_DIMS);
-  return projectTo512(base);
+  return embeddingFromBytes(bytes, BIOMETRIC_AI_EMBEDDING_DIMS);
 }
 
 export function fingerprintPayloadFromPublicKey(
@@ -47,17 +44,14 @@ export function fingerprintPayloadFromPublicKey(
     modality: BIOMETRIC_MODALITIES.FINGERPRINT,
     vector,
     embedding: vector,
-    modelName: `${BIOMETRIC_AI_MODEL_NAME}_fp_keystore`,
+    modelName: "fingerprint_keystore_v1",
     modelVersion: 1,
   };
 }
 
-/**
- * Capture fingerprint backup template via native BiometricPrompt + Keystore.
- */
 export async function captureNativeFingerprintTemplate(
   bridge: FingerprintTemplateBridge,
-  reason = "Scan your fingerprint to register a Trust ID backup",
+  reason = "Scan your fingerprint for Trust ID backup",
 ): Promise<BiometricPayload | null> {
   try {
     const avail = await bridge.getAvailability?.();

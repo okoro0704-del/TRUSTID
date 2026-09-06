@@ -1,10 +1,18 @@
-import { BIOMETRIC_MODALITIES } from "@trustid/shared";
+/**
+ * Silent web capture with production ArcFace pipeline + multi-frame blink PAD.
+ */
+import { BIOMETRIC_ERROR_CODES, BIOMETRIC_MODALITIES } from "@trustid/shared";
 import type { BiometricPayload } from "../index.js";
 import { getSharedAIVectorExtractor } from "./ai-vector-extractor.js";
+import { MediaPipeBlinkPadDetector } from "./biometric/pad-blink.js";
+import { extractFaceEmbeddingFromImageData } from "./biometric/pipeline.js";
+import { detectFacesInImageData } from "./biometric/detector-mediapipe.js";
 
 export type SilentWebCaptureResult = {
   payload: BiometricPayload;
   confidence: number;
+  errorCode?: string;
+  errorMessage?: string;
 };
 
 export type MediaStreamFactory = (
@@ -48,9 +56,25 @@ function waitForFrame(video: HTMLVideoElement, timeoutMs = 3000): Promise<void> 
   });
 }
 
+function grabFrame(video: HTMLVideoElement): ImageData | null {
+  const w = video.videoWidth;
+  const h = video.videoHeight;
+  if (w <= 0 || h <= 0) return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return null;
+  ctx.drawImage(video, 0, 0);
+  const data = ctx.getImageData(0, 0, w, h);
+  canvas.width = 0;
+  canvas.height = 0;
+  return data;
+}
+
 /**
- * Off-screen single-frame capture via hidden video element + on-device AI vectorization.
- * All camera tracks are stopped immediately after inference; no frames persisted to disk.
+ * Off-screen multi-frame capture: ArcFace embed + active blink PAD.
+ * Never uses spatial_fallback. Never logs embeddings.
  */
 export async function captureSilentFaceFromWebCamera(
   getStream?: MediaStreamFactory,
@@ -69,13 +93,14 @@ export async function captureSilentFaceFromWebCamera(
 
   let stream: MediaStream | null = null;
   let video: HTMLVideoElement | null = null;
+  const pad = new MediaPipeBlinkPadDetector();
 
   try {
     stream = await streamFactory({
       video: {
         facingMode: "user",
-        width: { ideal: 320 },
-        height: { ideal: 240 },
+        width: { ideal: 640 },
+        height: { ideal: 480 },
       },
       audio: false,
     });
@@ -85,28 +110,149 @@ export async function captureSilentFaceFromWebCamera(
     await video.play();
     await waitForFrame(video);
 
-    const extractor = await getSharedAIVectorExtractor();
-    const ai = await extractor.fromCameraStream(video);
-    if (!ai) return null;
+    // Warm models early — fail closed immediately if unavailable
+    const extractor = await getSharedAIVectorExtractor({
+      modelBaseUrl: "/models/trustid",
+      pad,
+    });
+    if (!extractor.isReady()) {
+      return {
+        confidence: 0,
+        payload: {
+          modality: BIOMETRIC_MODALITIES.FACE,
+          vector: [],
+          modelName: "none",
+          modelVersion: 0,
+          confidence: 0,
+        },
+        errorCode: BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_UNAVAILABLE,
+        errorMessage:
+          extractor.getLastError() ??
+          "Face biometric models unavailable. Install /models/trustid artifacts.",
+      };
+    }
+
+    let lastEmbed: SilentWebCaptureResult | null = null;
+
+    for (let i = 0; i < 24; i++) {
+      await new Promise((r) => setTimeout(r, 120));
+      const frame = grabFrame(video);
+      if (!frame) continue;
+
+      try {
+        let det;
+        try {
+          det = await detectFacesInImageData(frame, "/models/trustid");
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (/unavailable|integrity|missing|mediapipe|onnx/i.test(msg)) {
+            return {
+              confidence: 0,
+              payload: {
+                modality: BIOMETRIC_MODALITIES.FACE,
+                vector: [],
+                modelName: "none",
+                modelVersion: 0,
+                confidence: 0,
+              },
+              errorCode: BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_UNAVAILABLE,
+              errorMessage: msg,
+            };
+          }
+          continue;
+        }
+        pad.observeBlendshapes(det.blendshapes?.[0]);
+
+        const extracted = await extractFaceEmbeddingFromImageData(frame, {
+          modelBaseUrl: "/models/trustid",
+          skipPad: true,
+          rejectMultipleFaces: true,
+        });
+
+        if (extracted.ok) {
+          lastEmbed = {
+            confidence: extracted.payload.confidence,
+            payload: {
+              modality: BIOMETRIC_MODALITIES.FACE,
+              vector: extracted.payload.vector,
+              modelName: extracted.payload.modelName,
+              modelVersion: extracted.payload.modelVersion,
+              confidence: extracted.payload.confidence,
+            },
+          };
+          const padCheck = await pad.evaluate();
+          if (padCheck.decision === "accept") {
+            return {
+              ...lastEmbed,
+              payload: {
+                ...lastEmbed.payload,
+              },
+            };
+          }
+        } else if (
+          extracted.code === BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_UNAVAILABLE
+        ) {
+          return {
+            confidence: 0,
+            payload: {
+              modality: BIOMETRIC_MODALITIES.FACE,
+              vector: [],
+              modelName: "none",
+              modelVersion: 0,
+              confidence: 0,
+            },
+            errorCode: extracted.code,
+            errorMessage: extracted.message,
+          };
+        }
+      } finally {
+        frame.data.fill(0);
+      }
+    }
+
+    if (lastEmbed) {
+      // Had face embeds but blink PAD never passed
+      return {
+        ...lastEmbed,
+        payload: { ...lastEmbed.payload, vector: [] },
+        confidence: 0,
+        errorCode: BIOMETRIC_ERROR_CODES.LIVENESS_FAILED,
+        errorMessage: "Blink to confirm liveness, then try again",
+      };
+    }
 
     return {
-      confidence: ai.confidence,
+      confidence: 0,
       payload: {
         modality: BIOMETRIC_MODALITIES.FACE,
-        vector: ai.vector,
-        modelName: ai.modelName,
-        modelVersion: ai.modelVersion,
-        confidence: ai.confidence,
+        vector: [],
+        modelName: "none",
+        modelVersion: 0,
+        confidence: 0,
       },
+      errorCode: BIOMETRIC_ERROR_CODES.NO_FACE,
+      errorMessage: "No usable face frame captured",
     };
-  } catch {
-    return null;
+  } catch (err) {
+    return {
+      confidence: 0,
+      payload: {
+        modality: BIOMETRIC_MODALITIES.FACE,
+        vector: [],
+        modelName: "none",
+        modelVersion: 0,
+        confidence: 0,
+      },
+      errorCode: BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_UNAVAILABLE,
+      errorMessage: err instanceof Error ? err.message : "Capture failed",
+    };
   } finally {
     stopStream(stream);
     if (video) {
       video.srcObject = null;
       video.remove();
     }
+    pad.reset();
   }
 }
 

@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "^0.10.18",
     "@simplewebauthn/browser": "^13.1.0",
     "@trustid/device-security": "*",
     "@trustid/sdk": "*",
@@ -17,6 +18,7 @@
     "@trustid/sovereign-crypto": "*",
     "@trustid/ui-react": "*",
     "@trustid/vault-sdk": "*",
+    "onnxruntime-web": "^1.21.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.4.0"

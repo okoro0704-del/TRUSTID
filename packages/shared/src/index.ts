@@ -389,14 +389,53 @@ export const BIOMETRIC_SINGLE_MODALITY_THRESHOLD = 0.82;
 /** Normalized facial embedding dimension for silent background capture */
 export const BIOMETRIC_FACE_EMBEDDING_DIMS = 128;
 
-/** On-device AI embedding dimension (MobileFaceNet / pgvector) */
+/** On-device ArcFace embedding dimension (InsightFace w600k_mbf / pgvector) */
 export const BIOMETRIC_AI_EMBEDDING_DIMS = 512;
 
-/** Default ONNX / face-api model identifier */
-export const BIOMETRIC_AI_MODEL_NAME = "mobile_facenet_v1";
+/**
+ * Production face-recognition model id (InsightFace ArcFace MobileFaceNet backbone).
+ * Trained for face recognition on Glint360K (w600k); NOT the legacy spatial fallback.
+ */
+export const BIOMETRIC_AI_MODEL_NAME = "insightface_arcface_w600k_mbf_v1";
+
+/** Recognition model numeric version */
+export const BIOMETRIC_AI_MODEL_VERSION = 1;
+
+/** Detector version (MediaPipe Face Landmarker) */
+export const BIOMETRIC_DETECTOR_VERSION = "mediapipe_face_landmarker_v1";
+
+/** 5-point ArcFace similarity-transform alignment */
+export const BIOMETRIC_ALIGNMENT_VERSION = "arcface_five_point_v1";
+
+/** Preprocess: 112×112 RGB, (x-127.5)/128 */
+export const BIOMETRIC_PREPROCESSING_VERSION = "arcface_112_rgb_v1";
+
+/** Models that must never be compared to production ArcFace templates */
+export const BIOMETRIC_LEGACY_MODEL_NAMES = [
+  "spatial_fallback_v1",
+  "mobile_facenet_v1",
+  "spatial_fallback_dev_v1",
+] as const;
 
 /** pgvector cosine distance threshold for high-confidence AI match */
 export const BIOMETRIC_PGVECTOR_MAX_DISTANCE = 0.35;
 
-/** Minimum local confidence + face-presence score before login/enroll */
+/** Minimum detector/quality confidence before login/enroll */
 export const BIOMETRIC_FACE_CAPTURE_MIN_CONFIDENCE = 0.55;
+
+/** Structured biometric client/API error codes */
+export const BIOMETRIC_ERROR_CODES = {
+  BIOMETRIC_MODEL_UNAVAILABLE: "BIOMETRIC_MODEL_UNAVAILABLE",
+  NO_FACE: "NO_FACE",
+  MULTIPLE_FACES: "MULTIPLE_FACES",
+  FACE_TOO_SMALL: "FACE_TOO_SMALL",
+  LOW_QUALITY: "LOW_QUALITY",
+  LIVENESS_FAILED: "LIVENESS_FAILED",
+  EMBEDDING_FAILED: "EMBEDDING_FAILED",
+  NO_MATCH: "NO_MATCH",
+  AMBIGUOUS_MATCH: "AMBIGUOUS_MATCH",
+  BIOMETRIC_TEMPLATE_LEGACY: "BIOMETRIC_TEMPLATE_LEGACY",
+} as const;
+
+export type BiometricErrorCode =
+  (typeof BIOMETRIC_ERROR_CODES)[keyof typeof BIOMETRIC_ERROR_CODES];

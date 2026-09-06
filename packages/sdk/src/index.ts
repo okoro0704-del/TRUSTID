@@ -31,10 +31,18 @@ import {
   AIVectorExtractor,
   aiVectorExtractor,
   projectTo512,
+  extractFaceEmbeddingFromImageData,
+  enrollFromImageFrames,
+  buildFaceTemplateEnvelope,
+  FailClosedPadDetector,
+  DevBypassPadDetector,
+  MediaPipeBlinkPadDetector,
+  createProductionPadDetector,
 } from "./capture/ai-vector-extractor.js";
 import { detectFacePresence } from "./capture/face-presence.js";
 import { vectorizeFaceFromRgba } from "./capture/face-vectorizer.js";
 import type { CaptureHandlers, MultiModalBiometricPayload } from "./capture/types.js";
+import type { FacePresentationAttackDetector, FacePadResult } from "./capture/biometric/types.js";
 
 export type BiometricPayload = {
   modality: BiometricModality;
@@ -602,6 +610,13 @@ export {
   aiVectorExtractor,
   projectTo512,
   detectFacePresence,
+  extractFaceEmbeddingFromImageData,
+  enrollFromImageFrames,
+  buildFaceTemplateEnvelope,
+  FailClosedPadDetector,
+  DevBypassPadDetector,
+  MediaPipeBlinkPadDetector,
+  createProductionPadDetector,
 };
 export type {
   AmbientAuthenticateOptions,
@@ -619,4 +634,5 @@ export type { FingerprintFallbackHandlers } from "./capture/fingerprint-fallback
 export type { FingerprintTemplateBridge } from "./capture/fingerprint-template.js";
 export type { FaceVectorResult } from "./capture/face-vectorizer.js";
 export type { AIVectorPayload, AIVectorExtractorOptions } from "./capture/ai-vector-extractor.js";
+export type { FacePresentationAttackDetector, FacePadResult };
 export type { FacePresenceResult } from "./capture/face-presence.js";

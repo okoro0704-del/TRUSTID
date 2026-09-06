@@ -8,6 +8,11 @@ export default defineConfig({
     VitePWA({
       registerType: "autoUpdate",
       includeAssets: ["favicon.svg"],
+      workbox: {
+        // onnxruntime-web WASM is ~24MB — load from CDN at runtime, do not precache
+        globIgnores: ["**/*.wasm", "**/ort*.mjs", "**/ort*.js"],
+        maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
+      },
       manifest: {
         name: "TrustID",
         short_name: "TrustID",
@@ -34,6 +39,15 @@ export default defineConfig({
       },
     }),
   ],
+  optimizeDeps: {
+    exclude: ["onnxruntime-web"],
+  },
+  build: {
+    rollupOptions: {
+      // Keep ORT wasm out of the critical path when possible; runtime sets CDN wasmPaths
+      external: [],
+    },
+  },
   server: {
     port: 5173,
     proxy: {

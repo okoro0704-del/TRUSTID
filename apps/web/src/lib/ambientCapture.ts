@@ -68,18 +68,34 @@ async function captureUnifiedFaceOnce(): Promise<BiometricPayload | null> {
 
   try {
     const web = await captureSilentFaceFromWebCamera();
-    if (web?.payload?.vector && web.confidence >= min) {
+    if (web?.errorCode) {
+      // Surface model/PAD failures — do not invent a spatial vector
+      console.warn("[TrustID] Face capture:", web.errorCode, web.errorMessage);
+      return null;
+    }
+    if (
+      web?.payload?.vector &&
+      web.payload.vector.length === 512 &&
+      web.confidence >= min
+    ) {
       return web.payload;
     }
-  } catch {
-    /* try native */
+  } catch (err) {
+    console.warn(
+      "[TrustID] Face capture failed:",
+      err instanceof Error ? err.message : err,
+    );
   }
 
   const nativeBridge = getNativeSilentFaceBridge();
   if (nativeBridge) {
     const capturer = createSilentCameraCapturer({ nativeBridge });
     const face = await capturer.captureFaceVector();
-    if (face?.payload?.vector && face.confidence >= min) {
+    if (
+      face?.payload?.vector &&
+      face.payload.vector.length === 512 &&
+      face.confidence >= min
+    ) {
       return face.payload;
     }
   }
@@ -99,9 +115,8 @@ async function captureUnifiedFace(): Promise<BiometricPayload | null> {
 
 /**
  * Identity-first ambient capture — face is required.
- * Extraction runs on-device (ONNX / face-api / spatial); only the ~2KB
- * 512-D float vector is sent to the API — never raw camera frames.
- * Fingerprint is backup enroll only (see registerFingerprintBackup), not a login bypass.
+ * Extraction: MediaPipe detect + ArcFace ONNX (512-D). Never spatial fallback.
+ * Only the ~2KB embedding is sent — never raw frames.
  */
 export async function captureWebAmbientSingleModal(
   _apiFetch?: ApiFetch,
