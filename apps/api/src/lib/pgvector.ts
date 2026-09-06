@@ -63,7 +63,40 @@ export async function bootstrapPgVector(): Promise<boolean> {
       DROP INDEX IF EXISTS biometric_embeddings_vector_ivfflat
     `);
 
-    // Ultra-fast 1:N lookup with explicit HNSW search depth.
+    // Ultra-fast 1:N Top-K candidate generation (threshold applied after exact rerank in app).
+    await prisma.$executeRawUnsafe(`
+      CREATE OR REPLACE FUNCTION search_biometric_vector_topk(
+        input_vector vector(512),
+        match_modality text DEFAULT 'face',
+        top_k int DEFAULT 50,
+        ef_search int DEFAULT 64
+      )
+      RETURNS TABLE (
+        id text,
+        user_id text,
+        trust_id text,
+        distance float
+      )
+      LANGUAGE plpgsql AS $$
+      BEGIN
+        PERFORM set_config('hnsw.ef_search', GREATEST(ef_search, top_k)::text, true);
+        RETURN QUERY
+        SELECT
+          be.id::text,
+          be.user_id::text,
+          be.trust_id::text,
+          (be.vector <=> input_vector)::float AS distance
+        FROM biometric_embeddings be
+        WHERE be.modality = match_modality
+          AND be.status = 'active'
+          AND be.vector IS NOT NULL
+        ORDER BY be.vector <=> input_vector ASC
+        LIMIT GREATEST(1, LEAST(top_k, 100));
+      END;
+      $$;
+    `);
+
+    // Legacy LIMIT-1 helper retained for ops tooling; app uses Top-K + rerank.
     await prisma.$executeRawUnsafe(`
       CREATE OR REPLACE FUNCTION search_biometric_vector(
         input_vector vector(512),
@@ -78,7 +111,7 @@ export async function bootstrapPgVector(): Promise<boolean> {
       )
       LANGUAGE plpgsql AS $$
       BEGIN
-        PERFORM set_config('hnsw.ef_search', '40', true);
+        PERFORM set_config('hnsw.ef_search', '64', true);
         RETURN QUERY
         SELECT
           be.id::text,
@@ -89,7 +122,6 @@ export async function bootstrapPgVector(): Promise<boolean> {
         WHERE be.modality = match_modality
           AND be.status = 'active'
           AND be.vector IS NOT NULL
-          AND (be.vector <=> input_vector) <= max_distance
         ORDER BY be.vector <=> input_vector ASC
         LIMIT 1;
       END;
@@ -102,12 +134,12 @@ export async function bootstrapPgVector(): Promise<boolean> {
 
     pgVectorReady = true;
     console.log(
-      `[pgvector] ready — vector@${version[0]?.extversion ?? "unknown"}, HNSW(m=16,ef_c=64) + search_biometric_vector()`,
+      `[pgvector] ready — vector@${version[0]?.extversion ?? "unknown"}, HNSW(m=16,ef_c=64) + Top-K search (no in-memory full-gallery fallback)`,
     );
     return true;
   } catch (err) {
     console.warn(
-      "[pgvector] bootstrap failed — AI 1:N will use in-memory fallback until a pgvector Postgres is linked:",
+      "[pgvector] bootstrap failed — AI 1:N identification will fail closed until pgvector Postgres is linked:",
       err instanceof Error ? err.message : err,
     );
     console.warn(

@@ -1,7 +1,9 @@
 import {
   BIOMETRIC_AI_EMBEDDING_DIMS,
+  BIOMETRIC_ERROR_CODES,
   BIOMETRIC_MODALITIES,
   BIOMETRIC_PGVECTOR_MAX_DISTANCE,
+  BIOMETRIC_THRESHOLD_POLICY,
 } from "@trustid/shared";
 import { config } from "../../lib/config.js";
 import { clientMeta, setSessionCookie } from "../../lib/auth-context.js";
@@ -239,13 +241,30 @@ export async function handleFastVectorMatch(
   const durationMs = performance.now() - started;
 
   if (!result.matched) {
+    if (
+      result.errorCode === BIOMETRIC_ERROR_CODES.BIOMETRIC_SERVICE_UNAVAILABLE
+    ) {
+      return {
+        status: "SERVICE_UNAVAILABLE" as const,
+        strategy: MATCH_STRATEGIES.GLOBAL_1_N,
+        durationMs,
+        canRegister: false,
+        errorCode: result.errorCode,
+        message:
+          result.error ??
+          "Biometric identification service unavailable. Try again shortly.",
+        thresholdStatus: BIOMETRIC_THRESHOLD_POLICY.status,
+      };
+    }
     return {
       status: "NOT_FOUND" as const,
       strategy: MATCH_STRATEGIES.GLOBAL_1_N,
       durationMs,
       canRegister: true,
+      errorCode: result.errorCode,
       message: result.error ?? "No Trust ID record matches this facial vector.",
-      maxDistance: BIOMETRIC_PGVECTOR_MAX_DISTANCE,
+      maxDistance: BIOMETRIC_THRESHOLD_POLICY.threshold,
+      thresholdStatus: BIOMETRIC_THRESHOLD_POLICY.status,
     };
   }
 

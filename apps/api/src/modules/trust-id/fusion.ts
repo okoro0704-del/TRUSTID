@@ -40,6 +40,8 @@ export type FusionMatchResult = {
   isFingerprintMatched?: boolean;
   accessLevel: TrustIdAccessLevel;
   isMasterDevice: boolean;
+  errorCode?: string;
+  error?: string;
 };
 
 async function evaluateMaster(
@@ -159,6 +161,8 @@ export async function matchMultiModalFusion(input: {
         faceMatchScore: faceScore,
         fingerprintMatchScore: fpScore,
         reason: "no_single_modality_match",
+        faceErrorCode: faceResult?.errorCode,
+        fingerprintErrorCode: fpResult?.errorCode,
       },
       ip: input.ip,
       userAgent: input.userAgent,
@@ -171,6 +175,9 @@ export async function matchMultiModalFusion(input: {
       fingerprintMatchScore: fpScore,
       accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
       isMasterDevice: false,
+      errorCode:
+        faceResult?.errorCode ?? fpResult?.errorCode,
+      error: faceResult?.error ?? fpResult?.error,
     };
   }
 
@@ -416,7 +423,12 @@ export async function ambientSignInAndSession(input: {
   }
 
   if (!fusion.matched || !fusion.userId || !fusion.trustId) {
-    return { matched: false as const, fusion };
+    return {
+      matched: false as const,
+      fusion,
+      error: fusion.error,
+      errorCode: fusion.errorCode,
+    };
   }
 
   async function resolvePrimaryDeviceId(userId: string) {

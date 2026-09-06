@@ -1,11 +1,26 @@
+/**
+ * Face template enroll + match.
+ *
+ * 1:1 VERIFY — bounded fetch of claimed identity template only.
+ * 1:N IDENTIFY — pgvector Top-K → exact cosine rerank → threshold.
+ *
+ * NEVER loads the full biometric gallery into Node memory.
+ */
 import {
   AUDIT_EVENTS,
   BIOMETRIC_AI_EMBEDDING_DIMS,
   BIOMETRIC_AI_MODEL_NAME,
   BIOMETRIC_AI_MODEL_VERSION,
+  BIOMETRIC_ALIGNMENT_VERSION,
+  BIOMETRIC_ANN_QUERY_TIMEOUT_MS,
+  BIOMETRIC_DETECTOR_VERSION,
   BIOMETRIC_ERROR_CODES,
+  BIOMETRIC_HNSW_EF_SEARCH_DEFAULT,
   BIOMETRIC_LEGACY_MODEL_NAMES,
-  BIOMETRIC_PGVECTOR_MAX_DISTANCE,
+  BIOMETRIC_MATCH_MODE,
+  BIOMETRIC_PIPELINE_VERSION,
+  BIOMETRIC_PREPROCESSING_VERSION,
+  BIOMETRIC_THRESHOLD_POLICY,
   TRUST_ID_ACCESS_LEVELS,
   type BiometricModality,
   type TrustIdAccessLevel,
@@ -20,12 +35,22 @@ import {
 import { recordAudit } from "../audit/service.js";
 import type { BiometricPayload } from "./schemas.js";
 import {
+  decideAfterRerank,
+  exactRerankCandidates,
+  type AnnCandidate,
+} from "./ann-rerank.js";
+import {
+  acceptsAtThreshold,
+  resolveTopK,
+} from "./match-semantics.js";
+import {
   cacheUserVector,
   searchHotVectorCache,
 } from "./vector-hot-cache.js";
 
 export type VectorMatchResult = {
   matched: boolean;
+  mode?: typeof BIOMETRIC_MATCH_MODE.VERIFY_1_1 | typeof BIOMETRIC_MATCH_MODE.IDENTIFY_1_N;
   userId?: string;
   trustId?: string;
   distance?: number;
@@ -35,6 +60,9 @@ export type VectorMatchResult = {
   isMasterDevice: boolean;
   cacheHit?: boolean;
   durationMs?: number;
+  candidateCount?: number;
+  topK?: number;
+  thresholdStatus?: typeof BIOMETRIC_THRESHOLD_POLICY.status;
   error?: string;
   errorCode?: string;
 };
@@ -50,7 +78,6 @@ function isLegacyStoredTemplate(
 ): boolean {
   if (isLegacyModelName(modelName)) return true;
   const parsed = parseStoredVector(embeddingJson);
-  // Raw JSON arrays are pre-ArcFace spatial/legacy enrollments
   return parsed.legacy === true;
 }
 
@@ -119,13 +146,43 @@ function resolveVector(payload: BiometricPayload): number[] {
   return normalizeVector(raw);
 }
 
-function maxDistance(): number {
+function operatingThresholdDistance(): number {
   const raw = process.env.FAST_VECTOR_MAX_DISTANCE;
   if (raw != null && raw !== "") {
     const n = Number(raw);
     if (Number.isFinite(n) && n > 0) return n;
   }
-  return BIOMETRIC_PGVECTOR_MAX_DISTANCE;
+  return BIOMETRIC_THRESHOLD_POLICY.threshold;
+}
+
+function requireCalibratedThreshold(): boolean {
+  return process.env.BIOMETRIC_REQUIRE_CALIBRATED_THRESHOLD === "true";
+}
+
+function annTimeoutMs(): number {
+  const raw = process.env.BIOMETRIC_ANN_QUERY_TIMEOUT_MS;
+  if (raw != null && raw !== "") {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return BIOMETRIC_ANN_QUERY_TIMEOUT_MS;
+}
+
+function resolveAnnTopK(): number {
+  const raw = process.env.BIOMETRIC_ANN_TOP_K;
+  if (raw != null && raw !== "") {
+    return resolveTopK(Number(raw));
+  }
+  return resolveTopK();
+}
+
+function resolveEfSearch(topK: number): number {
+  const raw = process.env.BIOMETRIC_HNSW_EF_SEARCH;
+  if (raw != null && raw !== "") {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) return Math.max(n, topK);
+  }
+  return Math.max(BIOMETRIC_HNSW_EF_SEARCH_DEFAULT, topK);
 }
 
 async function isMasterTerminal(userId: string, deviceFingerprint?: string) {
@@ -142,6 +199,23 @@ async function isMasterTerminal(userId: string, deviceFingerprint?: string) {
   return Boolean(row);
 }
 
+function logMatchEvent(
+  level: "info" | "warn" | "error",
+  event: string,
+  meta: Record<string, unknown>,
+) {
+  // Never log embeddings / vectors
+  const safe = { ...meta };
+  delete safe.probe;
+  delete safe.vector;
+  delete safe.embedding;
+  delete safe.embeddingJson;
+  const line = JSON.stringify({ scope: "biometric_match", event, ...safe });
+  if (level === "error") console.error(line);
+  else if (level === "warn") console.warn(line);
+  else console.info(line);
+}
+
 export class PgVectorMatcherService {
   async enrollEmbedding(input: {
     userId: string;
@@ -149,6 +223,7 @@ export class PgVectorMatcherService {
     biometric: BiometricPayload;
     modelName?: string;
     modelVersion?: number;
+    galleryVectors?: number[][];
     ip?: string;
     userAgent?: string;
   }) {
@@ -170,15 +245,25 @@ export class PgVectorMatcherService {
     }
 
     const vector = resolveVector(input.biometric);
+    const gallery =
+      input.galleryVectors?.length &&
+      input.galleryVectors.every((g) => g.length === BIOMETRIC_AI_EMBEDDING_DIMS)
+        ? input.galleryVectors.map((g) => normalizeVector(g))
+        : [vector];
+
     const envelope = {
       schema: "trustid_face_template_v1",
       primary: vector,
-      gallery: [vector],
+      gallery,
       modelName,
       modelVersion:
         input.modelVersion ??
         input.biometric.modelVersion ??
         BIOMETRIC_AI_MODEL_VERSION,
+      detectorVersion: BIOMETRIC_DETECTOR_VERSION,
+      alignmentVersion: BIOMETRIC_ALIGNMENT_VERSION,
+      preprocessingVersion: BIOMETRIC_PREPROCESSING_VERSION,
+      pipelineVersion: BIOMETRIC_PIPELINE_VERSION,
     };
     const embeddingJson = JSON.stringify(envelope);
 
@@ -225,6 +310,9 @@ export class PgVectorMatcherService {
         embeddingId: row.id,
         engine: "pgvector-arcface",
         modelName,
+        gallerySize: gallery.length,
+        pipelineVersion: BIOMETRIC_PIPELINE_VERSION,
+        // no vectors
       },
       ip: input.ip,
       userAgent: input.userAgent,
@@ -234,72 +322,333 @@ export class PgVectorMatcherService {
   }
 
   /**
-   * Two-pass cascade: hot cache ? HNSW pgvector ? in-memory scan.
+   * 1:1 verification against a claimed Trust ID — never scans the gallery.
    */
-  async matchOneToMany(input: {
+  async verifyOneToOne(input: {
+    claimedTrustId: string;
     biometric: BiometricPayload;
     requireMasterAccess?: boolean;
     ip?: string;
     userAgent?: string;
   }): Promise<VectorMatchResult> {
     const started = performance.now();
-    const { modality, deviceFingerprint } = input.biometric;
+    const mode = BIOMETRIC_MATCH_MODE.VERIFY_1_1;
+    const threshold = operatingThresholdDistance();
+
+    if (requireCalibratedThreshold() && BIOMETRIC_THRESHOLD_POLICY.status !== "CALIBRATED") {
+      return {
+        matched: false,
+        mode,
+        accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
+        isMasterDevice: false,
+        durationMs: performance.now() - started,
+        thresholdStatus: BIOMETRIC_THRESHOLD_POLICY.status,
+        errorCode: BIOMETRIC_ERROR_CODES.BIOMETRIC_THRESHOLD_UNCALIBRATED,
+        error: "Biometric threshold is UNCALIBRATED; acceptance gated.",
+      };
+    }
 
     if (isLegacyModelName(input.biometric.modelName)) {
       return {
         matched: false,
+        mode,
+        accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
+        isMasterDevice: false,
+        errorCode: BIOMETRIC_ERROR_CODES.BIOMETRIC_TEMPLATE_LEGACY,
+        durationMs: performance.now() - started,
+        thresholdStatus: BIOMETRIC_THRESHOLD_POLICY.status,
+      };
+    }
+
+    const probe = resolveVector(input.biometric);
+    const trustId = input.claimedTrustId.trim();
+    if (!trustId) {
+      return {
+        matched: false,
+        mode,
+        accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
+        isMasterDevice: false,
+        errorCode: BIOMETRIC_ERROR_CODES.NO_MATCH,
+        durationMs: performance.now() - started,
+        thresholdStatus: BIOMETRIC_THRESHOLD_POLICY.status,
+      };
+    }
+
+    const row = await prisma.biometricEmbedding.findFirst({
+      where: {
+        trustId,
+        modality: input.biometric.modality,
+        status: "active",
+      },
+      select: {
+        id: true,
+        userId: true,
+        trustId: true,
+        modelName: true,
+        embeddingJson: true,
+      },
+    });
+
+    if (!row || isLegacyStoredTemplate(row.modelName, row.embeddingJson)) {
+      return {
+        matched: false,
+        mode,
+        accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
+        isMasterDevice: false,
+        errorCode: row
+          ? BIOMETRIC_ERROR_CODES.BIOMETRIC_TEMPLATE_LEGACY
+          : BIOMETRIC_ERROR_CODES.NO_MATCH,
+        durationMs: performance.now() - started,
+        thresholdStatus: BIOMETRIC_THRESHOLD_POLICY.status,
+      };
+    }
+
+    const enrolled = parseStoredVector(row.embeddingJson);
+    const templates =
+      enrolled.gallery?.length && enrolled.gallery.length > 0
+        ? enrolled.gallery
+        : [enrolled.vector];
+    let bestDistance = Infinity;
+    for (const t of templates) {
+      if (t.length !== BIOMETRIC_AI_EMBEDDING_DIMS) continue;
+      const d = cosineDistance(probe, normalizeVector(t));
+      if (d < bestDistance) bestDistance = d;
+    }
+
+    const durationMs = performance.now() - started;
+    if (!Number.isFinite(bestDistance) || !acceptsAtThreshold(bestDistance, threshold)) {
+      logMatchEvent("info", "verify_1_1_no_match", {
+        mode,
+        durationMs,
+        threshold,
+        // distance only, no vector
+        distance: Number.isFinite(bestDistance) ? bestDistance : undefined,
+      });
+      return {
+        matched: false,
+        mode,
+        accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
+        isMasterDevice: false,
+        distance: Number.isFinite(bestDistance) ? bestDistance : undefined,
+        durationMs,
+        thresholdStatus: BIOMETRIC_THRESHOLD_POLICY.status,
+        errorCode: BIOMETRIC_ERROR_CODES.NO_MATCH,
+      };
+    }
+
+    const master = await isMasterTerminal(
+      row.userId,
+      input.biometric.deviceFingerprint,
+    );
+    void cacheUserVector({
+      userId: row.userId,
+      trustId: row.trustId,
+      embeddingId: row.id,
+      vector: enrolled.vector,
+    });
+
+    return {
+      matched: true,
+      mode,
+      userId: row.userId,
+      trustId: row.trustId,
+      embeddingId: row.id,
+      distance: bestDistance,
+      similarity: 1 - bestDistance,
+      accessLevel: master
+        ? TRUST_ID_ACCESS_LEVELS.MASTER
+        : TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
+      isMasterDevice: master,
+      durationMs,
+      thresholdStatus: BIOMETRIC_THRESHOLD_POLICY.status,
+    };
+  }
+
+  /**
+   * 1:N identification: hot cache (bounded) → ANN Top-K → exact rerank → threshold.
+   * Fail closed if ANN backend unavailable — never full-gallery Node scan.
+   */
+  async identifyOneToMany(input: {
+    biometric: BiometricPayload;
+    requireMasterAccess?: boolean;
+    topK?: number;
+    ip?: string;
+    userAgent?: string;
+  }): Promise<VectorMatchResult> {
+    const started = performance.now();
+    const mode = BIOMETRIC_MATCH_MODE.IDENTIFY_1_N;
+    const { modality, deviceFingerprint } = input.biometric;
+    const threshold = operatingThresholdDistance();
+    const topK = resolveTopK(input.topK ?? resolveAnnTopK());
+
+    if (requireCalibratedThreshold() && BIOMETRIC_THRESHOLD_POLICY.status !== "CALIBRATED") {
+      return {
+        matched: false,
+        mode,
+        accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
+        isMasterDevice: false,
+        durationMs: performance.now() - started,
+        topK,
+        thresholdStatus: BIOMETRIC_THRESHOLD_POLICY.status,
+        errorCode: BIOMETRIC_ERROR_CODES.BIOMETRIC_THRESHOLD_UNCALIBRATED,
+        error: "Biometric threshold is UNCALIBRATED; acceptance gated.",
+      };
+    }
+
+    if (isLegacyModelName(input.biometric.modelName)) {
+      return {
+        matched: false,
+        mode,
         accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
         isMasterDevice: false,
         errorCode: BIOMETRIC_ERROR_CODES.BIOMETRIC_TEMPLATE_LEGACY,
         error:
           "Probe embedding uses a legacy/non-ArcFace model. Re-capture with the production face pipeline.",
         durationMs: performance.now() - started,
+        thresholdStatus: BIOMETRIC_THRESHOLD_POLICY.status,
       };
     }
 
     const probe = resolveVector(input.biometric);
-    const threshold = maxDistance();
 
+    // Bounded hot cache only (cap 256) — not a full-gallery scan
     const hot = await searchHotVectorCache(probe, threshold);
-    const best = hot
-      ? {
+    if (hot && acceptsAtThreshold(hot.distance, threshold)) {
+      return this.finalizeIdentifyHit({
+        best: {
           embeddingId: hot.embeddingId,
           userId: hot.userId,
           trustId: hot.trustId,
           distance: hot.distance,
-          cacheHit: true as const,
-        }
-      : ((await this.matchPgVector(probe, modality, threshold)) ??
-        (await this.matchInMemory(probe, modality)));
+        },
+        probe,
+        modality,
+        deviceFingerprint,
+        requireMasterAccess: input.requireMasterAccess,
+        started,
+        cacheHit: true,
+        topK,
+        candidateCount: 1,
+        ip: input.ip,
+        userAgent: input.userAgent,
+      });
+    }
 
-    const durationMs = performance.now() - started;
-
-    if (!best || best.distance >= threshold) {
+    const ann = await this.fetchAnnTopK(probe, modality, topK);
+    if (ann.status === "unavailable") {
+      logMatchEvent("error", "ann_unavailable_fail_closed", {
+        mode,
+        reason: ann.reason,
+        durationMs: performance.now() - started,
+        topK,
+      });
       await recordAudit({
         type: AUDIT_EVENTS.BIOMETRIC_MATCH_FAILED,
         actorType: "system",
         metadata: {
           modality,
-          reason: "no_ai_vector_match",
-          distance: best?.distance,
-          durationMs,
+          reason: "biometric_service_unavailable",
+          annReason: ann.reason,
+          durationMs: performance.now() - started,
+          topK,
+          // no vectors
         },
         ip: input.ip,
         userAgent: input.userAgent,
       });
       return {
         matched: false,
+        mode,
         accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
         isMasterDevice: false,
-        durationMs,
+        durationMs: performance.now() - started,
+        topK,
+        thresholdStatus: BIOMETRIC_THRESHOLD_POLICY.status,
+        errorCode: BIOMETRIC_ERROR_CODES.BIOMETRIC_SERVICE_UNAVAILABLE,
+        error:
+          "Biometric identification service unavailable. Full-gallery fallback is disabled.",
+      };
+    }
+
+    const ranked = exactRerankCandidates(probe, ann.candidates);
+    const decision = decideAfterRerank(ranked, threshold);
+
+    if (!decision.accepted) {
+      await recordAudit({
+        type: AUDIT_EVENTS.BIOMETRIC_MATCH_FAILED,
+        actorType: "system",
+        metadata: {
+          modality,
+          reason: "no_ai_vector_match",
+          candidateCount: ranked.length,
+          topK,
+          bestDistance: ranked[0]?.distance,
+          durationMs: performance.now() - started,
+        },
+        ip: input.ip,
+        userAgent: input.userAgent,
+      });
+      return {
+        matched: false,
+        mode,
+        accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
+        isMasterDevice: false,
+        durationMs: performance.now() - started,
         cacheHit: false,
+        candidateCount: ranked.length,
+        topK,
+        distance: ranked[0]?.distance,
+        thresholdStatus: BIOMETRIC_THRESHOLD_POLICY.status,
         errorCode: BIOMETRIC_ERROR_CODES.NO_MATCH,
       };
     }
 
-    // Reject matches against legacy gallery templates
+    return this.finalizeIdentifyHit({
+      best: decision.accepted,
+      probe,
+      modality,
+      deviceFingerprint,
+      requireMasterAccess: input.requireMasterAccess,
+      started,
+      cacheHit: false,
+      topK,
+      candidateCount: ranked.length,
+      ip: input.ip,
+      userAgent: input.userAgent,
+    });
+  }
+
+  /** @deprecated Use identifyOneToMany — name kept for callers */
+  async matchOneToMany(input: {
+    biometric: BiometricPayload;
+    requireMasterAccess?: boolean;
+    ip?: string;
+    userAgent?: string;
+  }): Promise<VectorMatchResult> {
+    return this.identifyOneToMany(input);
+  }
+
+  private async finalizeIdentifyHit(input: {
+    best: {
+      embeddingId: string;
+      userId: string;
+      trustId: string;
+      distance: number;
+    };
+    probe: number[];
+    modality: BiometricModality;
+    deviceFingerprint?: string;
+    requireMasterAccess?: boolean;
+    started: number;
+    cacheHit: boolean;
+    topK: number;
+    candidateCount: number;
+    ip?: string;
+    userAgent?: string;
+  }): Promise<VectorMatchResult> {
+    const durationMs = performance.now() - input.started;
     const stored = await prisma.biometricEmbedding.findUnique({
-      where: { id: best.embeddingId },
+      where: { id: input.best.embeddingId },
       select: { modelName: true, embeddingJson: true },
     });
     if (
@@ -308,49 +657,61 @@ export class PgVectorMatcherService {
     ) {
       return {
         matched: false,
+        mode: BIOMETRIC_MATCH_MODE.IDENTIFY_1_N,
         accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
         isMasterDevice: false,
         durationMs,
+        topK: input.topK,
+        candidateCount: input.candidateCount,
+        thresholdStatus: BIOMETRIC_THRESHOLD_POLICY.status,
         errorCode: BIOMETRIC_ERROR_CODES.BIOMETRIC_TEMPLATE_LEGACY,
         error:
           "Matched template is legacy/incompatible. Re-enroll face biometrics.",
       };
     }
 
-    await prisma.biometricEmbedding.update({
-      where: { id: best.embeddingId },
-      data: { lastMatchedAt: new Date() },
-    }).catch(() => undefined);
+    await prisma.biometricEmbedding
+      .update({
+        where: { id: input.best.embeddingId },
+        data: { lastMatchedAt: new Date() },
+      })
+      .catch(() => undefined);
 
     const enrolled = parseStoredVector(stored.embeddingJson).vector;
     void cacheUserVector({
-      userId: best.userId,
-      trustId: best.trustId,
-      embeddingId: best.embeddingId,
-      vector: enrolled.length ? enrolled : probe,
+      userId: input.best.userId,
+      trustId: input.best.trustId,
+      embeddingId: input.best.embeddingId,
+      vector: enrolled.length ? enrolled : input.probe,
     });
 
-    const master = await isMasterTerminal(best.userId, deviceFingerprint);
+    const master = await isMasterTerminal(
+      input.best.userId,
+      input.deviceFingerprint,
+    );
     const accessLevel =
       master && (!input.requireMasterAccess || master)
         ? TRUST_ID_ACCESS_LEVELS.MASTER
         : TRUST_ID_ACCESS_LEVELS.UNIVERSAL;
-
-    const similarity = 1 - best.distance;
+    const similarity = 1 - input.best.distance;
 
     await recordAudit({
       type: AUDIT_EVENTS.BIOMETRIC_MATCHED,
-      userId: best.userId,
+      userId: input.best.userId,
       actorType: "user",
-      actorId: best.userId,
+      actorId: input.best.userId,
       metadata: {
-        modality,
-        distance: best.distance,
+        modality: input.modality,
+        mode: BIOMETRIC_MATCH_MODE.IDENTIFY_1_N,
+        distance: input.best.distance,
         similarity,
         accessLevel,
         isMasterDevice: master,
-        engine: "pgvector-arcface",
-        cacheHit: "cacheHit" in best && best.cacheHit,
+        engine: "pgvector-arcface-topk-rerank",
+        cacheHit: input.cacheHit,
+        topK: input.topK,
+        candidateCount: input.candidateCount,
+        thresholdStatus: BIOMETRIC_THRESHOLD_POLICY.status,
         durationMs,
       },
       ip: input.ip,
@@ -359,132 +720,120 @@ export class PgVectorMatcherService {
 
     return {
       matched: true,
-      userId: best.userId,
-      trustId: best.trustId,
-      distance: best.distance,
+      mode: BIOMETRIC_MATCH_MODE.IDENTIFY_1_N,
+      userId: input.best.userId,
+      trustId: input.best.trustId,
+      distance: input.best.distance,
       similarity,
-      embeddingId: best.embeddingId,
+      embeddingId: input.best.embeddingId,
       accessLevel,
       isMasterDevice: master,
-      cacheHit: "cacheHit" in best && best.cacheHit,
+      cacheHit: input.cacheHit,
       durationMs,
+      topK: input.topK,
+      candidateCount: input.candidateCount,
+      thresholdStatus: BIOMETRIC_THRESHOLD_POLICY.status,
     };
   }
 
-  private async matchPgVector(
+  /**
+   * Bounded Top-K ANN candidate generation via pgvector.
+   * On failure: unavailable — callers must fail closed (no full-gallery scan).
+   */
+  private async fetchAnnTopK(
     probe: number[],
     modality: BiometricModality,
-    threshold: number,
-  ): Promise<{
-    embeddingId: string;
-    userId: string;
-    trustId: string;
-    distance: number;
-  } | null> {
-    if (!(await isPgVectorEnabled())) return null;
+    topK: number,
+  ): Promise<
+    | { status: "ok"; candidates: AnnCandidate[] }
+    | { status: "unavailable"; reason: string }
+  > {
+    if (!(await isPgVectorEnabled())) {
+      // Empty gallery → NO_MATCH (no ANN needed). Non-empty without ANN → fail closed.
+      const activeCount = await prisma.biometricEmbedding.count({
+        where: { modality, status: "active" },
+      });
+      if (activeCount === 0) {
+        return { status: "ok", candidates: [] };
+      }
+      return { status: "unavailable", reason: "pgvector_disabled" };
+    }
 
     const literal = toPgVectorLiteral(probe);
+    const ef = resolveEfSearch(topK);
+    const timeoutMs = annTimeoutMs();
+
     try {
+      await prisma.$executeRawUnsafe(
+        `SET LOCAL statement_timeout = '${timeoutMs}'`,
+      );
+      await prisma.$executeRawUnsafe(
+        `SELECT set_config('hnsw.ef_search', '${ef}', true)`,
+      );
+
       const rows = await prisma.$queryRawUnsafe<
         Array<{
           id: string;
           user_id: string;
           trust_id: string;
           distance: number;
+          embedding_json: string | null;
         }>
       >(
         `
-        SELECT * FROM search_biometric_vector(
-          '${literal}'::vector,
-          '${modality}',
-          ${threshold}
-        )
+        SELECT
+          be.id::text AS id,
+          be.user_id::text AS user_id,
+          be.trust_id::text AS trust_id,
+          (be.vector <=> '${literal}'::vector)::float AS distance,
+          be.embedding_json::text AS embedding_json
+        FROM biometric_embeddings be
+        WHERE be.modality = '${modality}'
+          AND be.status = 'active'
+          AND be.vector IS NOT NULL
+        ORDER BY be.vector <=> '${literal}'::vector ASC
+        LIMIT ${Math.floor(topK)}
         `,
       );
-      const hit = rows[0];
-      if (!hit) return null;
-      return {
-        embeddingId: hit.id,
-        userId: hit.user_id,
-        trustId: hit.trust_id,
-        distance: Number(hit.distance),
-      };
-    } catch {
-      await prisma
-        .$executeRawUnsafe(`SET LOCAL hnsw.ef_search = 40`)
-        .catch(() => undefined);
-      const rows = await prisma.$queryRawUnsafe<
-        Array<{
-          id: string;
-          user_id: string;
-          trust_id: string;
-          distance: number;
-        }>
-      >(
-        `
-        SELECT id, user_id, trust_id, (vector <=> '${literal}'::vector) AS distance
-        FROM biometric_embeddings
-        WHERE modality = '${modality}' AND status = 'active' AND vector IS NOT NULL
-        ORDER BY vector <=> '${literal}'::vector
-        LIMIT 1
-        `,
-      );
-      const hit = rows[0];
-      if (!hit) return null;
-      return {
-        embeddingId: hit.id,
-        userId: hit.user_id,
-        trustId: hit.trust_id,
-        distance: Number(hit.distance),
-      };
-    }
-  }
 
-  private async matchInMemory(
-    probe: number[],
-    modality: BiometricModality,
-  ): Promise<{
-    embeddingId: string;
-    userId: string;
-    trustId: string;
-    distance: number;
-  } | null> {
-    const candidates = await prisma.biometricEmbedding.findMany({
-      where: { modality, status: "active" },
-      select: {
-        id: true,
-        userId: true,
-        trustId: true,
-        embeddingJson: true,
-      },
-    });
-
-    let best: {
-      embeddingId: string;
-      userId: string;
-      trustId: string;
-      distance: number;
-    } | null = null;
-
-    for (const c of candidates) {
-      const parsed = parseStoredVector(c.embeddingJson);
-      if (parsed.legacy || !parsed.vector.length) continue;
-      const distance = cosineDistance(probe, normalizeVector(parsed.vector));
-      if (!best || distance < best.distance) {
-        best = {
-          embeddingId: c.id,
-          userId: c.userId,
-          trustId: c.trustId,
-          distance,
-        };
+      const candidates: AnnCandidate[] = [];
+      for (const row of rows) {
+        const parsed = row.embedding_json
+          ? parseStoredVector(row.embedding_json)
+          : { vector: [] as number[], legacy: true };
+        candidates.push({
+          embeddingId: row.id,
+          userId: row.user_id,
+          trustId: row.trust_id,
+          annDistance: Number(row.distance),
+          vector:
+            !parsed.legacy && parsed.vector.length === BIOMETRIC_AI_EMBEDDING_DIMS
+              ? normalizeVector(parsed.vector)
+              : undefined,
+        });
       }
+      return { status: "ok", candidates };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "ann_query_failed";
+      logMatchEvent("error", "ann_query_failed", {
+        reason: msg.slice(0, 200),
+        topK,
+      });
+      return { status: "unavailable", reason: "ann_query_failed" };
     }
-
-    return best;
   }
 }
 
 export const pgVectorMatcher = new PgVectorMatcherService();
+
+/** Test helper: ensure matchInMemory symbol does not exist on the service */
+export function __assertNoFullGalleryFallback(): boolean {
+  const proto = PgVectorMatcherService.prototype as unknown as Record<
+    string,
+    unknown
+  >;
+  return typeof proto.matchInMemory !== "function";
+}
 
 export function isAiVectorPayload(payload: BiometricPayload): boolean {
   if (payload.vector?.length === BIOMETRIC_AI_EMBEDDING_DIMS) return true;

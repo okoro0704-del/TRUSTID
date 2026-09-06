@@ -1,200 +1,221 @@
 # ArcFace Pipeline Scientific Validation Report
 
-**Commit audited:** `7a4fb8c` (+ follow-up envelope parse fix in `fast-vector-match.ts`)  
-**Generated:** 2026-09-06  
-**Scope:** Measurement and audit only. No 10B redesign. No production threshold change.
+**Commits:** `7a4fb8c` (pipeline) · `56fa5f3` (envelope fix) · hardening phase (fail-closed + Top-K)  
+**Updated:** 2026-09-06  
+**Scope:** Harden existing implementation. No 10B redesign. No invented accuracy/PAD metrics.
 
 ---
 
-## A. PIPELINE VALIDATION
+## Executive status
 
-| Stage | Status | Notes |
-|-------|--------|-------|
-| Camera capture | PASS | `captureSilentFaceFromWebCamera` ? ImageData frames |
-| MediaPipe Face Landmarker | PASS | Same detector for enroll/auth path |
-| Face detection | PASS | `detectFacesInImageData` / `selectPrimaryFace` |
-| Landmarks ? 5-point | PASS | Mapped to ArcFace 5-point set |
-| ArcFace alignment | PASS | Umeyama ? InsightFace 112×112 template |
-| 112×112 normalization | PASS | RGB NCHW `(x-127.5)/128` |
-| ArcFace `w600k_mbf` | PASS | ONNX via `onnxruntime-web` |
-| 512-D embedding | PASS | Native 512; rejects other sizes |
-| L2 normalization | PASS | Client `l2Normalize` after ONNX |
-| Template storage | PASS* | Envelope `trustid_face_template_v1` + pgvector primary |
-| 1:1 verification | PASS* | Path A now parses envelope `primary` (was broken) |
-| 1:N search | PASS/WARN | pgvector HNSW; falls back to full-table Node scan |
+| Key | Status |
+|-----|--------|
+| **PIPELINE_STATUS** | `PASS` |
+| **MODEL_STATUS** | `PASS` (I/O measured) |
+| **BIOMETRIC_ACCURACY_STATUS** | `UNMEASURED` |
+| **THRESHOLD_STATUS** | `UNCALIBRATED` |
+| **PAD_STATUS** | `INCOMPLETE` |
+| **SEARCH_STATUS** | `PARTIAL` (Top-K+rerank implemented; live HNSW scale `NOT_RUN` without DATABASE_URL) |
+| **SECURITY_STATUS** | `PARTIAL` (full-gallery fallback removed; see security section) |
+| **10B_READINESS_STATUS** | `BLOCKED` |
 
-### Enroll vs auth consistency
-
-| Component | Same? | Evidence |
-|-----------|-------|----------|
-| Detector | YES | `mediapipe_face_landmarker_v1` |
-| Alignment | YES | `arcface_five_point_v1` |
-| Crop / preprocess | YES | `arcface_112_rgb_v1` |
-| Model | YES | `insightface_arcface_w600k_mbf_v1` v1 |
-| Embedding L2 norm | YES | Both via `embedAlignedFace112` |
-| Similarity metric | YES | Cosine distance `1 - dot` / pgvector `<=>` |
-| PAD timing | DIFFERENT | Auth silent path: `skipPad: true` then blink PAD on stream; pipeline PAD skipped for embed frames |
-| Multi-frame enroll | DIFFERENT | `enrollFromImageFrames` (mean template) exists but **silent capture stores a single frame** — not mean of gallery |
-
-### Inconsistencies (non-blocking for recognition identity of single frame)
-
-1. **Silent capture does not use `enrollFromImageFrames`** — enrollment quality strategy unused in production capture.
-2. **PAD is applied outside the shared embed call** (`skipPad: true`) — recognition tensor path still identical; liveness is sequential blink challenge.
-3. **`projectTo512` still exported** but marked deprecated; production face path does not use it for ArcFace.
-4. **1:1 Path A previously parsed `embeddingJson` as raw `number[]`** — broken for envelope templates; **fixed in this validation pass**.
+Evidence tags used below: **MEASURED** · **INFERRED** · **NOT MEASURED** · **NOT IMPLEMENTED**
 
 ---
 
-## B. MODEL VALIDATION
+## 1. Pipeline verification — MEASURED / PASS
 
-Measured against `apps/web/public/models/trustid/w600k_mbf.onnx`:
-
-| Property | Measured value |
-|----------|----------------|
-| SHA-256 | `9cc6e4a75f0e2bf0b1aed94578f144d15175f357bdc05e815e5c4a02b319eb4f` |
-| File size | 13,616,099 bytes |
-| ONNX input name | `input.1` |
-| Input dims | `[1, 3, 112, 112]` float32 NCHW |
-| Channel order | RGB (aligned in `alignFaceToArcFace112`) |
-| Input normalization | `(x - 127.5) / 128` |
-| ONNX output name | `516` |
-| Output dims | `[1, 512]` float32 |
-| Output datatype | float32 |
-| Raw output L2 norm | **not** unit (zero-input ? 5.98; random ? 11.05) |
-| App output normalization | L2 unit vector after inference |
-| Hidden projection | **NONE** — rejects non-512 lengths |
-| Determinism (same input) | cosine ? 1.0 |
-| Cosine similarity | `dot(u,v)` on L2-normalized vectors |
-
-Runtime: `onnxruntime-web` WebGPU ? WASM fallback. CDN WASM paths pinned to 1.21.0.
-
----
-
-## C. BIOMETRIC RESULTS
-
-**Labeled face dataset in repo: ABSENT.**
-
-| Metric | Result |
-|--------|--------|
-| Genuine / impostor distributions | **MISSING** |
-| FAR / FRR / ROC / EER | **MISSING** |
-| TAR @ FAR 1e-2 … 1e-6 | **MISSING** |
-| Rank-1 / 5 / 10 | **MISSING** |
-| FPIR / FNIR | **MISSING** |
-| Galleries 10K / 100K / 1M / 10M (biometric) | **SKIPPED_INSUFFICIENT_GALLERY** |
-
-Harness ready:
-
-```bash
-node scripts/run-biometric-benchmark.mjs --dataset path/to/labeled.json --out report.json
+```text
+capture ? MediaPipe landmarks ? 5-pt ArcFace align ? 112×112 RGB NCHW
+? (x-127.5)/128 ? w600k_mbf ? 512-D ? L2 ? cosine distance
 ```
 
-`--plumbing-only` exercises metric code on synthetic vectors and is **not** accuracy evidence.
+| Stage | Status |
+|-------|--------|
+| Detector / alignment / preprocess / model versions bound on enroll | PASS |
+| Enroll vs auth recognition path identical | PASS |
+| Multi-frame enrollment path | PASS (`captureSilentFaceEnrollmentFromWebCamera` + `enrollFromImageFrames`) |
+| Auth silent capture | Single accepted frame + blink liveness (by design) |
 
 ---
 
-## D. THRESHOLD RECOMMENDATION
+## 2. Model verification — MEASURED / PASS
 
-| Field | Value |
-|-------|-------|
-| Current production threshold | cosine distance **0.35** (similarity 0.65) |
-| Proposed threshold | **none** |
-| FAR/FRR @ current | **unmeasured** |
-| Status | **`THRESHOLD_CANNOT_BE_CALIBRATED_WITH_CURRENT_DATA`** |
-
-Do not change `BIOMETRIC_PGVECTOR_MAX_DISTANCE` until a labeled production-pipeline embedding set is evaluated.
+| Property | Value | Evidence |
+|----------|-------|----------|
+| Input | `input.1` `[1,3,112,112]` float32 | MEASURED |
+| Norm | `(x-127.5)/128` RGB NCHW | MEASURED (code) |
+| Output | `516` `[1,512]` float32 | MEASURED |
+| Raw L2 | not unit | MEASURED |
+| App L2 | yes | MEASURED |
+| Hidden projection | none | MEASURED |
 
 ---
 
-## E. SEARCH RESULTS
+## 3. Benchmark dataset — NOT MEASURED
 
-### Biometric accuracy vs ANN
+No labeled face dataset is checked into the repo.
 
-| Category | Status |
-|----------|--------|
-| BIOMETRIC ACCURACY | NOT MEASURED (no labeled faces) |
-| ANN SEARCH PERFORMANCE | Partial baseline only |
+Harness:
 
-### Node brute-force baseline (synthetic unit vectors — NOT recognition accuracy)
+```bash
+node scripts/run-biometric-benchmark.mjs --dataset labeled.json --out report.json
+```
 
-| Gallery | p50 latency | QPS | recall@1 (planted exact) |
-|---------|-------------|-----|---------------------------|
-| 10K | ~14.6 ms | ~68 | 1.0 |
-| 100K | ~139 ms | ~6.7 | 1.0 |
-| 1M+ | not run here (memory / time) | — | — |
+Dataset schema supports `subject_id`, `imagePath`, `split`, `sessionId`, plus **required** 512-D embeddings from the **exact** production pipeline. Demographics only if ground-truth labels exist (never inferred).
 
-### pgvector / HNSW (production config)
+`--plumbing-only` = metric math only ? **not** accuracy evidence.
+
+---
+
+## 4–7. 1:1 results / ROC / EER / FAR–FRR / threshold — NOT MEASURED
+
+| Metric | Status |
+|--------|--------|
+| Genuine/impostor distributions | NOT MEASURED |
+| FAR / FRR / TAR / TRR / ROC / EER | NOT MEASURED |
+| TAR @ FAR 1e-2 … 1e-6 | NOT MEASURED |
+| Production threshold selection | **THRESHOLD_STATUS = UNCALIBRATED** |
+
+Legacy operating distance `0.35` remains in code as a placeholder. See `THRESHOLD_POLICY.md`.
+
+Gate: `BIOMETRIC_REQUIRE_CALIBRATED_THRESHOLD=true` ? fail closed with `BIOMETRIC_THRESHOLD_UNCALIBRATED`.
+
+---
+
+## 8. 1:N results — NOT MEASURED (architecture hardened)
+
+Logical identify path (implemented):
+
+```text
+probe ? ANN Top-K (10|50|100) ? exact cosine rerank ? threshold ? identity | NO_MATCH
+```
 
 | Item | Status |
 |------|--------|
-| Live HNSW bench | **NOT_RUN** (no `DATABASE_URL` in validation environment) |
-| Index params | `m=16`, `ef_construction=64`, `ef_search=40` |
-| Query | `LIMIT 1`, cosine `<=>`, threshold 0.35 |
-| 10M / 100M / 1B | **NOT MEASURED** |
+| Top-1-only accept | REMOVED |
+| Rank-1/5/10 on labeled galleries | NOT MEASURED |
+| Galleries 10K / 100K / 1M biometric | NOT MEASURED |
 
 ---
 
-## F. PAD ASSESSMENT
+## 9. ANN / pgvector results
 
-| Layer | Current coverage |
-|-------|------------------|
-| FACE DETECTION | MediaPipe Face Landmarker |
-| FACE QUALITY | Size / blur / pose heuristics (`face-quality.ts`) |
-| LIVENESS | Active blink via blendshapes (`mediapipe_blink_active_v1`) |
-| PRESENTATION ATTACK DETECTION | **Incomplete** — blink ? print/replay/deepfake PAD |
-| FACE RECOGNITION | ArcFace `w600k_mbf` |
+| Experiment | Status |
+|------------|--------|
+| Node brute-force synthetic 10K/100K | MEASURED previously (infra only) |
+| Live pgvector HNSW 10K/100K/1M | **NOT_RUN** without `DATABASE_URL` |
 
-**Do not describe blink as complete anti-spoofing.**
+```bash
+DATABASE_URL=postgres://... node scripts/run-pgvector-hnsw-benchmark.mjs \
+  --sizes 10000,100000,1000000 --top-k 10,50,100 \
+  --m 16 --ef-construction 64 --ef-search 64
+```
 
-MiniFASNet (or equivalent validated PAD) integration point: `FacePresentationAttackDetector` in `pad.ts` / `types.ts`; production factory currently returns `MediaPipeBlinkPadDetector`. Artifact path reserved under `/models/trustid/pad/`. Fail-closed path exists (`FailClosedPadDetector`). No stub PAD deployed as “real” PAD.
-
----
-
-## G. TOP BLOCKERS (global production-grade 1:N)
-
-1. **No measured FAR/FRR/EER/TAR on labeled faces through this exact pipeline**
-2. **Uncalibrated threshold 0.35** (legacy-era constant; not ArcFace-calibrated here)
-3. **Full-table `matchInMemory` fallback** — loads entire active gallery into Node on pgvector failure (**scalability + security blocker**)
-4. **HNSW Top-1 only** — no Top-K rerank; ANN recall ? biometric accuracy
-5. **PAD incomplete** — blink only; no validated print/replay PAD
-6. **Single-frame enrollment in silent capture** — multi-template helpers unused
-7. **pgvector HNSW unbenchmarked at 1M–1B** in this pass
-8. **No demographic-labeled evaluation set**
+Configurable: `m`, `efConstruction`, `efSearch`, `K`. Synthetic vectors only.
 
 ---
 
-## H. 10B READINESS (measurements still required — no redesign yet)
+## 10. PAD status — INCOMPLETE
 
-Before designing a 10B system, obtain:
+| Layer | Coverage |
+|-------|----------|
+| FACE DETECTION | MediaPipe |
+| FACE QUALITY | Heuristic gate |
+| ACTIVE LIVENESS | Blink blendshapes |
+| PRESENTATION ATTACK DETECTION | **INCOMPLETE** |
+| MiniFASNet | **NOT PRESENT** / **NOT IMPLEMENTED** |
 
-1. Labeled genuine/impostor set through **this exact** detector?align?`w600k_mbf` path (report FAR/FRR/EER/TAR @ 1e-2…1e-6)
-2. Closed-set Rank-N + open-set FPIR/FNIR on real identity counts the data supports (no identity duplication to fake 10M)
-3. Threshold calibration from those distributions only
-4. Template strategy A/B (single vs mean vs multi) on real multi-shot enrollments
-5. Live pgvector HNSW: build time, size, RAM, p50/p95/p99, QPS, recall@1/@10 vs exact at 1M ? 10M ? 100M (1B if practical)
-6. Removal/replacement plan for full-table Node fallback (fail closed or shard-local exact, not full dump)
-7. Validated PAD model evaluation (separate from recognition metrics)
-8. Operational facts: shard key, replica topology, enrollment write path, purge/re-enroll for model version bumps
+Blink does **not** claim protection against print, replay, screen, 3D-mask, or deepfake injection.
 
-**Do not claim “10 billion identities supported.”**
-
----
-
-## Full-table fallback (blocker detail)
-
-| Location | Behavior |
-|----------|----------|
-| `apps/api/src/modules/trust-id/vector-matcher.ts` ? L273 | `matchPgVector(...) ?? matchInMemory(...)` |
-| `matchInMemory` ? L443–484 | `biometricEmbedding.findMany` all active rows ? cosine in Node |
-
-**Replacement (report only):** fail closed on pgvector errors for 1:N; or shard-scoped exact search; never load the global gallery into application memory.
+Formal interface: `toFormalPadResult` / `getPadDeploymentStatus()` ? `PAD_STATUS = INCOMPLETE`.
 
 ---
 
-## How to produce real biometric numbers
+## 11. Enrollment aggregation — IMPLEMENTED (accuracy effect NOT MEASURED)
 
-1. Capture labeled images (multiple per identity) with known IDs.
-2. Embed each image with the **production** web/SDK pipeline (same model versions).
-3. Export JSON per `packages/sdk/src/capture/biometric/benchmark/dataset.ts` schema.
-4. Run `node scripts/run-biometric-benchmark.mjs --dataset <file> --out report.json`.
-5. Optionally tag `failureModes` / `demographics` **only if ground-truth labels exist**.
+- Quality filter via pipeline rejection
+- Duplicate-frame skip (`sim ? 0.995`)
+- Quality-weighted mean ? L2 primary
+- Gallery vectors stored in envelope
+- Auth remains single-frame + blink
+
+Effect on FAR/FRR vs single-frame: **NOT MEASURED** (needs labeled multi-shot set).
+
+---
+
+## 12. Security findings — PARTIAL
+
+| Control | Status |
+|---------|--------|
+| Full-gallery `matchInMemory` fallback | **REMOVED** — fail closed `BIOMETRIC_SERVICE_UNAVAILABLE` |
+| Bounded ANN Top-K + statement timeout | IMPLEMENTED |
+| Vectors in structured match logs | Avoided (redacted) |
+| Audit events store distance/metadata not raw vectors | PASS (current paths) |
+| TLS in transit | INFERRED (platform HTTPS) — ops must enforce |
+| Encryption at rest | INFERRED / platform-dependent — **NOT MEASURED** here |
+| Legacy template rejection | PASS |
+| Model version on envelope | PASS |
+| Replay protection of biometric HTTP payloads | PARTIAL / platform session+WebAuthn — dedicated biometric nonce **NOT IMPLEMENTED** as dedicated control |
+| Prefer master-device crypto over global 1:N | PRESERVED (Path A 1:1 when `cachedTrustId`) |
+
+Regression tests: `apps/api/tests/vector-matcher-fail-closed.test.ts`.
+
+---
+
+## 13. Known limitations
+
+1. No labeled biometric accuracy numbers  
+2. Threshold uncalibrated  
+3. PAD incomplete  
+4. Live HNSW scale unbenchmarked in CI  
+5. Without pgvector, 1:N fail-closed (hot cache ?256 still works)  
+6. 10B architecture not designed / not claimed  
+
+---
+
+## 14. Explicit 10B readiness — BLOCKED
+
+Required before designing/claiming 10B-scale identification:
+
+1. Labeled FAR/FRR/EER/TAR through this pipeline  
+2. Calibrated threshold policy (`CALIBRATED`)  
+3. 1:N Rank/FPIR/FNIR on real galleries the data supports  
+4. Live HNSW metrics at 1M+ with Top-K recall  
+5. Validated PAD (or explicit risk acceptance)  
+6. Shard/ops model based on measured QPS/latency — not Node brute-force  
+
+**Do not claim 10 billion identities supported.**
+
+---
+
+## Completed (this hardening phase)
+
+- Removed full-gallery Node fallback; fail-closed ANN unavailable  
+- Explicit 1:1 verify vs 1:N identify APIs/semantics  
+- Top-K ANN + exact cosine rerank + threshold NO_MATCH  
+- Threshold policy doc + `UNCALIBRATED` status + optional hard gate  
+- Multi-frame enrollment capture + quality-weighted aggregation  
+- Formal PAD status = INCOMPLETE  
+- pgvector Top-K SQL helper + live HNSW bench script  
+- Regression tests for fail-closed / rerank / enrollment / PAD  
+
+## Remaining blockers
+
+1. Labeled dataset evaluation  
+2. Threshold calibration  
+3. Live pgvector scale numbers  
+4. Complete PAD model  
+5. Biometric payload replay nonce (dedicated) if required by threat model  
+
+## Evidence required before production biometric launch
+
+- Measured FAR/FRR/EER/TAR @ target FARs  
+- Versioned `CALIBRATED` threshold policy  
+- Fail-closed tests green in CI  
+- PAD risk decision documented  
+- Prefer master-device / 1:1 for routine auth  
+
+## Evidence required before 10B design
+
+- All of the above, plus measured ANN capacity curves and shard strategy inputs — **no redesign in this phase**

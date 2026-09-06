@@ -235,5 +235,8 @@ export {
   DevBypassPadDetector,
   MediaPipeBlinkPadDetector,
   createProductionPadDetector,
+  getPadDeploymentStatus,
+  PAD_STATUS,
+  toFormalPadResult,
 } from "./biometric/pad.js";
 export type { FacePresentationAttackDetector, FacePadResult } from "./biometric/types.js";

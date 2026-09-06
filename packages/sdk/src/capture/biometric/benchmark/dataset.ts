@@ -1,25 +1,27 @@
 /**
  * Parse labeled biometric datasets for the evaluation harness.
  *
- * Supported JSON schema:
+ * Preferred schema (production-pipeline embeddings):
  * {
- *   "name": "my_lab_set",
+ *   "name": "lab_v1",
  *   "modelName": "insightface_arcface_w600k_mbf_v1",
  *   "modelVersion": 1,
  *   "embeddingDims": 512,
+ *   "pipelineVersion": "trustid_face_pipeline_v1",
  *   "samples": [
  *     {
  *       "sampleId": "a1",
- *       "identityId": "person_a",
- *       "embedding": [ ... 512 floats, L2-normalized ... ],
- *       "demographics": { "sex": "F" },
- *       "failureModes": ["blur"]
+ *       "subject_id": "person_a",
+ *       "split": "test",
+ *       "imagePath": "optional/path.jpg",
+ *       "sessionId": "optional",
+ *       "embedding": [ ... 512 floats from EXACT production pipeline ... ]
  *     }
  *   ]
  * }
  *
- * Embeddings MUST be produced by the TrustID production pipeline to claim
- * TrustID accuracy. Do not mix models or preprocessing versions.
+ * imagePath/split/session are metadata. Accuracy claims require embeddings
+ * from the TrustID production ArcFace pipeline — not other models.
  */
 
 import {
@@ -51,13 +53,17 @@ export function parseLabeledDataset(raw: unknown): LabeledBiometricDataset {
     const embeddingRaw = row.embedding;
     if (!Array.isArray(embeddingRaw) || embeddingRaw.length !== embeddingDims) {
       throw new Error(
-        `Sample ${i} embedding length ${Array.isArray(embeddingRaw) ? embeddingRaw.length : 0}; expected ${embeddingDims}`,
+        `Sample ${i} embedding length ${Array.isArray(embeddingRaw) ? embeddingRaw.length : 0}; expected ${embeddingDims}. ` +
+          `Embeddings must be produced by the TrustID production ArcFace pipeline (imagePath alone is not sufficient).`,
       );
     }
     const embedding = l2Normalize(embeddingRaw.map(Number));
+    const identityId = String(
+      row.subject_id ?? row.subjectId ?? row.identityId ?? "",
+    );
     return {
-      sampleId: String(row.sampleId ?? `s${i}`),
-      identityId: String(row.identityId ?? ""),
+      sampleId: String(row.sampleId ?? row.imagePath ?? `s${i}`),
+      identityId,
       embedding,
       demographics:
         row.demographics && typeof row.demographics === "object"
@@ -72,7 +78,9 @@ export function parseLabeledDataset(raw: unknown): LabeledBiometricDataset {
   });
 
   for (const s of samples) {
-    if (!s.identityId) throw new Error(`Sample ${s.sampleId} missing identityId`);
+    if (!s.identityId) {
+      throw new Error(`Sample ${s.sampleId} missing subject_id/identityId`);
+    }
   }
 
   return {

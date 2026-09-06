@@ -8,16 +8,11 @@ import {
 import { prisma } from "../../db/client.js";
 import {
   biometricTemplateHash,
-  deviceFingerprintHash,
-  openJson,
   sealJson,
 } from "../../lib/crypto.js";
 import { recordAudit } from "../audit/service.js";
 import type { BiometricPayload } from "./schemas.js";
 import { isAiVectorPayload, pgVectorMatcher } from "./vector-matcher.js";
-
-/** Legacy cosine similarity threshold for short embeddings */
-const LEGACY_MATCH_THRESHOLD = 0.82;
 
 export type BiometricMatchResult = {
   matched: boolean;
@@ -29,6 +24,8 @@ export type BiometricMatchResult = {
   embeddingId?: string;
   accessLevel: TrustIdAccessLevel;
   isMasterDevice: boolean;
+  errorCode?: string;
+  error?: string;
 };
 
 function normalizeEmbedding(v: number[]): number[] {
@@ -37,30 +34,10 @@ function normalizeEmbedding(v: number[]): number[] {
   return v.map((x) => x / norm);
 }
 
-function cosineSimilarity(a: number[], b: number[]): number {
-  const len = Math.min(a.length, b.length);
-  let dot = 0;
-  for (let i = 0; i < len; i++) dot += a[i]! * b[i]!;
-  return dot;
-}
-
-async function isMasterTerminal(userId: string, deviceFingerprint?: string) {
-  if (!deviceFingerprint) return false;
-  const hash = deviceFingerprintHash(deviceFingerprint);
-  const row = await prisma.masterDevice.findFirst({
-    where: {
-      userId,
-      deviceFingerprint: hash,
-      isMasterDevice: true,
-      status: "active",
-    },
-  });
-  return Boolean(row);
-}
-
 /**
  * Identity-first 1:N biometric matcher.
- * Routes 512-D AI vectors to pgvector; legacy embeddings use sealed-template scan.
+ * Routes 512-D AI vectors to pgvector Top-K + rerank.
+ * Legacy short-embedding full-gallery scans are disabled (fail closed).
  */
 export class BiometricMatcherService {
   async enrollTemplate(input: {
@@ -151,94 +128,19 @@ export class BiometricMatcherService {
         embeddingId: ai.embeddingId,
         accessLevel: ai.accessLevel,
         isMasterDevice: ai.isMasterDevice,
+        errorCode: ai.errorCode,
+        error: ai.error,
       };
     }
 
-    const { modality, embedding, deviceFingerprint } = input.biometric;
-    if (!embedding) {
-      return {
-        matched: false,
-        accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
-        isMasterDevice: false,
-      };
-    }
-    const probe = normalizeEmbedding(embedding);
-
-    const candidates = await prisma.biometricTemplate.findMany({
-      where: { modality, status: "active" },
-      include: { user: { select: { id: true, trustId: true, status: true } } },
-    });
-
-    let best: {
-      similarity: number;
-      templateId: string;
-      userId: string;
-      trustId: string;
-    } | null = null;
-
-    for (const c of candidates) {
-      const stored = openJson<number[]>(c.embeddingSeal);
-      const sim = cosineSimilarity(probe, stored);
-      if (sim >= LEGACY_MATCH_THRESHOLD && (!best || sim > best.similarity)) {
-        best = {
-          similarity: sim,
-          templateId: c.id,
-          userId: c.userId,
-          trustId: c.user.trustId,
-        };
-      }
-    }
-
-    if (!best) {
-      await recordAudit({
-        type: AUDIT_EVENTS.BIOMETRIC_MATCH_FAILED,
-        userId: undefined,
-        actorType: "system",
-        metadata: { modality, reason: "no_match" },
-        ip: input.ip,
-        userAgent: input.userAgent,
-      });
-      return {
-        matched: false,
-        accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
-        isMasterDevice: false,
-      };
-    }
-
-    await prisma.biometricTemplate.update({
-      where: { id: best.templateId },
-      data: { lastMatchedAt: new Date() },
-    });
-
-    const master = await isMasterTerminal(best.userId, deviceFingerprint);
-    const accessLevel =
-      master && (!input.requireMasterAccess || master)
-        ? TRUST_ID_ACCESS_LEVELS.MASTER
-        : TRUST_ID_ACCESS_LEVELS.UNIVERSAL;
-
-    await recordAudit({
-      type: AUDIT_EVENTS.BIOMETRIC_MATCHED,
-      userId: best.userId,
-      actorType: "user",
-      actorId: best.userId,
-      metadata: {
-        modality,
-        similarity: best.similarity,
-        accessLevel,
-        isMasterDevice: master,
-      },
-      ip: input.ip,
-      userAgent: input.userAgent,
-    });
-
+    // Legacy short-embedding path: do NOT load the full template gallery.
     return {
-      matched: true,
-      userId: best.userId,
-      trustId: best.trustId,
-      similarity: best.similarity,
-      templateId: best.templateId,
-      accessLevel,
-      isMasterDevice: master,
+      matched: false,
+      accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
+      isMasterDevice: false,
+      errorCode: "BIOMETRIC_TEMPLATE_LEGACY",
+      error:
+        "Legacy embedding match is disabled. Use the production ArcFace 512-D pipeline.",
     };
   }
 }

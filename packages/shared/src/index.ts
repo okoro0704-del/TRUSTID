@@ -417,24 +417,86 @@ export const BIOMETRIC_LEGACY_MODEL_NAMES = [
   "spatial_fallback_dev_v1",
 ] as const;
 
-/** pgvector cosine distance threshold for high-confidence AI match */
+/**
+ * Legacy operating cosine *distance* (1 - similarity).
+ * STATUS: UNCALIBRATED — not derived from a labeled ArcFace evaluation.
+ * Prefer BIOMETRIC_THRESHOLD_POLICY; do not treat this as a measured FAR target.
+ */
 export const BIOMETRIC_PGVECTOR_MAX_DISTANCE = 0.35;
+
+/** Pipeline version string bound into threshold policy / templates */
+export const BIOMETRIC_PIPELINE_VERSION = "trustid_face_pipeline_v1";
+
+/** ANN candidate counts for 1:N (exact cosine rerank over Top-K) */
+export const BIOMETRIC_ANN_TOP_K_OPTIONS = [10, 50, 100] as const;
+export const BIOMETRIC_ANN_TOP_K_DEFAULT = 50;
+
+/** HNSW search depth (ef_search); must be >= Top-K for useful candidates */
+export const BIOMETRIC_HNSW_EF_SEARCH_DEFAULT = 64;
+
+/** Bounded statement timeout for ANN queries (ms) */
+export const BIOMETRIC_ANN_QUERY_TIMEOUT_MS = 2_000;
+
+/**
+ * Threshold governance — production acceptance must not pretend calibration exists.
+ * Set BIOMETRIC_REQUIRE_CALIBRATED_THRESHOLD=true to fail closed until calibrated.
+ */
+export const BIOMETRIC_THRESHOLD_STATUS = {
+  UNCALIBRATED: "UNCALIBRATED",
+  CALIBRATED: "CALIBRATED",
+} as const;
+
+export type BiometricThresholdStatus =
+  (typeof BIOMETRIC_THRESHOLD_STATUS)[keyof typeof BIOMETRIC_THRESHOLD_STATUS];
+
+export const BIOMETRIC_THRESHOLD_POLICY = {
+  model: BIOMETRIC_AI_MODEL_NAME,
+  modelVersion: BIOMETRIC_AI_MODEL_VERSION,
+  pipelineVersion: BIOMETRIC_PIPELINE_VERSION,
+  distanceMetric: "cosine_distance" as const,
+  /** Cosine distance; similarity = 1 - distance */
+  threshold: BIOMETRIC_PGVECTOR_MAX_DISTANCE,
+  targetFar: null as number | null,
+  dataset: null as string | null,
+  datasetVersion: null as string | null,
+  evaluationDate: null as string | null,
+  status: BIOMETRIC_THRESHOLD_STATUS.UNCALIBRATED as BiometricThresholdStatus,
+} as const;
+
+export const BIOMETRIC_PAD_STATUS = {
+  INCOMPLETE: "INCOMPLETE",
+  ACTIVE_LIVENESS_ONLY: "ACTIVE_LIVENESS_ONLY",
+  COMPLETE: "COMPLETE",
+} as const;
 
 /** Minimum detector/quality confidence before login/enroll */
 export const BIOMETRIC_FACE_CAPTURE_MIN_CONFIDENCE = 0.55;
 
+/** Match operation kinds — do not mix 1:1 and 1:N semantics */
+export const BIOMETRIC_MATCH_MODE = {
+  VERIFY_1_1: "VERIFY_1_1",
+  IDENTIFY_1_N: "IDENTIFY_1_N",
+} as const;
+
+export type BiometricMatchMode =
+  (typeof BIOMETRIC_MATCH_MODE)[keyof typeof BIOMETRIC_MATCH_MODE];
+
 /** Structured biometric client/API error codes */
 export const BIOMETRIC_ERROR_CODES = {
   BIOMETRIC_MODEL_UNAVAILABLE: "BIOMETRIC_MODEL_UNAVAILABLE",
+  BIOMETRIC_SERVICE_UNAVAILABLE: "BIOMETRIC_SERVICE_UNAVAILABLE",
+  BIOMETRIC_THRESHOLD_UNCALIBRATED: "BIOMETRIC_THRESHOLD_UNCALIBRATED",
   NO_FACE: "NO_FACE",
   MULTIPLE_FACES: "MULTIPLE_FACES",
   FACE_TOO_SMALL: "FACE_TOO_SMALL",
   LOW_QUALITY: "LOW_QUALITY",
   LIVENESS_FAILED: "LIVENESS_FAILED",
+  PAD_UNAVAILABLE: "PAD_UNAVAILABLE",
   EMBEDDING_FAILED: "EMBEDDING_FAILED",
   NO_MATCH: "NO_MATCH",
   AMBIGUOUS_MATCH: "AMBIGUOUS_MATCH",
   BIOMETRIC_TEMPLATE_LEGACY: "BIOMETRIC_TEMPLATE_LEGACY",
+  BIOMETRIC_MODEL_VERSION_MISMATCH: "BIOMETRIC_MODEL_VERSION_MISMATCH",
 } as const;
 
 export type BiometricErrorCode =
