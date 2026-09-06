@@ -24,6 +24,20 @@ Optional (only if ground-truth exists — never inferred):
 - `failureModes[]` (pose, blur, lighting, glasses, occlusion, …)
 - quality metadata
 
+### Evaluation collection additions (minimal)
+
+These support the internal evaluation collector and do **not** change recognition requirements:
+
+| Field | Required for collector | Description |
+|-------|------------------------|-------------|
+| `consent_given` | yes (participant meta) | Explicit voluntary consent |
+| `consent_timestamp` | yes (participant meta) | ISO-8601 |
+| `dataset_version` | yes (dataset root) | Matches `datasetVersion` |
+| Capture count | ?3 accepted frames per session | Aligns with multi-frame enrollment quality bar |
+| Sessions | ?3 distinct sessions per subject | Enrollment + two variation sessions |
+
+Raw images are **optional** for the JSON harness (embeddings are required). When images are retained, `imagePath` must be a relative path under the evaluation data root.
+
 ## Pipeline binding (mandatory for accuracy claims)
 
 Embeddings must be produced by:
@@ -69,8 +83,9 @@ Prefer **subject-disjoint** development vs test splits for threshold selection.
 ## How to run once data exists
 
 ```bash
+node scripts/validate-biometric-dataset.mjs --dataset labeled.json
 node scripts/run-biometric-benchmark.mjs \
-  --dataset path/to/labeled.json \
+  --dataset labeled.json \
   --out-dir artifacts/biometric-evidence \
   --development-split development \
   --test-split test

@@ -26,6 +26,7 @@ import { recoveryRoutes } from "./routes/recovery.js";
 import { bbsRoutes } from "./routes/bbs.js";
 import { trustIdRoutes } from "./routes/trust-id.js";
 import { baasRoutes } from "./routes/baas.js";
+import { biometricEvalRoutes } from "./routes/biometric-eval.js";
 import { registerRealtimeGateway } from "./modules/realtime/index.js";
 import {
   getBaasBindings,
@@ -166,6 +167,7 @@ export async function buildApp() {
   await app.register(trustIdRoutes);
   await app.register(baasRoutes);
   await app.register(wipeRoutes);
+  await app.register(biometricEvalRoutes);
 
   await registerRealtimeGateway(app);
 

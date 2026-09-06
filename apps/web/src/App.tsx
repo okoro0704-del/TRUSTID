@@ -1,4 +1,5 @@
 import { Navigate, Route, Routes } from "react-router-dom";
+import { BiometricEvalCollectorPage } from "./pages/internal/BiometricEvalCollector";
 import { SecurePage } from "./pages/Secure";
 import { SecuredPage } from "./pages/Secured";
 import { ConsentPage } from "./pages/Consent";
@@ -39,6 +40,10 @@ export function App() {
       <Route path="/enroll" element={<EnrollPage />} />
       <Route path="/waiting-approval" element={<WaitingApprovalPage />} />
       <Route path="/oauth/consent" element={<ConsentPage />} />
+      <Route
+        path="/internal/biometric-eval"
+        element={<BiometricEvalCollectorPage />}
+      />
       <Route path="/dashboard" element={<TrustCenterLayout />}>
         <Route index element={<OverviewPage />} />
         <Route path="apps" element={<AppLockerPage />} />

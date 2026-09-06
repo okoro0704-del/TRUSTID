@@ -43,10 +43,17 @@ Lower cosine **distance** = greater similarity (`distance = 1 - similarity`).
 | Item | Value |
 |------|--------|
 | Dataset used | **none** |
+| Collection tooling | **AVAILABLE** — `/internal/biometric-eval` (see `EVALUATION_COLLECTION.md`) |
 | Subjects | **0** |
 | Images | **0** |
 | Genuine trials | **NOT MEASURED** |
 | Impostor trials | **NOT MEASURED** |
+
+```text
+BIOMETRIC_EVIDENCE_STATUS = BLOCKED_BY_DATASET
+```
+
+Collection tooling does **not** change this status until labeled volunteers are captured and benchmarked.
 
 See `DATASET_SPEC.md` for the exact required schema and FAR sample-size table.
 

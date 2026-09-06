@@ -620,6 +620,22 @@ export {
   MediaPipeBlinkPadDetector,
   createProductionPadDetector,
 };
+
+export {
+  validateLabeledDatasetJson,
+  assignSubjectDisjointSplits,
+  buildLabeledExport,
+  EVAL_PIPELINE_RECORD,
+  EVAL_SESSION_PROTOCOL,
+  EVAL_MIN_ACCEPTED_PER_SESSION,
+  EVAL_DATASET_VERSION,
+} from "./capture/biometric/evaluation/index.js";
+export type {
+  EvalCaptureRecord,
+  EvalSessionKey,
+  EvalConsentRecord,
+} from "./capture/biometric/evaluation/index.js";
+
 export type {
   AmbientAuthenticateOptions,
   AmbientSignInResult,

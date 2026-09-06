@@ -25,3 +25,5 @@ apps/device/android/**/build/
 apps/device/ios/App/Pods/
 apps/device/ios/App/Podfile.lock
 *.tsbuildinfo
+artifacts/biometric-evaluation/subjects/
+artifacts/biometric-evaluation/exports/
