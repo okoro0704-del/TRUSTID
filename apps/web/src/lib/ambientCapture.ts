@@ -96,6 +96,7 @@ async function captureUnifiedFaceOnce(
     if (
       web?.payload?.vector &&
       web.payload.vector.length === 512 &&
+      web.payload.modelName === BIOMETRIC_AI_MODEL_NAME &&
       web.confidence >= min
     ) {
       return web.payload;
@@ -116,6 +117,7 @@ async function captureUnifiedFaceOnce(
     if (
       face?.payload?.vector &&
       face.payload.vector.length === 512 &&
+      face.payload.modelName === BIOMETRIC_AI_MODEL_NAME &&
       face.confidence >= min
     ) {
       return face.payload;

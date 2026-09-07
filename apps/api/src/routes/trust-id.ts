@@ -206,6 +206,8 @@ export async function trustIdRoutes(app: FastifyInstance) {
         device: result.device,
         isMasterDevice: true,
         identity: result.identity,
+        faceEmbeddingId: result.faceEmbeddingId,
+        faceModelName: result.faceModelName,
         ...sessionBody(result.sessionToken),
         token: config.exposeSessionTokenInBody ? result.token : undefined,
       };

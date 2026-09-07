@@ -500,13 +500,25 @@ export const BIOMETRIC_ERROR_CODES = {
   BIOMETRIC_MODEL_UNAVAILABLE: "BIOMETRIC_MODEL_UNAVAILABLE",
   BIOMETRIC_SERVICE_UNAVAILABLE: "BIOMETRIC_SERVICE_UNAVAILABLE",
   BIOMETRIC_THRESHOLD_UNCALIBRATED: "BIOMETRIC_THRESHOLD_UNCALIBRATED",
+  /** Camera / getUserMedia unavailable */
+  CAMERA_UNAVAILABLE: "CAMERA_UNAVAILABLE",
   NO_FACE: "NO_FACE",
+  /** Alias for NO_FACE — face not detected in frame */
+  FACE_NOT_DETECTED: "FACE_NOT_DETECTED",
   MULTIPLE_FACES: "MULTIPLE_FACES",
   FACE_TOO_SMALL: "FACE_TOO_SMALL",
   LOW_QUALITY: "LOW_QUALITY",
   LIVENESS_FAILED: "LIVENESS_FAILED",
   PAD_UNAVAILABLE: "PAD_UNAVAILABLE",
   EMBEDDING_FAILED: "EMBEDDING_FAILED",
+  /** Face seen but production ArcFace vector could not be produced */
+  FACE_VECTOR_UNAVAILABLE: "FACE_VECTOR_UNAVAILABLE",
+  /** Account has never enrolled a durable face template */
+  FACE_NOT_ENROLLED: "FACE_NOT_ENROLLED",
+  /** Template expected but cannot be loaded from persistence */
+  FACE_TEMPLATE_UNAVAILABLE: "FACE_TEMPLATE_UNAVAILABLE",
+  /** Template exists; verification comparison failed */
+  FACE_VERIFICATION_FAILED: "FACE_VERIFICATION_FAILED",
   NO_MATCH: "NO_MATCH",
   AMBIGUOUS_MATCH: "AMBIGUOUS_MATCH",
   BIOMETRIC_TEMPLATE_LEGACY: "BIOMETRIC_TEMPLATE_LEGACY",
@@ -515,3 +527,40 @@ export const BIOMETRIC_ERROR_CODES = {
 
 export type BiometricErrorCode =
   (typeof BIOMETRIC_ERROR_CODES)[keyof typeof BIOMETRIC_ERROR_CODES];
+
+/**
+ * Face-template lifecycle stages (metadata only — never include vectors).
+ * Used for diagnostics so “no template” is not conflated with camera failure.
+ */
+export const FACE_LIFECYCLE_STAGE = {
+  CAMERA_READY: "camera_ready",
+  FACE_DETECTED: "face_detected",
+  VECTOR_CREATED: "vector_created",
+  ENROLLMENT_STARTED: "enrollment_started",
+  TEMPLATE_CREATED: "template_created",
+  TEMPLATE_PERSISTED: "template_persisted",
+  TEMPLATE_RETRIEVED: "template_retrieved",
+  VERIFICATION_STARTED: "verification_started",
+  VERIFICATION_COMPLETED: "verification_completed",
+} as const;
+
+export type FaceLifecycleStage =
+  (typeof FACE_LIFECYCLE_STAGE)[keyof typeof FACE_LIFECYCLE_STAGE];
+
+/** Safe diagnostic snapshot — never includes embeddings/images */
+export type FaceLifecycleDiagnostics = {
+  cameraReady?: boolean;
+  faceDetected?: boolean;
+  vectorCreated?: boolean;
+  vectorDims?: number;
+  modelName?: string | null;
+  modelReady?: boolean;
+  onnxActive?: boolean;
+  spatialFallbackActive?: boolean;
+  enrollmentStarted?: boolean;
+  templateAvailable?: boolean;
+  templateId?: string | null;
+  trustId?: string | null;
+  stage?: FaceLifecycleStage | string;
+  errorCode?: BiometricErrorCode | string | null;
+};

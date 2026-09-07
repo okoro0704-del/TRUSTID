@@ -48,6 +48,7 @@ export function TrustIdAmbientAuthProvider({
   const {
     phase,
     error,
+    faceDiagnostics,
     fingerprintBusy,
     retry,
     confirmSwitchAccount,
@@ -77,6 +78,23 @@ export function TrustIdAmbientAuthProvider({
             style={{ marginTop: "0.65rem", color: "#fbbf24" }}
           >
             {error}
+          </p>
+        ) : null}
+        {faceDiagnostics?.vectorCreated || faceDiagnostics?.errorCode ? (
+          <p
+            className="tid-ambient-splash-msg"
+            style={{ marginTop: "0.35rem", fontSize: "0.75rem", opacity: 0.75 }}
+            data-testid="face-lifecycle-diagnostics"
+          >
+            {[
+              faceDiagnostics.faceDetected ? "face_detected" : null,
+              faceDiagnostics.vectorCreated ? "vector_created" : null,
+              faceDiagnostics.errorCode === "FACE_NOT_ENROLLED"
+                ? "face_not_enrolled"
+                : faceDiagnostics.errorCode ?? null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
           </p>
         ) : null}
         <div

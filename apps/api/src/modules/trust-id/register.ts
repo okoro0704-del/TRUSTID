@@ -52,6 +52,32 @@ export async function registerTrustIdWithMasterDevice(input: {
     userAgent: input.userAgent,
   });
 
+  // Confirm durable face template was persisted (same identity key as enroll).
+  const faceRow = await prisma.biometricEmbedding.findFirst({
+    where: {
+      userId: created.userId,
+      modality: "face",
+      status: "active",
+    },
+    select: { id: true, trustId: true, modelName: true },
+  });
+  if (!faceRow) {
+    throw Object.assign(
+      new Error(
+        "FACE_TEMPLATE_UNAVAILABLE — Face enrollment did not persist a template.",
+      ),
+      { statusCode: 500, code: "FACE_TEMPLATE_UNAVAILABLE" },
+    );
+  }
+  if (faceRow.trustId !== created.trustId) {
+    throw Object.assign(
+      new Error(
+        "FACE_TEMPLATE_UNAVAILABLE — Enrolled template trustId mismatch.",
+      ),
+      { statusCode: 500, code: "FACE_TEMPLATE_UNAVAILABLE" },
+    );
+  }
+
   await prisma.device.update({
     where: { id: created.deviceId },
     data: {
@@ -119,6 +145,8 @@ export async function registerTrustIdWithMasterDevice(input: {
       pushTokenRegistered,
     },
     trustId: created.trustId,
+    faceEmbeddingId: faceRow.id,
+    faceModelName: faceRow.modelName,
     isMasterDevice: true as const,
     identity,
     sessionToken: token,

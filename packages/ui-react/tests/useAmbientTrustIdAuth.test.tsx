@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 import { TrustIdAuthProvider } from "../src/context/TrustIdAuthProvider.js";
 import { useAmbientTrustIdAuth } from "../src/hooks/useAmbientTrustIdAuth.js";
 import type { TrustIdApiClient } from "../src/api/client.js";
+import { resetEnrollmentCandidateForDev } from "../src/hooks/enrollmentCandidateSession.js";
 
 const faceLookup = vi.fn();
 const registerTrustId = vi.fn();
@@ -61,6 +62,7 @@ function facePayload(overrides: Record<string, unknown> = {}) {
 describe("useAmbientTrustIdAuth state machine", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetEnrollmentCandidateForDev();
     faceLookup.mockResolvedValue({ status: "NOT_FOUND", canRegister: true });
     registerTrustId.mockResolvedValue({
       matched: true,
@@ -213,7 +215,7 @@ describe("useAmbientTrustIdAuth state machine", () => {
     expect(submitted.face?.modelName).toBe("insightface_arcface_w600k_mbf_v1");
     expect(submitted.face?.vector).toHaveLength(512);
     expect(submitted.face?.embedding).toBeUndefined();
-    // ArcFace probe from NO_MATCH is enough — no second capture required.
+    // ArcFace probe from NO_MATCH is enough ? no second capture required.
     expect(captureEnrollmentPayload).not.toHaveBeenCalled();
 
     act(() => {
@@ -236,7 +238,6 @@ describe("useAmbientTrustIdAuth state machine", () => {
       modelName: "spatial_fallback_v1",
     });
     const capturePayload = vi.fn(async () => legacyProbe);
-    // Enrollment fails closed (empty)  must not fall back to legacy probe.
     const captureEnrollmentPayload = vi.fn(async () => ({}));
     const { result } = renderHook(
       () =>
@@ -249,16 +250,13 @@ describe("useAmbientTrustIdAuth state machine", () => {
       { wrapper },
     );
 
-    await waitFor(() => expect(result.current.phase).toBe("NO_MATCH"));
-
-    act(() => {
-      result.current.confirmCreateAccount();
-    });
-
+    // Legacy vectors never reach lookup / NO_MATCH — fail at vector stage.
     await waitFor(() => expect(result.current.phase).toBe("ERROR"));
+    expect(faceLookup).not.toHaveBeenCalled();
     expect(registerTrustId).not.toHaveBeenCalled();
-    expect(result.current.error).toMatch(
-      /Legacy|No face template|REGISTRATION_FAILED/i,
+    expect(result.current.error).toMatch(/FACE_VECTOR_UNAVAILABLE|ArcFace/i);
+    expect(result.current.faceDiagnostics.errorCode).toBe(
+      "FACE_VECTOR_UNAVAILABLE",
     );
   });
 
@@ -278,17 +276,19 @@ describe("useAmbientTrustIdAuth state machine", () => {
     );
 
     await waitFor(() => expect(result.current.phase).toBe("NO_MATCH"));
+    expect(result.current.faceDiagnostics.vectorCreated).toBe(true);
+    expect(result.current.faceDiagnostics.errorCode).toBe("FACE_NOT_ENROLLED");
     act(() => {
       result.current.confirmCreateAccount();
     });
     await waitFor(() => expect(result.current.phase).toBe("FACE_SAVED"));
-    // Probe is enough  enrollment path should not be required.
     expect(captureEnrollmentPayload).not.toHaveBeenCalled();
     const submitted = registerTrustId.mock.calls[0]?.[0] as {
       face?: { confidence?: number; modelName?: string };
     };
     expect(submitted.face?.modelName).toBe("insightface_arcface_w600k_mbf_v1");
     expect(submitted.face?.confidence).toBe(0.88);
+    expect(result.current.faceDiagnostics.templateAvailable).toBe(true);
   });
 
   it("prefers ArcFace NO_MATCH probe over a second enrollment capture", async () => {

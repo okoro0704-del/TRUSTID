@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  BIOMETRIC_AI_EMBEDDING_DIMS,
   BIOMETRIC_AI_MODEL_NAME,
   BIOMETRIC_AI_MODEL_VERSION,
-  isProductionArcFaceModelName,
+  BIOMETRIC_ERROR_CODES,
+  type FaceLifecycleDiagnostics,
 } from "@trustid/shared";
 import {
   createTrustIdSdk,
@@ -14,14 +14,20 @@ import {
 import { resolveGuestRealtimeUrl } from "../api/client.js";
 import { useTrustIdAuth as useTrustIdSession } from "../context/TrustIdAuthProvider.js";
 import type { TrustIdIdentity } from "../types.js";
+import {
+  clearEnrollmentCandidate,
+  getFaceDiagnostics,
+  isArcFaceEnrollmentFace,
+  patchFaceDiagnostics,
+  peekEnrollmentCandidate,
+  resetEnrollmentCandidateForDev,
+  setEnrollmentCandidate,
+} from "./enrollmentCandidateSession.js";
 
 function isProductionArcFaceFace(
   face: MultiModalBiometricPayload["face"] | undefined | null,
 ): boolean {
-  if (!face?.vector || face.vector.length !== BIOMETRIC_AI_EMBEDDING_DIMS) {
-    return false;
-  }
-  return isProductionArcFaceModelName(face.modelName);
+  return isArcFaceEnrollmentFace(face);
 }
 
 /**
@@ -111,12 +117,16 @@ export type UseAmbientTrustIdAuthResult = {
   phase: AmbientAuthPhase;
   identity: TrustIdIdentity | null;
   error: string | null;
+  /** Safe face-lifecycle diagnostics (no vectors/images) */
+  faceDiagnostics: FaceLifecycleDiagnostics;
   lastResult: AmbientSignInResult | null;
   previousTrustId: string | null;
   approvalPollToken: string | null;
   /** True while user-initiated fingerprint unlock is running */
   fingerprintBusy: boolean;
   retry: () => void;
+  /** Dev-only: clear ephemeral enrollment candidate and rescan */
+  resetFaceEnrollmentForDev: () => void;
   confirmSwitchAccount: () => void;
   /** User accepted "create new Trust ID" after NOT_FOUND lookup */
   confirmCreateAccount: () => void;
@@ -202,6 +212,9 @@ export function useAmbientTrustIdAuth(
   const [approvalPollToken, setApprovalPollToken] = useState<string | null>(null);
   const [fingerprintBusy, setFingerprintBusy] = useState(false);
   const [nonce, setNonce] = useState(0);
+  const [faceDiagnostics, setFaceDiagnostics] = useState<FaceLifecycleDiagnostics>(
+    () => getFaceDiagnostics(),
+  );
   const startedRef = useRef(false);
   const pollAbortRef = useRef(false);
   /** Invalidate in-flight ambient runs (Strict Mode / overlapping captures). */
@@ -213,6 +226,10 @@ export function useAmbientTrustIdAuth(
   const pendingEnrollRef = useRef<AmbientSignInResult | null>(null);
   /** User-choice screens must not be overwritten by stale async work. */
   const phaseRef = useRef<AmbientAuthPhase>("CHECKING");
+
+  const syncDiagnostics = useCallback((partial: FaceLifecycleDiagnostics) => {
+    setFaceDiagnostics(patchFaceDiagnostics(partial));
+  }, []);
 
   const abortCapture = useCallback(() => {
     try {
@@ -456,9 +473,32 @@ export function useAmbientTrustIdAuth(
       }
       abortCapture();
       setError(null);
+      // Keep ArcFace identification face for Register (module session survives remounts).
+      const face = pendingPayloadRef.current?.face;
+      if (isProductionArcFaceFace(face)) {
+        setEnrollmentCandidate(face!, "identification");
+        syncDiagnostics({
+          faceDetected: true,
+          vectorCreated: true,
+          vectorDims: face!.vector!.length,
+          modelName: face!.modelName ?? null,
+          templateAvailable: false,
+          templateId: null,
+          stage: "vector_created",
+          errorCode: BIOMETRIC_ERROR_CODES.FACE_NOT_ENROLLED,
+        });
+      } else {
+        syncDiagnostics({
+          faceDetected: Boolean(face),
+          vectorCreated: false,
+          modelName: face?.modelName ?? null,
+          templateAvailable: false,
+          errorCode: BIOMETRIC_ERROR_CODES.FACE_VECTOR_UNAVAILABLE,
+        });
+      }
       setPhaseSafe("NO_MATCH", runId);
     },
-    [abortCapture, setPhaseSafe],
+    [abortCapture, setPhaseSafe, syncDiagnostics],
   );
 
   const enterServiceError = useCallback(
@@ -510,12 +550,50 @@ export function useAmbientTrustIdAuth(
     if (!payload?.face) {
       enterServiceError(
         runId,
-        "CAMERA_ERROR — No face detected. Retry the camera, use fingerprint if you already have a Trust ID, or register.",
+        `${BIOMETRIC_ERROR_CODES.FACE_NOT_DETECTED} — No face detected. Retry the camera, use fingerprint if you already have a Trust ID, or register.`,
       );
+      syncDiagnostics({
+        cameraReady: true,
+        faceDetected: false,
+        vectorCreated: false,
+        errorCode: BIOMETRIC_ERROR_CODES.FACE_NOT_DETECTED,
+      });
+      return;
+    }
+
+    if (!isProductionArcFaceFace(payload.face)) {
+      enterServiceError(
+        runId,
+        `${BIOMETRIC_ERROR_CODES.FACE_VECTOR_UNAVAILABLE} — Production ArcFace face vector unavailable. Check models at /models/trustid.`,
+      );
+      syncDiagnostics({
+        faceDetected: true,
+        vectorCreated: false,
+        modelName: payload.face.modelName ?? null,
+        vectorDims: payload.face.vector?.length,
+        errorCode: BIOMETRIC_ERROR_CODES.FACE_VECTOR_UNAVAILABLE,
+        onnxActive: false,
+        spatialFallbackActive: /spatial_fallback/i.test(
+          String(payload.face.modelName ?? ""),
+        ),
+      });
       return;
     }
 
     pendingPayloadRef.current = payload;
+    setEnrollmentCandidate(payload.face, "identification");
+    syncDiagnostics({
+      cameraReady: true,
+      faceDetected: true,
+      vectorCreated: true,
+      vectorDims: payload.face.vector!.length,
+      modelName: payload.face.modelName ?? null,
+      onnxActive: true,
+      spatialFallbackActive: false,
+      modelReady: true,
+      stage: "vector_created",
+      errorCode: null,
+    });
 
     let lookup;
     try {
@@ -622,11 +700,11 @@ export function useAmbientTrustIdAuth(
     getInstallId,
     getLastTrustId,
     setPhaseSafe,
+    syncDiagnostics,
   ]);
 
   const confirmCreateAccount = useCallback(() => {
     // Explicit registration only — never from a silent path.
-    // Legacy probes are never enrolled; ArcFace from the NO_MATCH scan may be.
     setPhaseSafe("ENROLLING");
     setError(null);
     abortCapture();
@@ -635,17 +713,24 @@ export function useAmbientTrustIdAuth(
 
     void (async () => {
       const sdk = createTrustIdSdk({ baseUrl: apiBaseUrl });
-      const identificationProbe = pendingPayloadRef.current;
-      pendingPayloadRef.current = null;
+      syncDiagnostics({
+        enrollmentStarted: true,
+        stage: "enrollment_started",
+        errorCode: null,
+      });
 
       let enrolledFace: MultiModalBiometricPayload["face"] | undefined;
       let enrollSource: "probe" | "enrollment" | "fresh" | "none" = "none";
 
-      // 1) Reuse the ArcFace face that just produced NO_MATCH — same production
-      //    pipeline, no second camera pass / blink gate that often fails closed.
-      if (isProductionArcFaceFace(identificationProbe?.face)) {
-        enrolledFace = identificationProbe!.face;
+      // 1) Module-session ArcFace candidate (survives remounts) + pending probe.
+      const session = peekEnrollmentCandidate();
+      if (session && isProductionArcFaceFace(session.face)) {
+        enrolledFace = session.face;
         enrollSource = "probe";
+      } else if (isProductionArcFaceFace(pendingPayloadRef.current?.face)) {
+        enrolledFace = pendingPayloadRef.current!.face;
+        enrollSource = "probe";
+        setEnrollmentCandidate(enrolledFace!, "identification");
       }
 
       // 2) Optional multi-frame enrollment (blink + quality aggregate).
@@ -655,15 +740,20 @@ export function useAmbientTrustIdAuth(
             signal: ac.signal,
           });
           if (isProductionArcFaceFace(enrolled?.face)) {
-            enrolledFace = enrolled!.face;
+            const faceOk = enrolled!.face!;
+            enrolledFace = faceOk;
             enrollSource = "enrollment";
+            setEnrollmentCandidate(faceOk, "enrollment");
           }
         } catch (e) {
           setError(
             e instanceof Error
               ? e.message
-              : "REGISTRATION_FAILED — Enrollment capture failed.",
+              : `${BIOMETRIC_ERROR_CODES.FACE_VECTOR_UNAVAILABLE} — Enrollment capture failed.`,
           );
+          syncDiagnostics({
+            errorCode: BIOMETRIC_ERROR_CODES.FACE_VECTOR_UNAVAILABLE,
+          });
           setPhaseSafe("ERROR");
           return;
         }
@@ -674,17 +764,22 @@ export function useAmbientTrustIdAuth(
         try {
           const fresh = await capturePayload({ signal: ac.signal });
           if (isProductionArcFaceFace(fresh?.face)) {
-            enrolledFace = fresh!.face;
+            const faceOk = fresh!.face!;
+            enrolledFace = faceOk;
             enrollSource = "fresh";
-          } else if (fresh?.face && !isProductionArcFaceFace(fresh.face)) {
-            enrolledFace = fresh.face; // surface legacy rejection below
+            setEnrollmentCandidate(faceOk, "fresh");
+          } else if (fresh?.face) {
+            enrolledFace = fresh.face;
           }
         } catch (e) {
           setError(
             e instanceof Error
               ? e.message
-              : "REGISTRATION_FAILED — Face capture failed.",
+              : `${BIOMETRIC_ERROR_CODES.CAMERA_UNAVAILABLE} — Face capture failed.`,
           );
+          syncDiagnostics({
+            errorCode: BIOMETRIC_ERROR_CODES.CAMERA_UNAVAILABLE,
+          });
           setPhaseSafe("ERROR");
           return;
         }
@@ -692,12 +787,24 @@ export function useAmbientTrustIdAuth(
 
       if (!isProductionArcFaceFace(enrolledFace)) {
         const badModel = enrolledFace?.modelName ?? "missing";
+        const legacy = /spatial_fallback|mobile_facenet/i.test(String(badModel));
+        const code = legacy
+          ? BIOMETRIC_ERROR_CODES.BIOMETRIC_TEMPLATE_LEGACY
+          : enrolledFace
+            ? BIOMETRIC_ERROR_CODES.FACE_VECTOR_UNAVAILABLE
+            : BIOMETRIC_ERROR_CODES.FACE_NOT_ENROLLED;
         setError(
-          badModel &&
-          /spatial_fallback|mobile_facenet/i.test(String(badModel))
-            ? "REGISTRATION_FAILED — Legacy spatial/non-ArcFace template rejected. Retry face scan, then Register."
-            : "REGISTRATION_FAILED — No face template available. Retry face scan, then Register.",
+          legacy
+            ? `${code} — Legacy spatial/non-ArcFace template rejected. Retry face scan, then Register.`
+            : `${code} — No production ArcFace face vector ready to enroll. Retry face scan, then Register.`,
         );
+        syncDiagnostics({
+          faceDetected: Boolean(enrolledFace),
+          vectorCreated: false,
+          modelName: badModel === "missing" ? null : String(badModel),
+          templateAvailable: false,
+          errorCode: code,
+        });
         setPhaseSafe("ERROR");
         return;
       }
@@ -743,8 +850,12 @@ export function useAmbientTrustIdAuth(
       if (!result.matched && !result.enrolled && !result.trustId) {
         setError(
           result.error ??
-            "REGISTRATION_FAILED — Face could not be saved. Try again.",
+            `${BIOMETRIC_ERROR_CODES.FACE_TEMPLATE_UNAVAILABLE} — Face could not be saved. Try again.`,
         );
+        syncDiagnostics({
+          errorCode: BIOMETRIC_ERROR_CODES.FACE_TEMPLATE_UNAVAILABLE,
+          templateAvailable: false,
+        });
         setPhaseSafe("ERROR");
         return;
       }
@@ -779,10 +890,26 @@ export function useAmbientTrustIdAuth(
 
       // Only confirm FACE_SAVED when persistence succeeded.
       if (!result.trustId) {
-        setError("REGISTRATION_FAILED — Face was not persisted.");
+        setError(
+          `${BIOMETRIC_ERROR_CODES.FACE_TEMPLATE_UNAVAILABLE} — Face was not persisted.`,
+        );
+        syncDiagnostics({
+          errorCode: BIOMETRIC_ERROR_CODES.FACE_TEMPLATE_UNAVAILABLE,
+          templateAvailable: false,
+        });
         setPhaseSafe("ERROR");
         return;
       }
+
+      clearEnrollmentCandidate();
+      syncDiagnostics({
+        templateAvailable: true,
+        templateId:
+          (result as { faceEmbeddingId?: string }).faceEmbeddingId ?? null,
+        trustId: result.trustId,
+        stage: "template_persisted",
+        errorCode: null,
+      });
 
       setLastResult({ ...result, enrolled: true, matched: true });
       pendingEnrollRef.current = { ...result, enrolled: true, matched: true };
@@ -790,6 +917,9 @@ export function useAmbientTrustIdAuth(
       setPhaseSafe("FACE_SAVED");
     })().catch((e) => {
       setError(e instanceof Error ? e.message : "Could not create Trust ID");
+      syncDiagnostics({
+        errorCode: BIOMETRIC_ERROR_CODES.FACE_TEMPLATE_UNAVAILABLE,
+      });
       setPhaseSafe("ERROR");
     });
   }, [
@@ -801,10 +931,12 @@ export function useAmbientTrustIdAuth(
     getPushToken,
     persistMasterDeviceState,
     setPhaseSafe,
+    syncDiagnostics,
   ]);
 
   const declineCreateAccount = useCallback(() => {
     pendingPayloadRef.current = null;
+    clearEnrollmentCandidate();
     setError("No Trust ID was created. Scan again when you are ready.");
     setPhaseSafe("ERROR");
   }, [setPhaseSafe]);
@@ -1046,21 +1178,37 @@ export function useAmbientTrustIdAuth(
     pendingResultRef.current = null;
     pendingEnrollRef.current = null;
     pendingPayloadRef.current = null;
+    clearEnrollmentCandidate();
+    syncDiagnostics({
+      templateAvailable: false,
+      templateId: null,
+      vectorCreated: false,
+      stage: "camera_ready",
+      errorCode: null,
+    });
     phaseRef.current = "PROMPTING";
     setPhase("PROMPTING");
     setError(null);
     setNonce((n) => n + 1);
-  }, [abortCapture]);
+  }, [abortCapture, syncDiagnostics]);
+
+  const resetFaceEnrollmentForDev = useCallback(() => {
+    resetEnrollmentCandidateForDev();
+    syncDiagnostics(getFaceDiagnostics());
+    retry();
+  }, [retry, syncDiagnostics]);
 
   return {
     phase: identity ? "AUTHENTICATED" : normalizePhase(phase),
     identity,
     error,
+    faceDiagnostics,
     lastResult,
     previousTrustId,
     approvalPollToken,
     fingerprintBusy,
     retry,
+    resetFaceEnrollmentForDev,
     confirmSwitchAccount,
     confirmCreateAccount,
     declineCreateAccount,
