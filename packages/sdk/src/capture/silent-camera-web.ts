@@ -7,6 +7,10 @@ import { getSharedAIVectorExtractor } from "./ai-vector-extractor.js";
 import { MediaPipeBlinkPadDetector } from "./biometric/pad-blink.js";
 import { extractFaceEmbeddingFromImageData } from "./biometric/pipeline.js";
 import { detectFacesInImageData } from "./biometric/detector-mediapipe.js";
+import {
+  faceCaptureDiag,
+  summarizeImageDataSignal,
+} from "./biometric/face-capture-diag.js";
 
 export type SilentWebCaptureResult = {
   payload: BiometricPayload;
@@ -24,8 +28,11 @@ function createHiddenVideo(): HTMLVideoElement {
   video.setAttribute("playsinline", "true");
   video.setAttribute("muted", "true");
   video.muted = true;
+  video.autoplay = true;
+  // Keep the element renderable. display:none / 0×0 often freezes frame decode
+  // in Chromium, producing blank ImageData and MediaPipe NO_FACE.
   video.style.cssText =
-    "display:none;position:fixed;width:0;height:0;opacity:0;pointer-events:none;visibility:hidden";
+    "position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none;z-index:-1";
   document.body.appendChild(video);
   return video;
 }
@@ -143,10 +150,24 @@ export async function captureSilentFaceFromWebCamera(
     await video.play();
     await waitForFrame(video);
 
+    faceCaptureDiag({
+      stage: "camera_ready",
+      videoWidth: video.videoWidth,
+      videoHeight: video.videoHeight,
+      modelReady: true,
+    });
+
     // Warm models early — fail closed immediately if unavailable
     const extractor = await getSharedAIVectorExtractor({
       modelBaseUrl: "/models/trustid",
       pad,
+    });
+    faceCaptureDiag({
+      stage: "extractor_ready_check",
+      modelReady: extractor.isReady(),
+      errorMessage: extractor.isReady()
+        ? undefined
+        : extractor.getLastError() ?? "not ready",
     });
     if (!extractor.isReady()) {
       return {
@@ -166,6 +187,9 @@ export async function captureSilentFaceFromWebCamera(
     }
 
     let lastEmbed: SilentWebCaptureResult | null = null;
+    let framesGrabbed = 0;
+    let framesWithSignal = 0;
+    let framesWithFaces = 0;
 
     for (let i = 0; i < 24; i++) {
       if (aborted()) {
@@ -184,7 +208,31 @@ export async function captureSilentFaceFromWebCamera(
       }
       await new Promise((r) => setTimeout(r, 120));
       const frame = grabFrame(video);
-      if (!frame) continue;
+      if (!frame) {
+        faceCaptureDiag({
+          stage: "grab_frame_empty",
+          videoWidth: video.videoWidth,
+          videoHeight: video.videoHeight,
+        });
+        continue;
+      }
+      framesGrabbed += 1;
+      const signalMeta = summarizeImageDataSignal(frame);
+      if (signalMeta.hasNonZeroPixels) framesWithSignal += 1;
+      if (i === 0 || i === 11 || i === 23) {
+        faceCaptureDiag({
+          stage: "grab_frame",
+          videoWidth: video.videoWidth,
+          videoHeight: video.videoHeight,
+          imageWidth: frame.width,
+          imageHeight: frame.height,
+          hasNonZeroPixels: signalMeta.hasNonZeroPixels,
+          sampledNonZeroRatio: Number(
+            signalMeta.sampledNonZeroRatio.toFixed(3),
+          ),
+          meanLumaApprox: signalMeta.meanLumaApprox,
+        });
+      }
 
       try {
         let det;
@@ -208,6 +256,7 @@ export async function captureSilentFaceFromWebCamera(
           }
           continue;
         }
+        if (det.faces.length > 0) framesWithFaces += 1;
         pad.observeBlendshapes(det.blendshapes?.[0]);
 
         const extracted = await extractFaceEmbeddingFromImageData(frame, {
@@ -229,6 +278,11 @@ export async function captureSilentFaceFromWebCamera(
           };
           const padCheck = await pad.evaluate();
           if (padCheck.decision === "accept") {
+            faceCaptureDiag({
+              stage: "capture_accept",
+              faceLandmarksCount: det.faces.length,
+              modelReady: true,
+            });
             return {
               ...lastEmbed,
               payload: {
@@ -251,11 +305,29 @@ export async function captureSilentFaceFromWebCamera(
             errorCode: extracted.code,
             errorMessage: extracted.message,
           };
+        } else if (i === 0 || i === 11 || i === 23) {
+          faceCaptureDiag({
+            stage: "extract_rejected",
+            faceLandmarksCount: det.faces.length,
+            errorCode: extracted.code,
+            errorMessage: extracted.message,
+          });
         }
       } finally {
         frame.data.fill(0);
       }
     }
+
+    faceCaptureDiag({
+      stage: "capture_exhausted",
+      errorCode: lastEmbed
+        ? BIOMETRIC_ERROR_CODES.LIVENESS_FAILED
+        : BIOMETRIC_ERROR_CODES.NO_FACE,
+      faceLandmarksCount: framesWithFaces,
+      // Reuse fields for aggregate counters (safe metadata only).
+      imageWidth: framesGrabbed,
+      imageHeight: framesWithSignal,
+    });
 
     if (lastEmbed) {
       // Had face embeds but blink PAD never passed

@@ -16,9 +16,32 @@ import {
 } from "./biometric/pipeline.js";
 import type { AIVectorPayload } from "./biometric/types.js";
 import { BiometricPipelineError } from "./biometric/errors.js";
+import { faceCaptureDiag } from "./biometric/face-capture-diag.js";
 
 export type { AIVectorPayload } from "./biometric/types.js";
 export type { FacePipelineOptions };
+
+/** Default cold-start budget for MediaPipe + ArcFace (both may download/compile). */
+export const DEFAULT_BIOMETRIC_WARMUP_TIMEOUT_MS = 20_000;
+
+/** Short timeout for unit/jsdom environments that cannot load real models. */
+export const TEST_BIOMETRIC_WARMUP_TIMEOUT_MS = 3_000;
+
+function resolveWarmupTimeoutMs(explicit?: number): number {
+  if (explicit != null && Number.isFinite(explicit) && explicit > 0) {
+    return explicit;
+  }
+  const fromEnv = process.env.TRUSTID_BIOMETRIC_WARMUP_MS;
+  if (fromEnv) {
+    const n = Number(fromEnv);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  // Vitest / NODE_ENV=test keep a short fail-closed budget.
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    return TEST_BIOMETRIC_WARMUP_TIMEOUT_MS;
+  }
+  return DEFAULT_BIOMETRIC_WARMUP_TIMEOUT_MS;
+}
 
 export type AIVectorExtractorOptions = FacePipelineOptions & {
   /**
@@ -33,6 +56,8 @@ export type AIVectorExtractorOptions = FacePipelineOptions & {
    * ONLY if real models are unavailable. Default false.
    */
   allowSpatialDevFallback?: boolean;
+  /** Override cold-start warm-up timeout (ms). */
+  warmupTimeoutMs?: number;
 };
 
 function captureFrameFromVideo(video: HTMLVideoElement): ImageData | null {
@@ -99,42 +124,74 @@ export class AIVectorExtractor {
   private readonly options: AIVectorExtractorOptions;
   private ready = false;
   private lastError: string | null = null;
+  private loadPromise: Promise<void> | null = null;
 
   constructor(options: AIVectorExtractorOptions = {}) {
     this.options = options;
   }
 
   async loadModels(): Promise<void> {
-    // Eager warm-up with a hard timeout so jsdom/tests fail closed quickly
+    if (this.ready) return;
+    if (this.loadPromise) return this.loadPromise;
+
+    const timeoutMs = resolveWarmupTimeoutMs(this.options.warmupTimeoutMs);
     const base = this.options.modelBaseUrl ?? "/models/trustid";
-    const warm = (async () => {
-      const { getSharedFaceLandmarker } = await import("./biometric/detector-mediapipe.js");
-      const { getArcFaceSession } = await import("./biometric/recognizer-arcface.js");
-      await getSharedFaceLandmarker(base);
-      await getArcFaceSession(base);
+    const started = performance.now();
+
+    this.loadPromise = (async () => {
+      const warm = (async () => {
+        const { getSharedFaceLandmarker } = await import(
+          "./biometric/detector-mediapipe.js"
+        );
+        const { getArcFaceSession } = await import(
+          "./biometric/recognizer-arcface.js"
+        );
+        await getSharedFaceLandmarker(base);
+        await getArcFaceSession(base);
+      })();
+
+      let timedOut = false;
+      const timeout = new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          timedOut = true;
+          reject(new Error(`Biometric model warm-up timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      });
+
+      try {
+        await Promise.race([warm, timeout]);
+        this.ready = true;
+        this.lastError = null;
+        faceCaptureDiag({
+          stage: "extractor_warmup_ok",
+          ms: Math.round(performance.now() - started),
+          modelReady: true,
+        });
+      } catch (err) {
+        this.ready = false;
+        this.lastError = err instanceof Error ? err.message : String(err);
+        faceCaptureDiag({
+          stage: "extractor_warmup_failed",
+          ms: Math.round(performance.now() - started),
+          modelReady: false,
+          errorMessage: this.lastError,
+        });
+        // Allow a later caller to retry (cold start may still finish in flight).
+        this.loadPromise = null;
+        if (!this.options.allowSpatialDevFallback) {
+          throw new BiometricPipelineError(
+            BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_UNAVAILABLE,
+            this.lastError,
+          );
+        }
+        // If we timed out but warm may still succeed, do not leave a permanent
+        // poison: clear so getShared can retry. Background warm is shared via
+        // getSharedFaceLandmarker / getArcFaceSession caches.
+        void timedOut;
+      }
     })();
 
-    const timeout = new Promise<never>((_, reject) => {
-      setTimeout(
-        () => reject(new Error("Biometric model warm-up timed out")),
-        3_000,
-      );
-    });
-
-    try {
-      await Promise.race([warm, timeout]);
-      this.ready = true;
-      this.lastError = null;
-    } catch (err) {
-      this.ready = false;
-      this.lastError = err instanceof Error ? err.message : String(err);
-      if (!this.options.allowSpatialDevFallback) {
-        throw new BiometricPipelineError(
-          BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_UNAVAILABLE,
-          this.lastError,
-        );
-      }
-    }
+    return this.loadPromise;
   }
 
   isReady(): boolean {
@@ -200,6 +257,7 @@ export class AIVectorExtractor {
 }
 
 let sharedExtractor: AIVectorExtractor | null = null;
+let sharedLoadInflight: Promise<AIVectorExtractor> | null = null;
 
 export function createAIVectorExtractor(
   options?: AIVectorExtractorOptions,
@@ -207,18 +265,42 @@ export function createAIVectorExtractor(
   return new AIVectorExtractor(options);
 }
 
+/**
+ * Shared extractor with concurrency-safe init and retry after failed warm-up.
+ * Model integrity remains mandatory inside getArcFaceSession / landmarker load.
+ */
 export async function getSharedAIVectorExtractor(
   options?: AIVectorExtractorOptions,
 ): Promise<AIVectorExtractor> {
-  if (!sharedExtractor) {
-    sharedExtractor = new AIVectorExtractor(options);
+  if (sharedExtractor?.isReady()) return sharedExtractor;
+
+  if (sharedLoadInflight) return sharedLoadInflight;
+
+  sharedLoadInflight = (async () => {
+    if (!sharedExtractor) {
+      sharedExtractor = new AIVectorExtractor(options);
+    }
     try {
       await sharedExtractor.loadModels();
     } catch {
-      // Caller inspects payloads / errors; do not spatial-fallback here.
+      // Caller inspects isReady / getLastError; keep fail-closed.
+      // Clear singleton on hard failure so the next call can retry.
+      if (!sharedExtractor.isReady()) {
+        sharedExtractor = null;
+      }
+    } finally {
+      sharedLoadInflight = null;
     }
-  }
-  return sharedExtractor;
+    return sharedExtractor ?? new AIVectorExtractor(options);
+  })();
+
+  return sharedLoadInflight;
+}
+
+/** Test helper — drop shared extractor so the next call reloads. */
+export function resetSharedAIVectorExtractorForTests(): void {
+  sharedExtractor = null;
+  sharedLoadInflight = null;
 }
 
 export const aiVectorExtractor = {
