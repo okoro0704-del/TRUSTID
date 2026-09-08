@@ -29,3 +29,5 @@ artifacts/biometric-evaluation/subjects/
 artifacts/biometric-evaluation/exports/
 TrustID-debug.apk
 artifacts/apk/
+# Copied from node_modules by scripts/copy-ort-wasm.mjs at build/dev time
+apps/web/public/ort/

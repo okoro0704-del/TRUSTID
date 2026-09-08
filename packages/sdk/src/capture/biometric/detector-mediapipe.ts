@@ -29,6 +29,56 @@ type FaceLandmarkerLike = {
 
 type DelegateKind = "GPU" | "CPU";
 
+/** Cap hung GPU FaceLandmarker.createFromOptions so CPU fallback can still win. */
+const MEDIAPIPE_GPU_CREATE_MS = 12_000;
+
+function rejectAfter(ms: number, message: string): Promise<never> {
+  return new Promise((_, reject) => {
+    setTimeout(() => reject(new Error(message)), ms);
+  });
+}
+
+/** Prefer CPU when WebGL is missing or is a known software renderer.
+ * Starting GPU createFromOptions on SwiftShader/etc can hang and block CPU fallback.
+ */
+function canUseMediapipeGpu(): boolean {
+  if (typeof document === "undefined") return false;
+  try {
+    const canvas = document.createElement("canvas");
+    // Do not use failIfMajorPerformanceCaveat here ó we still need the context
+    // to read the renderer string, then decide.
+    const gl =
+      (canvas.getContext("webgl2") as WebGLRenderingContext | null) ||
+      (canvas.getContext("webgl") as WebGLRenderingContext | null);
+    if (!gl) return false;
+    const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+    const renderer = dbg
+      ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) ?? "")
+      : "";
+    faceCaptureDiag({
+      stage: "mediapipe_webgl_probe",
+      component: "mediapipe",
+      success: true,
+      delegate: "GPU",
+      errorMessage: renderer ? `renderer=${renderer.slice(0, 80)}` : "renderer=unknown",
+    });
+    if (!renderer) {
+      // Unknown renderer in restricted contexts ó avoid GPU hang risk.
+      return false;
+    }
+    if (
+      /swiftshader|llvmpipe|softpipe|microsoft basic render|angle \(google\, vulkan|angle \(google\, swiftshader/i.test(
+        renderer,
+      )
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 let landmarkerPromise: Promise<FaceLandmarkerLike> | null = null;
 let activeDelegate: DelegateKind = "GPU";
 let emptyDetectStreak = 0;
@@ -109,7 +159,7 @@ export function squareLetterboxGeometry(
 
 /**
  * Letterbox source ImageData onto a square ImageData (black bars).
- * Pure pixel copy ó jsdom-safe (no Canvas 2D).
+ * Pure pixel copy ù jsdom-safe (no Canvas 2D).
  */
 export function letterboxImageDataToSquareData(imageData: ImageData): {
   square: ImageData;
@@ -189,8 +239,22 @@ async function loadFaceLandmarker(
   delegate: DelegateKind,
 ): Promise<FaceLandmarkerLike> {
   const started = performance.now();
+  faceCaptureDiag({
+    stage: "mediapipe_import_start",
+    component: "mediapipe",
+    success: true,
+    delegate,
+  });
   try {
     const vision = await import("@mediapipe/tasks-vision");
+    faceCaptureDiag({
+      stage: "mediapipe_import_ok",
+      component: "mediapipe",
+      success: true,
+      ms: Math.round(performance.now() - started),
+      delegate,
+    });
+
     const { FaceLandmarker, FilesetResolver } = vision as {
       FaceLandmarker: {
         createFromOptions: (
@@ -205,9 +269,33 @@ async function loadFaceLandmarker(
 
     const wasmPath =
       "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm";
+    faceCaptureDiag({
+      stage: "mediapipe_fileset_start",
+      component: "mediapipe",
+      success: true,
+      modelUrl: wasmPath,
+      delegate,
+    });
+    const filesetStarted = performance.now();
     const fileset = await FilesetResolver.forVisionTasks(wasmPath);
-    const modelAssetPath = `${modelBaseUrl.replace(/\/$/, "")}/${MEDIAPIPE_FACE_LANDMARKER_ARTIFACT.relativePath}`;
+    faceCaptureDiag({
+      stage: "mediapipe_fileset_ok",
+      component: "mediapipe",
+      success: true,
+      ms: Math.round(performance.now() - filesetStarted),
+      delegate,
+    });
 
+    const modelAssetPath = `${modelBaseUrl.replace(/\/$/, "")}/${MEDIAPIPE_FACE_LANDMARKER_ARTIFACT.relativePath}`;
+    faceCaptureDiag({
+      stage: "face_landmarker_create_start",
+      component: "mediapipe",
+      success: true,
+      modelUrl: modelAssetPath,
+      delegate,
+      runningMode: "IMAGE",
+    });
+    const createStarted = performance.now();
     const landmarker = await FaceLandmarker.createFromOptions(fileset, {
       baseOptions: {
         modelAssetPath,
@@ -220,7 +308,18 @@ async function loadFaceLandmarker(
     });
 
     faceCaptureDiag({
+      stage: "face_landmarker_create_ok",
+      component: "mediapipe",
+      success: true,
+      ms: Math.round(performance.now() - createStarted),
+      delegate,
+      runningMode: "IMAGE",
+      modelReady: true,
+    });
+    faceCaptureDiag({
       stage: "landmarker_loaded",
+      component: "mediapipe",
+      success: true,
       ms: Math.round(performance.now() - started),
       delegate,
       runningMode: "IMAGE",
@@ -231,6 +330,8 @@ async function loadFaceLandmarker(
   } catch (err) {
     faceCaptureDiag({
       stage: "landmarker_load_failed",
+      component: "mediapipe",
+      success: false,
       ms: Math.round(performance.now() - started),
       delegate,
       modelReady: false,
@@ -247,10 +348,40 @@ export async function getSharedFaceLandmarker(
 ): Promise<FaceLandmarkerLike> {
   if (!landmarkerPromise) {
     landmarkerPromise = (async () => {
+      if (!canUseMediapipeGpu()) {
+        faceCaptureDiag({
+          stage: "mediapipe_gpu_skipped_no_webgl",
+          component: "mediapipe",
+          success: true,
+          delegate: "CPU",
+        });
+        activeDelegate = "CPU";
+        return loadFaceLandmarker(modelBaseUrl, "CPU");
+      }
+
+      const gpuAttempt = loadFaceLandmarker(modelBaseUrl, "GPU");
       try {
         activeDelegate = "GPU";
-        return await loadFaceLandmarker(modelBaseUrl, "GPU");
-      } catch {
+        // GPU create can hang indefinitely on broken WebGL. Race so CPU
+        // fallback stays inside warm-up budget.
+        return await Promise.race([
+          gpuAttempt,
+          rejectAfter(
+            MEDIAPIPE_GPU_CREATE_MS,
+            `MediaPipe GPU FaceLandmarker.create timed out after ${MEDIAPIPE_GPU_CREATE_MS}ms`,
+          ),
+        ]);
+      } catch (gpuErr) {
+        // Prevent late GPU rejection from becoming an unhandled rejection.
+        void gpuAttempt.catch(() => undefined);
+        faceCaptureDiag({
+          stage: "mediapipe_gpu_failed_trying_cpu",
+          component: "mediapipe",
+          success: false,
+          delegate: "GPU",
+          errorMessage:
+            gpuErr instanceof Error ? gpuErr.message : String(gpuErr),
+        });
         activeDelegate = "CPU";
         return loadFaceLandmarker(modelBaseUrl, "CPU");
       }

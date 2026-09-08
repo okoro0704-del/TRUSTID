@@ -1,13 +1,14 @@
 /**
- * Safe face-capture diagnostics — metadata only.
- * Enable with: localStorage.TRUSTID_FACE_CAPTURE_DIAG = "1"
- * or window.__TRUSTID_FACE_CAPTURE_DIAG__ = true
- * Never logs frames, ImageData, vectors, embeddings, or landmarks.
+ * Safe face-capture / model-init diagnostics — metadata only.
+ * Enable: localStorage.TRUSTID_FACE_CAPTURE_DIAG = "1"
+ * Never logs frames, ImageData, vectors, embeddings, landmarks, or model bytes.
  */
 
 export type FaceCaptureDiagEvent = {
   scope: "face_capture_diag";
   stage: string;
+  component?: string;
+  success?: boolean;
   ms?: number;
   videoWidth?: number;
   videoHeight?: number;
@@ -21,9 +22,13 @@ export type FaceCaptureDiagEvent = {
   faceLandmarksCount?: number;
   faceBlendshapesCount?: number;
   delegate?: string;
+  executionProvider?: string;
   runningMode?: string;
   squarePadded?: boolean;
   modelReady?: boolean;
+  modelUrl?: string;
+  expectedHashPrefix?: string;
+  actualHashPrefix?: string;
   errorCode?: string;
   errorMessage?: string;
 };
@@ -78,12 +83,34 @@ export function summarizeImageDataSignal(imageData: ImageData): {
   };
 }
 
-export function faceCaptureDiag(event: Omit<FaceCaptureDiagEvent, "scope">): void {
+export function hashPrefix(hex: string, n = 12): string {
+  return hex.slice(0, n).toLowerCase();
+}
+
+export function sanitizeInitError(err: unknown): string {
+  let raw: string;
+  if (err instanceof Error) {
+    raw = err.message;
+  } else if (typeof Event !== "undefined" && err instanceof Event) {
+    raw = `Event:${err.type}`;
+  } else {
+    raw = String(err);
+  }
+  if (raw === "[object Event]") raw = "Event:unknown";
+  return raw
+    .replace(/[0-9a-f]{64}/gi, (h) => `${h.slice(0, 12)}…`)
+    .slice(0, 240);
+}
+
+export function faceCaptureDiag(
+  event: Omit<FaceCaptureDiagEvent, "scope">,
+): void {
   if (!isFaceCaptureDiagEnabled()) return;
-  // Explicit allow-list — never spread unknown fields that might hold biometrics.
   const safe: FaceCaptureDiagEvent = {
     scope: "face_capture_diag",
     stage: event.stage,
+    component: event.component,
+    success: event.success,
     ms: event.ms,
     videoWidth: event.videoWidth,
     videoHeight: event.videoHeight,
@@ -97,12 +124,16 @@ export function faceCaptureDiag(event: Omit<FaceCaptureDiagEvent, "scope">): voi
     faceLandmarksCount: event.faceLandmarksCount,
     faceBlendshapesCount: event.faceBlendshapesCount,
     delegate: event.delegate,
+    executionProvider: event.executionProvider,
     runningMode: event.runningMode,
     squarePadded: event.squarePadded,
     modelReady: event.modelReady,
+    modelUrl: event.modelUrl,
+    expectedHashPrefix: event.expectedHashPrefix,
+    actualHashPrefix: event.actualHashPrefix,
     errorCode: event.errorCode,
     errorMessage: event.errorMessage
-      ? String(event.errorMessage).slice(0, 200)
+      ? sanitizeInitError(event.errorMessage)
       : undefined,
   };
   console.info("[TrustID]", JSON.stringify(safe));

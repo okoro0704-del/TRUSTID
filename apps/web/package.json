@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "predev": "node ../../scripts/copy-ort-wasm.mjs",
     "dev": "vite",
+    "prebuild": "node ../../scripts/copy-ort-wasm.mjs",
     "build": "tsc -b && vite build",
     "build:device": "tsc -b && vite build --mode device",
     "preview": "vite preview"
@@ -27,6 +29,7 @@
     "@types/react": "^19.0.12",
     "@types/react-dom": "^19.0.4",
     "@vitejs/plugin-react": "^4.3.4",
+    "playwright": "^1.63.0",
     "typescript": "^5.8.2",
     "vite": "^6.2.2",
     "vite-plugin-pwa": "^0.21.1"

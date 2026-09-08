@@ -1,16 +1,36 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
+/**
+ * onnxruntime-web dynamically imports `${wasmPaths}*.mjs`.
+ * In Vite dev, those become `*.mjs?import` and miss `public/ort` (SPA HTML).
+ * Serve /ort/* as plain static files even when ?import is present.
+ */
+function ortPublicWasm(): Plugin {
+  return {
+    name: "trustid-ort-public-wasm",
+    configureServer(server) {
+      server.middlewares.use((req, _res, next) => {
+        if (req.url && req.url.startsWith("/ort/") && req.url.includes("?")) {
+          req.url = req.url.replace(/\?.*$/, "");
+        }
+        next();
+      });
+    },
+  };
+}
+
 export default defineConfig({
   plugins: [
+    ortPublicWasm(),
     react(),
     VitePWA({
       registerType: "autoUpdate",
       includeAssets: ["favicon.svg"],
       workbox: {
-        // onnxruntime-web WASM is ~24MB — load from CDN at runtime, do not precache
-        globIgnores: ["**/*.wasm", "**/ort*.mjs", "**/ort*.js"],
+        // onnxruntime-web WASM is large — served from /ort (copied at build); do not precache
+        globIgnores: ["**/*.wasm", "**/ort*.mjs", "**/ort*.js", "**/ort/**"],
         maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
       },
       manifest: {
@@ -44,7 +64,7 @@ export default defineConfig({
   },
   build: {
     rollupOptions: {
-      // Keep ORT wasm out of the critical path when possible; runtime sets CDN wasmPaths
+      // ORT wasm is served from /public/ort via copy-ort-wasm.mjs
       external: [],
     },
   },
