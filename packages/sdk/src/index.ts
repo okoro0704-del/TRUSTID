@@ -42,6 +42,12 @@ import {
 } from "./capture/ai-vector-extractor.js";
 import { detectFacePresence } from "./capture/face-presence.js";
 import { vectorizeFaceFromRgba } from "./capture/face-vectorizer.js";
+import { multiModalFromSilentCapture } from "./capture/ambient-face-result.js";
+import {
+  enrollmentDiag,
+  newBiometricEnrollmentAttemptId,
+  summarizeEmbeddingMeta,
+} from "./capture/biometric/enrollment-diag.js";
 import type { CaptureHandlers, MultiModalBiometricPayload } from "./capture/types.js";
 import type { FacePresentationAttackDetector, FacePadResult } from "./capture/biometric/types.js";
 
@@ -607,6 +613,10 @@ export {
   fingerprintVectorFromPublicKey,
   supportsSilentFaceCapture,
   vectorizeFaceFromRgba,
+  multiModalFromSilentCapture,
+  enrollmentDiag,
+  newBiometricEnrollmentAttemptId,
+  summarizeEmbeddingMeta,
   SilentCameraCapturer,
   AIVectorExtractor,
   aiVectorExtractor,

@@ -47,20 +47,76 @@ function stopStream(stream: MediaStream | null | undefined): void {
   });
 }
 
-function waitForFrame(video: HTMLVideoElement, timeoutMs = 3000): Promise<void> {
+function waitForFrame(video: HTMLVideoElement, timeoutMs = 5000): Promise<void> {
   return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error("Camera frame timeout")), timeoutMs);
-    const done = () => {
-      window.clearTimeout(timer);
-      resolve();
+    let settled = false;
+    const cleanup = () => {
+      video.removeEventListener("loadeddata", onReady);
+      video.removeEventListener("playing", onReady);
+      video.removeEventListener("resize", onReady);
     };
-    if (video.readyState >= 2 && video.videoWidth > 0) {
-      done();
-      return;
-    }
-    video.addEventListener("loadeddata", done, { once: true });
-    video.addEventListener("playing", done, { once: true });
+    const timer = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(
+        Object.assign(new Error("camera_frame_unavailable"), {
+          code: BIOMETRIC_ERROR_CODES.CAMERA_UNAVAILABLE,
+        }),
+      );
+    }, timeoutMs);
+    const onReady = () => {
+      if (settled) return;
+      if (
+        video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
+        video.videoWidth > 0 &&
+        video.videoHeight > 0
+      ) {
+        settled = true;
+        window.clearTimeout(timer);
+        cleanup();
+        resolve();
+      }
+    };
+    onReady();
+    video.addEventListener("loadeddata", onReady);
+    video.addEventListener("playing", onReady);
+    video.addEventListener("resize", onReady);
   });
+}
+
+function classifyCaptureException(err: unknown): {
+  code: string;
+  message: string;
+} {
+  const msg = err instanceof Error ? err.message : String(err);
+  const codeFromErr =
+    err && typeof err === "object" && "code" in err
+      ? String((err as { code?: unknown }).code ?? "")
+      : "";
+  if (
+    codeFromErr === BIOMETRIC_ERROR_CODES.CAMERA_UNAVAILABLE ||
+    /camera_frame_unavailable|Camera frame timeout|NotAllowedError|NotFoundError|NotReadableError|OverconstrainedError|permission|getUserMedia/i.test(
+      msg,
+    )
+  ) {
+    return {
+      code: BIOMETRIC_ERROR_CODES.CAMERA_UNAVAILABLE,
+      message: msg.includes("camera_frame_unavailable")
+        ? "Camera granted but no video frames available"
+        : msg,
+    };
+  }
+  if (/unavailable|integrity|onnx|mediapipe|model/i.test(msg)) {
+    return {
+      code: BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_UNAVAILABLE,
+      message: msg,
+    };
+  }
+  return {
+    code: BIOMETRIC_ERROR_CODES.EMBEDDING_FAILED,
+    message: msg,
+  };
 }
 
 function grabFrame(video: HTMLVideoElement): ImageData | null {
@@ -191,7 +247,7 @@ export async function captureSilentFaceFromWebCamera(
     let framesWithSignal = 0;
     let framesWithFaces = 0;
 
-    for (let i = 0; i < 24; i++) {
+    for (let i = 0; i < 48; i++) {
       if (aborted()) {
         return {
           confidence: 0,
@@ -206,7 +262,7 @@ export async function captureSilentFaceFromWebCamera(
           errorMessage: "Capture aborted",
         };
       }
-      await new Promise((r) => setTimeout(r, 120));
+      await new Promise((r) => setTimeout(r, 100));
       const frame = grabFrame(video);
       if (!frame) {
         faceCaptureDiag({
@@ -305,7 +361,7 @@ export async function captureSilentFaceFromWebCamera(
             errorCode: extracted.code,
             errorMessage: extracted.message,
           };
-        } else if (i === 0 || i === 11 || i === 23) {
+        } else if (i === 0 || i === 23 || i === 47) {
           faceCaptureDiag({
             stage: "extract_rejected",
             faceLandmarksCount: det.faces.length,
@@ -353,6 +409,7 @@ export async function captureSilentFaceFromWebCamera(
       errorMessage: "No usable face frame captured",
     };
   } catch (err) {
+    const classified = classifyCaptureException(err);
     return {
       confidence: 0,
       payload: {
@@ -362,8 +419,8 @@ export async function captureSilentFaceFromWebCamera(
         modelVersion: 0,
         confidence: 0,
       },
-      errorCode: BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_UNAVAILABLE,
-      errorMessage: err instanceof Error ? err.message : "Capture failed",
+      errorCode: classified.code,
+      errorMessage: classified.message,
     };
   } finally {
     stopStream(stream);
@@ -447,7 +504,7 @@ export async function captureSilentFaceEnrollmentFromWebCamera(
     }
 
     let blinkOk = false;
-    for (let i = 0; i < 32; i++) {
+    for (let i = 0; i < 48; i++) {
       await new Promise((r) => setTimeout(r, 100));
       const frame = grabFrame(video);
       if (!frame) continue;
@@ -530,6 +587,7 @@ export async function captureSilentFaceEnrollmentFromWebCamera(
       },
     };
   } catch (err) {
+    const classified = classifyCaptureException(err);
     return {
       confidence: 0,
       payload: {
@@ -539,8 +597,8 @@ export async function captureSilentFaceEnrollmentFromWebCamera(
         modelVersion: 0,
         confidence: 0,
       },
-      errorCode: BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_UNAVAILABLE,
-      errorMessage: err instanceof Error ? err.message : "Enrollment capture failed",
+      errorCode: classified.code,
+      errorMessage: classified.message || "Enrollment capture failed",
     };
   } finally {
     stopStream(stream);

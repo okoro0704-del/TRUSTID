@@ -7,6 +7,9 @@ import {
 } from "@trustid/shared";
 import {
   createTrustIdSdk,
+  enrollmentDiag,
+  newBiometricEnrollmentAttemptId,
+  summarizeEmbeddingMeta,
   type AmbientSignInResult,
   type CaptureHandlers,
   type MultiModalBiometricPayload,
@@ -548,15 +551,25 @@ export function useAmbientTrustIdAuth(
     if (ac.signal.aborted || runId !== runIdRef.current) return;
 
     if (!payload?.face) {
-      enterServiceError(
-        runId,
-        `${BIOMETRIC_ERROR_CODES.FACE_NOT_DETECTED} — No face detected. Retry the camera, use fingerprint if you already have a Trust ID, or register.`,
-      );
+      const code =
+        payload?.captureErrorCode ?? BIOMETRIC_ERROR_CODES.FACE_NOT_DETECTED;
+      const detail =
+        payload?.captureErrorMessage ??
+        "No face detected. Retry the camera, use fingerprint if you already have a Trust ID, or register.";
+      enterServiceError(runId, `${code} — ${detail}`);
       syncDiagnostics({
         cameraReady: true,
-        faceDetected: false,
+        faceDetected: code !== BIOMETRIC_ERROR_CODES.FACE_NOT_DETECTED &&
+          code !== BIOMETRIC_ERROR_CODES.NO_FACE &&
+          code !== BIOMETRIC_ERROR_CODES.CAMERA_UNAVAILABLE,
         vectorCreated: false,
-        errorCode: BIOMETRIC_ERROR_CODES.FACE_NOT_DETECTED,
+        errorCode: code,
+        stage:
+          code === BIOMETRIC_ERROR_CODES.LIVENESS_FAILED
+            ? "liveness_failed"
+            : code === BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_UNAVAILABLE
+              ? "model_unavailable"
+              : "face_not_detected",
       });
       return;
     }
@@ -712,6 +725,14 @@ export function useAmbientTrustIdAuth(
     captureAbortRef.current = ac;
 
     void (async () => {
+      const attemptId = newBiometricEnrollmentAttemptId();
+      const enrollStartedAt = Date.now();
+      enrollmentDiag({
+        attemptId,
+        stage: "ENROLLMENT_STARTED",
+        status: "started",
+        startedAt: enrollStartedAt,
+      });
       const sdk = createTrustIdSdk({ baseUrl: apiBaseUrl });
       syncDiagnostics({
         enrollmentStarted: true,
@@ -721,6 +742,10 @@ export function useAmbientTrustIdAuth(
 
       let enrolledFace: MultiModalBiometricPayload["face"] | undefined;
       let enrollSource: "probe" | "enrollment" | "fresh" | "none" = "none";
+      let lastCaptureError: {
+        code: string;
+        message: string;
+      } | null = null;
 
       // 1) Module-session ArcFace candidate (survives remounts) + pending probe.
       const session = peekEnrollmentCandidate();
@@ -744,6 +769,12 @@ export function useAmbientTrustIdAuth(
             enrolledFace = faceOk;
             enrollSource = "enrollment";
             setEnrollmentCandidate(faceOk, "enrollment");
+          } else if (enrolled?.captureErrorCode) {
+            lastCaptureError = {
+              code: enrolled.captureErrorCode,
+              message:
+                enrolled.captureErrorMessage ?? enrolled.captureErrorCode,
+            };
           }
         } catch (e) {
           setError(
@@ -768,6 +799,11 @@ export function useAmbientTrustIdAuth(
             enrolledFace = faceOk;
             enrollSource = "fresh";
             setEnrollmentCandidate(faceOk, "fresh");
+          } else if (fresh?.captureErrorCode) {
+            lastCaptureError = {
+              code: fresh.captureErrorCode,
+              message: fresh.captureErrorMessage ?? fresh.captureErrorCode,
+            };
           } else if (fresh?.face) {
             enrolledFace = fresh.face;
           }
@@ -792,14 +828,29 @@ export function useAmbientTrustIdAuth(
           ? BIOMETRIC_ERROR_CODES.BIOMETRIC_TEMPLATE_LEGACY
           : enrolledFace
             ? BIOMETRIC_ERROR_CODES.FACE_VECTOR_UNAVAILABLE
-            : BIOMETRIC_ERROR_CODES.FACE_NOT_ENROLLED;
-        setError(
-          legacy
-            ? `${code} — Legacy spatial/non-ArcFace template rejected. Retry face scan, then Register.`
-            : `${code} — No production ArcFace face vector ready to enroll. Retry face scan, then Register.`,
-        );
+            : (lastCaptureError?.code ??
+              BIOMETRIC_ERROR_CODES.FACE_NOT_ENROLLED);
+        const detail = legacy
+          ? "Legacy spatial/non-ArcFace template rejected. Retry face scan, then Register."
+          : lastCaptureError?.message && !enrolledFace
+            ? lastCaptureError.message
+            : enrolledFace
+              ? "No production ArcFace face vector ready to enroll. Retry face scan, then Register."
+              : "No production ArcFace face vector ready to enroll. Retry face scan, then Register.";
+        setError(`${code} — ${detail}`);
+        enrollmentDiag({
+          attemptId,
+          stage: "EMBEDDING_VALIDATION",
+          status: "failed",
+          errorCode: code,
+          errorMessage: detail,
+          modelName: badModel === "missing" ? undefined : String(badModel),
+          enrollSource,
+        });
         syncDiagnostics({
-          faceDetected: Boolean(enrolledFace),
+          faceDetected: Boolean(enrolledFace) ||
+            lastCaptureError?.code === BIOMETRIC_ERROR_CODES.LIVENESS_FAILED ||
+            lastCaptureError?.code === BIOMETRIC_ERROR_CODES.LOW_QUALITY,
           vectorCreated: false,
           modelName: badModel === "missing" ? null : String(badModel),
           templateAvailable: false,
@@ -818,6 +869,21 @@ export function useAmbientTrustIdAuth(
         confidence: enrolledFace!.confidence,
         deviceFingerprint: enrolledFace!.deviceFingerprint,
       };
+      const embMeta = summarizeEmbeddingMeta(face.vector);
+      enrollmentDiag({
+        attemptId,
+        stage: "EMBEDDING_VALIDATION",
+        status:
+          embMeta.embeddingLength === 512 &&
+          embMeta.embeddingFinite &&
+          embMeta.embeddingNormOk &&
+          !embMeta.embeddingAllZero
+            ? "ok"
+            : "failed",
+        ...embMeta,
+        modelName: face.modelName,
+        enrollSource,
+      });
       const payload: MultiModalBiometricPayload = { face };
       pendingPayloadRef.current = payload;
 
@@ -835,6 +901,14 @@ export function useAmbientTrustIdAuth(
 
       const pushToken = getPushToken ? await getPushToken() : null;
       const installId = pendingInstallRef.current;
+      enrollmentDiag({
+        attemptId,
+        stage: "ENROLLMENT_REQUEST",
+        status: "started",
+        endpoint: "/v1/identity/register-trust-id",
+        embeddingLength: face.vector.length,
+        enrollSource,
+      });
       const result = await sdk.registerTrustId({
         face,
         installId,
@@ -845,6 +919,14 @@ export function useAmbientTrustIdAuth(
           installId,
         pushToken: pushToken ?? undefined,
         pushPlatform: pushToken ? "android" : undefined,
+      });
+      enrollmentDiag({
+        attemptId,
+        stage: "ENROLLMENT_RESPONSE",
+        status: result.trustId || result.enrolled ? "ok" : "failed",
+        endpoint: "/v1/identity/register-trust-id",
+        enrollSource,
+        errorCode: result.trustId ? undefined : "FACE_TEMPLATE_UNAVAILABLE",
       });
 
       if (!result.matched && !result.enrolled && !result.trustId) {
@@ -905,12 +987,30 @@ export function useAmbientTrustIdAuth(
       syncDiagnostics({
         templateAvailable: true,
         templateId:
-          (result as { faceEmbeddingId?: string }).faceEmbeddingId ?? null,
+          "faceEmbeddingId" in result && result.faceEmbeddingId
+            ? String(result.faceEmbeddingId)
+            : null,
         trustId: result.trustId,
+        enrollmentStarted: true,
         stage: "template_persisted",
         errorCode: null,
       });
-
+      enrollmentDiag({
+        attemptId,
+        stage: "ENROLLMENT_PERSISTENCE",
+        status: "ok",
+        enrollSource,
+        durationMs: Date.now() - enrollStartedAt,
+      });
+      enrollmentDiag({
+        attemptId,
+        stage: "ENROLLMENT_COMPLETE",
+        status: "ok",
+        enrollSource,
+        durationMs: Date.now() - enrollStartedAt,
+        embeddingLength: face.vector.length,
+        modelName: face.modelName,
+      });
       setLastResult({ ...result, enrolled: true, matched: true });
       pendingEnrollRef.current = { ...result, enrolled: true, matched: true };
       abortCapture();

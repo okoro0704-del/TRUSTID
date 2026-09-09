@@ -4,6 +4,12 @@ export type MultiModalBiometricPayload = {
   face?: BiometricPayload;
   fingerprint?: BiometricPayload;
   deviceFingerprint?: string;
+  /**
+   * When capture fails before a usable face vector exists, callers must surface
+   * this instead of inventing FACE_NOT_DETECTED / BIOMETRIC_MODEL_UNAVAILABLE.
+   */
+  captureErrorCode?: string;
+  captureErrorMessage?: string;
 };
 
 export type CaptureHandlers = {
