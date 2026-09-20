@@ -1,32 +1,24 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
   AUDIT_EVENTS,
-  BIOMETRIC_MODALITIES,
   MASTER_AUTH_CHALLENGE_STATUS,
   MASTER_STEP_UP_ACTIONS,
   TRUST_ID_ACCESS_LEVELS,
 } from "@trustid/shared";
 import { prisma } from "../src/db/client.js";
 import { resetTables } from "./helpers/db.js";
+import { face512, facePayload } from "./helpers/face.js";
 import { buildApp } from "../src/app.js";
 import { biometricMatcher } from "../src/modules/trust-id/matcher.js";
 import {
   issueMasterChallenge,
   approveMasterChallenge,
 } from "../src/modules/trust-id/challenges.js";
-import {
-  registerMasterDevice,
-} from "../src/modules/trust-id/master-device.js";
-import { commitName, newTrustId } from "../src/lib/crypto.js";
+import { registerMasterDevice } from "../src/modules/trust-id/master-device.js";
+import { newTrustId, commitName } from "../src/lib/crypto.js";
+import { __clearHotVectorCacheForTests } from "../src/modules/trust-id/vector-hot-cache.js";
 
-/** Deterministic test embedding — simulates client capture output */
-function faceEmbedding(seed: number): number[] {
-  const v = Array.from({ length: 16 }, (_, i) => Math.sin(seed + i * 0.3));
-  const norm = Math.sqrt(v.reduce((s, x) => s + x * x, 0));
-  return v.map((x) => x / norm);
-}
-
-async function seedUser(trustId: string, embedding: number[]) {
+async function seedUser(trustId: string, seed: number) {
   const nameCommit = commitName("Test", "User");
   const user = await prisma.user.create({
     data: {
@@ -42,10 +34,8 @@ async function seedUser(trustId: string, embedding: number[]) {
   });
   await biometricMatcher.enrollTemplate({
     userId: user.id,
-    biometric: {
-      modality: BIOMETRIC_MODALITIES.FACE,
-      embedding,
-    },
+    trustId: user.trustId,
+    biometric: facePayload(seed),
   });
   return user;
 }
@@ -53,6 +43,7 @@ async function seedUser(trustId: string, embedding: number[]) {
 describe("Trust ID identity-first biometric engine", () => {
   beforeEach(async () => {
     await resetTables(prisma);
+    __clearHotVectorCacheForTests();
   });
 
   afterAll(async () => {
@@ -60,15 +51,12 @@ describe("Trust ID identity-first biometric engine", () => {
   });
 
   it("matches identity via 1:N on an unauthenticated secondary device", async () => {
-    const embedding = faceEmbedding(42);
-    const user = await seedUser(newTrustId(), embedding);
+    const user = await seedUser(newTrustId(), 42);
 
     const match = await biometricMatcher.matchOneToMany({
-      biometric: {
-        modality: BIOMETRIC_MODALITIES.FACE,
-        embedding: faceEmbedding(42.001),
+      biometric: facePayload(42, {
         deviceFingerprint: "secondary-terminal-uuid-001",
-      },
+      }),
     });
 
     expect(match.matched).toBe(true);
@@ -80,8 +68,7 @@ describe("Trust ID identity-first biometric engine", () => {
   });
 
   it("grants MASTER access when terminal matches bound Master Device", async () => {
-    const embedding = faceEmbedding(7);
-    const user = await seedUser(newTrustId(), embedding);
+    const user = await seedUser(newTrustId(), 7);
     const masterFp = "master-phone-secure-enclave-uuid";
 
     await registerMasterDevice({
@@ -91,11 +78,7 @@ describe("Trust ID identity-first biometric engine", () => {
     });
 
     const match = await biometricMatcher.matchOneToMany({
-      biometric: {
-        modality: BIOMETRIC_MODALITIES.FACE,
-        embedding: faceEmbedding(7.001),
-        deviceFingerprint: masterFp,
-      },
+      biometric: facePayload(7, { deviceFingerprint: masterFp }),
       requireMasterAccess: true,
     });
 
@@ -105,8 +88,7 @@ describe("Trust ID identity-first biometric engine", () => {
   });
 
   it("issues and approves Master Device step-up for sensitive action", async () => {
-    const embedding = faceEmbedding(99);
-    const user = await seedUser(newTrustId(), embedding);
+    const user = await seedUser(newTrustId(), 99);
     const masterFp = "master-device-for-stepup";
 
     await registerMasterDevice({
@@ -150,19 +132,16 @@ describe("Trust ID identity-first biometric engine", () => {
   });
 
   it("POST /v1/trust-id/verify-biometric creates session for matched identity", async () => {
-    const embedding = faceEmbedding(3);
-    const user = await seedUser(newTrustId(), embedding);
+    const user = await seedUser(newTrustId(), 3);
     const app = await buildApp();
 
     const res = await app.inject({
       method: "POST",
       url: "/v1/trust-id/verify-biometric",
       payload: {
-        biometric: {
-          modality: BIOMETRIC_MODALITIES.FACE,
-          embedding: faceEmbedding(3.001),
+        biometric: facePayload(3, {
           deviceFingerprint: "any-terminal-africa-001",
-        },
+        }),
       },
     });
 
@@ -176,5 +155,18 @@ describe("Trust ID identity-first biometric engine", () => {
     expect(body.trustId).toBe(user.trustId);
     expect(body.accessLevel).toBe(TRUST_ID_ACCESS_LEVELS.UNIVERSAL);
     await app.close();
+  });
+
+  it("stores embeddingJson sealed (not plaintext JSON)", async () => {
+    await seedUser(newTrustId(), 5);
+    const row = await prisma.biometricEmbedding.findFirstOrThrow();
+    expect(row.embeddingJson.trim().startsWith("{")).toBe(false);
+    expect(() => JSON.parse(row.embeddingJson)).toThrow();
+    // round-trip probe still matches
+    const match = await biometricMatcher.matchOneToMany({
+      biometric: facePayload(5),
+    });
+    expect(match.matched).toBe(true);
+    void face512;
   });
 });

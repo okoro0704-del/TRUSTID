@@ -99,18 +99,34 @@ export async function buildApp() {
     });
   });
 
-  app.get("/health", async () => ({
-    ok: true,
-    service: "trustid-api",
-    role: "identity_provider",
-    // Non-secret: helps diagnose WebAuthn origin/RP ID misconfig in production
-    webauthn: {
-      rpID: config.webauthn.rpID,
-      origins: config.webauthn.origins,
-    },
-    baas: getBaasBindings(),
-    elfcomRealtimeUrl: getElfComClient().realtimeUrl,
-  }));
+  app.get("/health", async () => {
+    const { isPgVectorEnabled } = await import("./lib/pgvector.js");
+    const {
+      BIOMETRIC_THRESHOLD_POLICY,
+      BIOMETRIC_PAD_STATUS,
+    } = await import("@trustid/shared");
+    const pgvectorEnabled = await isPgVectorEnabled();
+    return {
+      ok: true,
+      service: "trustid-api",
+      role: "identity_provider",
+      webauthn: {
+        rpID: config.webauthn.rpID,
+        origins: config.webauthn.origins,
+      },
+      identityFoundation: {
+        oidcIssuer: config.oidcIssuer,
+        pgvector: pgvectorEnabled,
+        thresholdStatus: BIOMETRIC_THRESHOLD_POLICY.status,
+        threshold: BIOMETRIC_THRESHOLD_POLICY.threshold,
+        padStatus: BIOMETRIC_PAD_STATUS.INCOMPLETE,
+        embeddingJsonAtRest: "aes-gcm-sealed",
+        annColumnAtRest: "plaintext-for-hnsw",
+      },
+      baas: getBaasBindings(),
+      elfcomRealtimeUrl: getElfComClient().realtimeUrl,
+    };
+  });
 
   app.get("/ecosystem/status", async () => {
     const bindings = getBaasBindings();

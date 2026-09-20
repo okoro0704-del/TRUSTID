@@ -27,7 +27,11 @@ import {
   type TrustIdAccessLevel,
 } from "@trustid/shared";
 import { prisma } from "../../db/client.js";
-import { deviceFingerprintHash } from "../../lib/crypto.js";
+import {
+  deviceFingerprintHash,
+  openJson,
+  sealJson,
+} from "../../lib/crypto.js";
 import {
   isPgVectorEnabled,
   syncEmbeddingVectorColumn,
@@ -81,14 +85,35 @@ function isLegacyStoredTemplate(
   return parsed.legacy === true;
 }
 
+/**
+ * Decode BiometricEmbedding.embeddingJson.
+ * New rows: AES-GCM sealJson. Legacy rows: plaintext JSON (migrated on next enroll).
+ */
 function parseStoredVector(embeddingJson: string): {
   vector: number[];
   modelName?: string;
   gallery?: number[][];
   legacy: boolean;
 } {
+  const raw = embeddingJson?.trim() ?? "";
+  if (!raw) return { vector: [], legacy: true };
+
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(embeddingJson) as unknown;
+    if (raw.startsWith("{") || raw.startsWith("[")) {
+      parsed = JSON.parse(raw);
+    } else {
+      parsed = openJson<unknown>(raw);
+    }
+  } catch {
+    try {
+      parsed = openJson<unknown>(raw);
+    } catch {
+      return { vector: [], legacy: true };
+    }
+  }
+
+  try {
     if (Array.isArray(parsed)) {
       return { vector: parsed as number[], legacy: true };
     }
@@ -283,7 +308,9 @@ export class PgVectorMatcherService {
       preprocessingVersion: BIOMETRIC_PREPROCESSING_VERSION,
       pipelineVersion: BIOMETRIC_PIPELINE_VERSION,
     };
-    const embeddingJson = JSON.stringify(envelope);
+    // AES-GCM at rest for the JSON envelope. pgvector `vector` column remains
+    // plaintext for ANN search (searchable encryption is out of T1 scope).
+    const embeddingJson = sealJson(envelope);
 
     const row = await prisma.biometricEmbedding.upsert({
       where: {
@@ -755,6 +782,50 @@ export class PgVectorMatcherService {
   }
 
   /**
+   * TEST-ONLY bounded exact Top-K over sealed/plaintext embeddingJson.
+   * Enabled solely when TRUSTID_SQLITE_ANN=1 (Vitest). Never used in production.
+   */
+  private async sqliteExactTopK(
+    probe: number[],
+    modality: BiometricModality,
+    topK: number,
+  ): Promise<
+    | { status: "ok"; candidates: AnnCandidate[] }
+    | { status: "unavailable"; reason: string }
+  > {
+    const rowsRaw = await prisma.biometricEmbedding.findMany({
+      where: { modality, status: "active" },
+      select: {
+        id: true,
+        userId: true,
+        trustId: true,
+        embeddingJson: true,
+        modelName: true,
+      },
+      take: Math.min(500, Math.max(topK * 10, topK)),
+    });
+    const rows = Array.isArray(rowsRaw) ? rowsRaw : [];
+    const scored: AnnCandidate[] = [];
+    for (const row of rows) {
+      if (isLegacyStoredTemplate(row.modelName, row.embeddingJson)) continue;
+      const parsed = parseStoredVector(row.embeddingJson);
+      if (parsed.legacy || parsed.vector.length !== BIOMETRIC_AI_EMBEDDING_DIMS) {
+        continue;
+      }
+      const vector = normalizeVector(parsed.vector);
+      scored.push({
+        embeddingId: row.id,
+        userId: row.userId,
+        trustId: row.trustId,
+        annDistance: cosineDistance(probe, vector),
+        vector,
+      });
+    }
+    scored.sort((a, b) => a.annDistance - b.annDistance);
+    return { status: "ok", candidates: scored.slice(0, topK) };
+  }
+
+  /**
    * Bounded Top-K ANN candidate generation via pgvector.
    * On failure: unavailable — callers must fail closed (no full-gallery scan).
    */
@@ -767,12 +838,16 @@ export class PgVectorMatcherService {
     | { status: "unavailable"; reason: string }
   > {
     if (!(await isPgVectorEnabled())) {
-      // Empty gallery → NO_MATCH (no ANN needed). Non-empty without ANN → fail closed.
+      // Empty gallery → NO_MATCH (no ANN needed). Non-empty without ANN → fail closed
+      // unless TRUSTID_SQLITE_ANN=1 (local Vitest only — bounded exact Top-K, never production).
       const activeCount = await prisma.biometricEmbedding.count({
         where: { modality, status: "active" },
       });
       if (activeCount === 0) {
         return { status: "ok", candidates: [] };
+      }
+      if (process.env.TRUSTID_SQLITE_ANN === "1") {
+        return this.sqliteExactTopK(probe, modality, topK);
       }
       return { status: "unavailable", reason: "pgvector_disabled" };
     }

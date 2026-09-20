@@ -70,9 +70,13 @@ async function issueSessionCode(
   return buildRedirectWithCode(input.redirectUri, code, input.state);
 }
 
+/**
+ * Public OIDC issuer for discovery documents.
+ * @see config.oidcIssuer
+ */
 export async function oauthRoutes(app: FastifyInstance) {
   app.get("/.well-known/openid-configuration", async () => {
-    const issuer = `http://localhost:${config.port}`;
+    const issuer = config.oidcIssuer;
     return {
       issuer,
       authorization_endpoint: `${issuer}/oauth/authorize`,

@@ -1,5 +1,6 @@
 import {
   BIOMETRIC_AI_EMBEDDING_DIMS,
+  BIOMETRIC_AI_MODEL_NAME,
   BIOMETRIC_ERROR_CODES,
   BIOMETRIC_MODALITIES,
   BIOMETRIC_PGVECTOR_MAX_DISTANCE,
@@ -8,6 +9,7 @@ import {
 import { config } from "../../lib/config.js";
 import { clientMeta, setSessionCookie } from "../../lib/auth-context.js";
 import { calculateCosineDistance } from "../../lib/vector-math.js";
+import { openJson } from "../../lib/crypto.js";
 import { prisma } from "../../db/client.js";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
@@ -57,11 +59,18 @@ function maxDistance(): number {
 
 /**
  * Enrolled templates are `trustid_face_template_v1` envelopes (`primary` + gallery).
- * Legacy raw number[] arrays are still accepted for read-compat.
+ * Supports AES-GCM sealed embeddingJson and legacy plaintext JSON.
  */
 function parseStoredPrimaryVector(embeddingJson: string): number[] | null {
+  const raw = embeddingJson?.trim() ?? "";
+  if (!raw) return null;
   try {
-    const parsed = JSON.parse(embeddingJson) as unknown;
+    let parsed: unknown;
+    if (raw.startsWith("{") || raw.startsWith("[")) {
+      parsed = JSON.parse(raw);
+    } else {
+      parsed = openJson<unknown>(raw);
+    }
     if (Array.isArray(parsed)) {
       return parsed.length === BIOMETRIC_AI_EMBEDDING_DIMS
         ? (parsed as number[])
@@ -227,7 +236,7 @@ export async function handleFastVectorMatch(
         modality: BIOMETRIC_MODALITIES.FACE,
         vector,
         confidence: body.confidence,
-        modelName: body.modelName,
+        modelName: body.modelName ?? BIOMETRIC_AI_MODEL_NAME,
         modelVersion: body.modelVersion,
         deviceFingerprint: body.deviceFingerprint ?? body.deviceId,
       },

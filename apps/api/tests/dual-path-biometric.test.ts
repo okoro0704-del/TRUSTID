@@ -1,14 +1,10 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { BIOMETRIC_MODALITIES } from "@trustid/shared";
 import { prisma } from "../src/db/client.js";
 import { buildApp } from "../src/app.js";
 import { resetTables } from "./helpers/db.js";
+import { face512, facePayload } from "./helpers/face.js";
 import { __clearHotVectorCacheForTests } from "../src/modules/trust-id/vector-hot-cache.js";
 import { MATCH_STRATEGIES } from "../src/modules/trust-id/fast-vector-match.js";
-
-function face512(seed = 1) {
-  return Array.from({ length: 512 }, (_, i) => ((i + seed) % 31) / 100);
-}
 
 describe("1:1 vs 1:N dual-path biometric login", () => {
   let app: Awaited<ReturnType<typeof buildApp>>;
@@ -32,11 +28,7 @@ describe("1:1 vs 1:N dual-path biometric login", () => {
       method: "POST",
       url: "/v1/identity/register-trust-id",
       payload: {
-        face: {
-          modality: BIOMETRIC_MODALITIES.FACE,
-          vector,
-          confidence: 0.95,
-        },
+        face: facePayload(7),
         installId,
         deviceFingerprint: "hw-one-to-n-device-fingerprint-01",
       },
@@ -51,6 +43,7 @@ describe("1:1 vs 1:N dual-path biometric login", () => {
       payload: {
         faceVector: vector,
         installId,
+        modelName: facePayload(7).modelName,
       },
     });
     expect(res.statusCode).toBe(200);
@@ -68,11 +61,7 @@ describe("1:1 vs 1:N dual-path biometric login", () => {
       method: "POST",
       url: "/v1/identity/register-trust-id",
       payload: {
-        face: {
-          modality: BIOMETRIC_MODALITIES.FACE,
-          vector,
-          confidence: 0.95,
-        },
+        face: facePayload(8),
         installId,
         deviceFingerprint: "hw-one-to-one-device-fingerprint-02",
       },
@@ -87,6 +76,7 @@ describe("1:1 vs 1:N dual-path biometric login", () => {
         vector,
         installId,
         cachedTrustId: trustId,
+        modelName: facePayload(8).modelName,
       },
     });
     expect(res.statusCode).toBe(200);
@@ -99,7 +89,6 @@ describe("1:1 vs 1:N dual-path biometric login", () => {
   });
 
   it("falls back to 1:N when cachedTrustId face does not match", async () => {
-    const vectorA = face512(11);
     const vectorB = face512(99);
     const installA = "88888888-8888-4888-8888-888888888888";
     const installB = "99999999-9999-4999-8999-999999999999";
@@ -108,11 +97,7 @@ describe("1:1 vs 1:N dual-path biometric login", () => {
       method: "POST",
       url: "/v1/identity/register-trust-id",
       payload: {
-        face: {
-          modality: BIOMETRIC_MODALITIES.FACE,
-          vector: vectorA,
-          confidence: 0.95,
-        },
+        face: facePayload(11),
         installId: installA,
         deviceFingerprint: "hw-switch-a-device-fingerprint-03",
       },
@@ -121,11 +106,7 @@ describe("1:1 vs 1:N dual-path biometric login", () => {
       method: "POST",
       url: "/v1/identity/register-trust-id",
       payload: {
-        face: {
-          modality: BIOMETRIC_MODALITIES.FACE,
-          vector: vectorB,
-          confidence: 0.95,
-        },
+        face: facePayload(99),
         installId: installB,
         deviceFingerprint: "hw-switch-b-device-fingerprint-04",
       },
@@ -135,7 +116,6 @@ describe("1:1 vs 1:N dual-path biometric login", () => {
     const trustA = a.json().trustId as string;
     const trustB = b.json().trustId as string;
 
-    // Present face B while claiming cached Trust A ? 1:1 miss ? 1:N finds B
     const res = await app.inject({
       method: "POST",
       url: "/v1/auth/biometric-login",
@@ -143,6 +123,7 @@ describe("1:1 vs 1:N dual-path biometric login", () => {
         faceVector: vectorB,
         cachedTrustId: trustA,
         installId: installB,
+        modelName: facePayload(99).modelName,
       },
     });
     expect(res.statusCode).toBe(200);

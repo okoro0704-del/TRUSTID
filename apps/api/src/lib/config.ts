@@ -259,6 +259,26 @@ export const config = {
       },
     };
   },
+  /**
+   * Public OIDC issuer used in discovery documents.
+   * Hosted: prefer OIDC_ISSUER, else ASSERTION_ISSUER, else `{webauthn.origin}/api`
+   * (Netlify same-origin proxy). Local: http://localhost:{PORT}.
+   */
+  get oidcIssuer() {
+    const explicit =
+      process.env.OIDC_ISSUER?.trim() || process.env.ASSERTION_ISSUER?.trim();
+    if (explicit) return explicit.replace(/\/$/, "");
+    const origin = this.webauthn.origin.replace(/\/$/, "");
+    try {
+      const host = new URL(origin).hostname;
+      if (host === "localhost" || host === "127.0.0.1") {
+        return `http://localhost:${this.port}`;
+      }
+    } catch {
+      return `http://localhost:${this.port}`;
+    }
+    return `${origin}/api`;
+  },
   get corsOrigins() {
     const defaults = [
       "http://localhost:5173",

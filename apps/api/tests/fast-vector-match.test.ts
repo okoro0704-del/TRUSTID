@@ -1,13 +1,9 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { BIOMETRIC_MODALITIES } from "@trustid/shared";
 import { prisma } from "../src/db/client.js";
 import { buildApp } from "../src/app.js";
 import { resetTables } from "./helpers/db.js";
+import { face512, facePayload } from "./helpers/face.js";
 import { __clearHotVectorCacheForTests } from "../src/modules/trust-id/vector-hot-cache.js";
-
-function face512(seed = 1) {
-  return Array.from({ length: 512 }, (_, i) => ((i + seed) % 31) / 100);
-}
 
 describe("fast-vector-match cascade", () => {
   let app: Awaited<ReturnType<typeof buildApp>>;
@@ -36,7 +32,10 @@ describe("fast-vector-match cascade", () => {
     const res = await app.inject({
       method: "POST",
       url: "/v1/auth/fast-vector-match",
-      payload: { vector: face512(99) },
+      payload: {
+        vector: face512(99),
+        modelName: facePayload(99).modelName,
+      },
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
@@ -54,11 +53,7 @@ describe("fast-vector-match cascade", () => {
       method: "POST",
       url: "/v1/identity/register-trust-id",
       payload: {
-        face: {
-          modality: BIOMETRIC_MODALITIES.FACE,
-          vector,
-          confidence: 0.95,
-        },
+        face: facePayload(42),
         installId,
         deviceFingerprint: "hw-fast-vector-device-fingerprint-01",
       },
@@ -69,7 +64,11 @@ describe("fast-vector-match cascade", () => {
     const first = await app.inject({
       method: "POST",
       url: "/v1/auth/fast-vector-match",
-      payload: { vector, installId },
+      payload: {
+        vector,
+        installId,
+        modelName: facePayload(42).modelName,
+      },
     });
     expect(first.statusCode).toBe(200);
     expect(first.json().status).toBe("MATCH_FOUND");
@@ -79,11 +78,14 @@ describe("fast-vector-match cascade", () => {
     const second = await app.inject({
       method: "POST",
       url: "/v1/auth/fast-vector-match",
-      payload: { vector, installId },
+      payload: {
+        vector,
+        installId,
+        modelName: facePayload(42).modelName,
+      },
     });
     expect(second.statusCode).toBe(200);
     expect(second.json().status).toBe("MATCH_FOUND");
-    // Second pass should stay well under a typical network RTT budget.
     expect(second.json().durationMs).toBeLessThan(200);
   });
 });

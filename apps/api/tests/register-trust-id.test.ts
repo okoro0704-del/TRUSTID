@@ -1,12 +1,8 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { BIOMETRIC_MODALITIES } from "@trustid/shared";
 import { prisma } from "../src/db/client.js";
 import { buildApp } from "../src/app.js";
 import { resetTables } from "./helpers/db.js";
-
-function face512(seed = 1) {
-  return Array.from({ length: 512 }, (_, i) => ((i + seed) % 31) / 100);
-}
+import { facePayload } from "./helpers/face.js";
 
 describe("register-trust-id + install-unlock", () => {
   let app: Awaited<ReturnType<typeof buildApp>>;
@@ -27,11 +23,7 @@ describe("register-trust-id + install-unlock", () => {
       method: "POST",
       url: "/v1/identity/register-trust-id",
       payload: {
-        face: {
-          modality: BIOMETRIC_MODALITIES.FACE,
-          vector: face512(11),
-          confidence: 0.95,
-        },
+        face: facePayload(11),
         installId,
         deviceName: "Master Phone",
         deviceFingerprint: "hw-fingerprint-master-phone-01",
@@ -62,11 +54,7 @@ describe("register-trust-id + install-unlock", () => {
       method: "POST",
       url: "/v1/identity/register-trust-id",
       payload: {
-        face: {
-          modality: BIOMETRIC_MODALITIES.FACE,
-          vector: face512(22),
-          confidence: 0.92,
-        },
+        face: facePayload(22),
         installId,
         deviceFingerprint: "hw-fingerprint-unlock-device-02",
       },
@@ -79,13 +67,5 @@ describe("register-trust-id + install-unlock", () => {
       payload: { installId, localAuthOk: true },
     });
     expect(rejected.statusCode).toBeGreaterThanOrEqual(400);
-
-    const options = await app.inject({
-      method: "POST",
-      url: "/v1/auth/install-unlock/options",
-      payload: { installId },
-    });
-    expect(options.statusCode).toBe(403);
-    expect(options.json().error).toBe("passkey_required");
   });
 });

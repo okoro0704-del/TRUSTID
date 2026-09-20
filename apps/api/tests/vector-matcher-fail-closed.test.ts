@@ -76,6 +76,8 @@ describe("no full-gallery fallback", () => {
   });
 
   it("identifyOneToMany fails closed when pgvector disabled and gallery non-empty", async () => {
+    const prevSqliteAnn = process.env.TRUSTID_SQLITE_ANN;
+    delete process.env.TRUSTID_SQLITE_ANN;
     vi.spyOn(pgvector, "isPgVectorEnabled").mockResolvedValue(false);
     const findManySpy = vi.spyOn(prisma.biometricEmbedding, "findMany");
     vi.spyOn(prisma.biometricEmbedding, "count").mockResolvedValue(42);
@@ -99,6 +101,7 @@ describe("no full-gallery fallback", () => {
     expect(findManySpy).not.toHaveBeenCalled();
     findManySpy.mockRestore();
     vi.restoreAllMocks();
+    if (prevSqliteAnn != null) process.env.TRUSTID_SQLITE_ANN = prevSqliteAnn;
   });
 
   it("identifyOneToMany returns NO_MATCH on empty gallery without findMany", async () => {

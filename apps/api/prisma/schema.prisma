@@ -845,7 +845,7 @@ model BiometricTemplate {
 }
 
 /// AI biometric embedding for pgvector 1:N identity matching (512-D).
-/// Raw biometrics never stored — only normalized on-device AI vectors.
+/// embeddingJson is AES-GCM sealed at rest; pgvector column stays searchable plaintext.
 model BiometricEmbedding {
   id            String    @id @default(cuid())
   userId        String    @map("user_id")

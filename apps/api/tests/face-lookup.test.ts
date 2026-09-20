@@ -1,19 +1,17 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { BIOMETRIC_MODALITIES } from "@trustid/shared";
 import { prisma } from "../src/db/client.js";
 import { buildApp } from "../src/app.js";
 import { ambientSignInAndSession } from "../src/modules/trust-id/fusion.js";
 import { resetTables } from "./helpers/db.js";
-
-function face512(seed = 1) {
-  return Array.from({ length: 512 }, (_, i) => ((i + seed) % 31) / 100);
-}
+import { face512, facePayload } from "./helpers/face.js";
+import { __clearHotVectorCacheForTests } from "../src/modules/trust-id/vector-hot-cache.js";
 
 describe("face-lookup launch flow", () => {
   let app: Awaited<ReturnType<typeof buildApp>>;
 
   beforeEach(async () => {
     await resetTables(prisma);
+    __clearHotVectorCacheForTests();
     app = await buildApp();
     await app.ready();
   });
@@ -30,6 +28,7 @@ describe("face-lookup launch flow", () => {
       payload: {
         faceVector: face512(3),
         confidence: 0.9,
+        modelName: facePayload(3).modelName,
       },
     });
     expect(res.statusCode).toBe(200);
@@ -39,15 +38,11 @@ describe("face-lookup launch flow", () => {
   });
 
   it("returns MATCH_FOUND after explicit enroll", async () => {
-    const vector = face512(7);
+    const payload = facePayload(7);
     const installId = "22222222-2222-4222-8222-222222222222";
     const enrolled = await ambientSignInAndSession({
       payload: {
-        face: {
-          modality: BIOMETRIC_MODALITIES.FACE,
-          vector,
-          confidence: 0.95,
-        },
+        face: payload,
       },
       allowAutoEnroll: true,
       installId,
@@ -65,17 +60,12 @@ describe("face-lookup launch flow", () => {
       method: "POST",
       url: "/v1/identity/face-lookup",
       payload: {
-        face: {
-          modality: "face",
-          vector,
-          confidence: 0.95,
-        },
+        face: payload,
         installId,
       },
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    // Same install is treated as master — direct login, not approval.
     expect(["MATCH_FOUND", "PENDING_MASTER_APPROVAL"]).toContain(body.status);
     expect(body.trustId).toBe(enrolled.trustId);
     if (occ.occupied) {
