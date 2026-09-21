@@ -2,7 +2,8 @@
 buildCommand = "npm run build:api"
 
 [deploy]
-# prisma db push includes --accept-data-loss (see apps/api package.json) for schema sync on Postgres
+# Schema sync on boot: prisma db push WITHOUT --force-reset (never wipe production).
+# Local wipe-only: npm run db:push:reset
 startCommand = "npm start"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
@@ -11,4 +12,7 @@ restartPolicyMaxRetries = 3
 # DATABASE_URL = Postgres+pgvector service URL (template: https://railway.com/deploy/3jJFCA)
 #   Standard Railway Postgres does NOT include pgvector — use the pgvector template.
 # On boot, bootstrapPgVector() enables the extension, adds vector(512), and creates the ANN index.
+# OIDC_ISSUER=https://trustedid.netlify.app/api
+# ASSERTION_ISSUER=https://trustedid.netlify.app
 # COOKIE_SECRET, WEBAUTHN_RP_ID, WEBAUTHN_ORIGIN, WEBAUTHN_RP_NAME, CORS_ORIGINS
+# Never set LIFEOS_AUTH_BYPASS=true in production.

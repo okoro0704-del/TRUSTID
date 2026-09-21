@@ -9,8 +9,9 @@
     "start": "node dist/index.js",
     "start:dev": "node --env-file=.env dist/index.js",
     "db:generate": "prisma generate",
-    "db:push": "prisma db push --force-reset",
-    "db:push:deploy": "prisma db push --force-reset",
+    "db:push": "prisma db push",
+    "db:push:deploy": "prisma db push",
+    "db:push:reset": "prisma db push --force-reset",
     "db:seed": "tsx prisma/seed.ts",
     "test": "vitest run"
   },
