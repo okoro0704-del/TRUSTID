@@ -24,7 +24,7 @@
     "db:push:reset": "node scripts/sync-prisma-provider.mjs && npm run db:push:reset -w @trustid/api",
     "db:seed": "npm run db:seed -w @trustid/api",
     "setup": "npm install && npm run build -w @trustid/shared && npm run build -w @trustid/zk && npm run build -w @trustid/bbs-sdk && npm run build -w @trustid/baas-sdk && npm run build -w @trustid/device-security && npm run build -w @trustid/sovereign-crypto && npm run db:generate && npm run db:push:reset && npm run db:seed",
-    "test": "npm run test -w @trustid/api && npm run test -w @trustid/digi-bridge && npm run test -w @trustid/vault-sdk && npm run test -w @trustid/ui-react"
+    "test": "npm run test -w @trustid/api && npm run test -w @trustid/digi-bridge && npm run test -w @trustid/digi-authority && npm run test -w @trustid/vault-sdk && npm run test -w @trustid/ui-react"
   },
   "dependencies": {
     "@fastify/aws-lambda": "^5.1.4"

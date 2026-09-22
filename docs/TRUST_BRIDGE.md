@@ -1,5 +1,8 @@
 # Digiconomy Trust Bridge (Phase T2)
 
+> Phase T3 authority lives in `docs/AUTHORITY.md` and `@trustid/digi-authority`.
+> T2 contracts below remain frozen (`aud=digiconomy:digi`, ~60s assertion, EdDSA, issuer+subject owner, jti replay, Digi session).
+
 ## Trust boundary
 
 - **TrustID** owns human identity (`User.trustId` as subject).

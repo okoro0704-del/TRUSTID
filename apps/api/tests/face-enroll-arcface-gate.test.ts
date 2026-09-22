@@ -13,7 +13,7 @@ import { prisma } from "../src/db/client.js";
 import { resetTables } from "./helpers/db.js";
 import { pgVectorMatcher } from "../src/modules/trust-id/vector-matcher.js";
 import { biometricMatcher } from "../src/modules/trust-id/matcher.js";
-import { commitName, newTrustId } from "../src/lib/crypto.js";
+import { commitName, newTrustId, openJson } from "../src/lib/crypto.js";
 
 function unit512(seed: number) {
   const v = Array.from({ length: BIOMETRIC_AI_EMBEDDING_DIMS }, (_, i) =>
@@ -100,7 +100,8 @@ describe("face enrollment ArcFace gate", () => {
       where: { userId: user.id, modality: "face" },
     });
     expect(row?.modelName).toBe(BIOMETRIC_AI_MODEL_NAME);
-    const envelope = JSON.parse(row!.embeddingJson) as { modelName: string };
+    // embeddingJson is AES-GCM sealed at rest (T1); open before asserting envelope.
+    const envelope = openJson<{ modelName: string }>(row!.embeddingJson);
     expect(envelope.modelName).toBe(BIOMETRIC_AI_MODEL_NAME);
   });
 });
