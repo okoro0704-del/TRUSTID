@@ -1,19 +1,20 @@
 import {
   PostgresAuthorityStore,
-  SqliteAuthorityStore,
   MemoryAuthorityStore,
+  loadSqliteAuthorityStore,
   type AuthorityStore,
 } from "@trustid/digi-authority";
 import { buildDigiRp } from "./app.js";
 
 const port = Number(process.env.PORT ?? 8795);
-const databaseUrl = process.env.DIGI_DATABASE_URL?.trim() || process.env.DATABASE_URL?.trim();
+const databaseUrl =
+  process.env.DIGI_DATABASE_URL?.trim() || process.env.DATABASE_URL?.trim();
 const nodeEnv = process.env.NODE_ENV ?? "development";
 
-function createAuthorityStore(): {
+async function createAuthorityStore(): Promise<{
   store: AuthorityStore;
   persistence: "postgres" | "sqlite" | "memory";
-} {
+}> {
   if (databaseUrl?.startsWith("postgres")) {
     return {
       store: new PostgresAuthorityStore(databaseUrl),
@@ -26,6 +27,7 @@ function createAuthorityStore(): {
     );
   }
   if (process.env.DIGI_AUTHORITY_SQLITE === "1") {
+    const { SqliteAuthorityStore } = await loadSqliteAuthorityStore();
     return {
       store: new SqliteAuthorityStore(
         process.env.DIGI_AUTHORITY_SQLITE_PATH?.trim() || ":memory:"
@@ -36,7 +38,7 @@ function createAuthorityStore(): {
   return { store: new MemoryAuthorityStore(), persistence: "memory" };
 }
 
-const { store, persistence } = createAuthorityStore();
+const { store, persistence } = await createAuthorityStore();
 
 const { app } = await buildDigiRp({
   trustIdIssuer:

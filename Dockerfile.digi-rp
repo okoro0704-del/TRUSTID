@@ -1,5 +1,5 @@
 # Digi RP — ownership bridge + authority service (Phase T4)
-FROM node:20-alpine AS build
+FROM node:22-alpine AS build
 WORKDIR /repo
 COPY package.json package-lock.json ./
 COPY apps ./apps
@@ -15,7 +15,7 @@ RUN npm config set fetch-retries 5 \
   && npm run build -w @trustid/authority-verifier \
   && npm run build -w @trustid/digi-rp
 
-FROM node:20-alpine AS runtime
+FROM node:22-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \

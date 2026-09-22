@@ -3,7 +3,6 @@ import {
   AuthorityService,
   DIGITAL_TWIN_MRFUNDZMAN_POLICY,
   MemoryAuthorityStore,
-  SqliteAuthorityStore,
   actorKey,
   assertDelegationSubset,
   evaluateActorPolicy,
@@ -11,6 +10,7 @@ import {
   mintAuthorityToken,
   verifyAuthorityToken,
 } from "../src/index.js";
+import { SqliteAuthorityStore } from "../src/sqlite-store.js";
 
 const OWNER = "digi_owner_fundz";
 const TWIN = { type: "digital_twin" as const, id: "mrfundzman" };

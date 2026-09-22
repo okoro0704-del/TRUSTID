@@ -1,17 +1,17 @@
 /**
  * T4 cross-service E2E: Digi RP (HTTP) ? ElfCom-shaped consumer (HTTP).
- * Two listen() servers ó real network boundaries, not in-process calls.
+ * Two listen() servers ù real network boundaries, not in-process calls.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import Fastify from "fastify";
 import {
   AuthorityService,
   DIGITAL_TWIN_MRFUNDZMAN_POLICY,
-  SqliteAuthorityStore,
   actorKey,
   generateAuthoritySigningKey,
   type AuthoritySigningKey,
 } from "@trustid/digi-authority";
+import { SqliteAuthorityStore } from "@trustid/digi-authority/sqlite";
 import { buildDigiRp } from "../src/app.js";
 import {
   elfComConversationResource,
@@ -205,7 +205,7 @@ describe("T4 cross-service ElfCom enforcement", () => {
       audience: "elfcom",
     });
     if (check.decision !== "ALLOW_WITH_LIMITS" && check.decision !== "ALLOW") {
-      // may be limit exceeded from prior ó create fresh grant by new resource ok
+      // may be limit exceeded from prior ù create fresh grant by new resource ok
     }
     // mint token for A via fresh grant
     const grant = await store.createGrant({
