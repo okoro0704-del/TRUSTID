@@ -1,5 +1,5 @@
 {
-  "name": "@trustid/digi-authority",
+  "name": "@trustid/authority-verifier",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -16,13 +16,10 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@trustid/shared": "*",
-    "jose": "^6.2.8",
-    "pg": "^8.14.1"
+    "jose": "^6.2.8"
   },
   "devDependencies": {
     "@types/node": "^22.13.10",
-    "@types/pg": "^8.11.11",
     "typescript": "^5.8.2",
     "vitest": "^3.0.9"
   }

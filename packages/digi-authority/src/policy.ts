@@ -49,6 +49,17 @@ export const DIGITAL_TWIN_MRFUNDZMAN_POLICY: ActorPolicy = {
       consequence: CONSEQUENCE_LEVELS.HIGH,
     },
     {
+      actions: ["message.send"],
+      decision: APPROVAL_MODES.ALLOW_WITH_LIMITS,
+      limits: { maxMessages: 10 },
+      consequence: CONSEQUENCE_LEVELS.MEDIUM,
+    },
+    {
+      actions: ["message.broadcast"],
+      decision: APPROVAL_MODES.ASK_OWNER,
+      consequence: CONSEQUENCE_LEVELS.HIGH,
+    },
+    {
       actions: ["payment.approve"],
       decision: APPROVAL_MODES.ASK_OWNER,
       consequence: CONSEQUENCE_LEVELS.CRITICAL,

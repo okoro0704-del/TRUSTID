@@ -18,10 +18,11 @@ import {
   AuthorityService,
   DIGITAL_TWIN_MRFUNDZMAN_POLICY,
   MemoryAuthorityStore,
-  generateAuthoritySigningKey,
   parseActorKey,
   type AuthorityStore,
 } from "@trustid/digi-authority";
+import { loadAuthoritySigningKey } from "./keys.js";
+import type { JWK } from "jose";
 
 export type DigiRpOptions = {
   trustIdIssuer: string;
@@ -33,6 +34,8 @@ export type DigiRpOptions = {
   sessions?: SessionStore;
   authorityStore?: AuthorityStore;
   authorityService?: AuthorityService;
+  authorityPersistence?: "postgres" | "sqlite" | "memory";
+  authorityPublicJwks?: JWK[];
   fetchImpl?: typeof fetch;
   audit?: DigiAuditSink;
 };
@@ -80,33 +83,57 @@ export async function buildDigiRp(opts: DigiRpOptions) {
   };
 
   const authorityStore = opts.authorityStore ?? new MemoryAuthorityStore();
-  const signingKey = await generateAuthoritySigningKey(
-    process.env.DIGI_AUTHORITY_KID?.trim() || "auth-1"
-  );
+  const loaded = await loadAuthoritySigningKey();
+  const publicJwks = opts.authorityPublicJwks ?? loaded.publicJwks;
+  const persistence =
+    opts.authorityPersistence ??
+    (opts.authorityStore ? "memory" : "memory");
   const authority =
     opts.authorityService ??
     new AuthorityService({
       store: authorityStore,
-      signingKey,
+      signingKey: loaded.primary,
       policies: [DIGITAL_TWIN_MRFUNDZMAN_POLICY],
+      persistence,
     });
 
-  app.get("/health", async () => ({
-    ok: true,
-    service: "digi-rp",
-    trustBridge: {
-      status: "READY",
-      issuer: opts.trustIdIssuer,
-      digiAudienceConfigured: true,
-      digiAudience: audience,
-      jwksUrl: opts.jwksUrl,
-    },
-    authority: authority.getHealth(),
-  }));
+  // Patch JWKS to include rotation previous keys
+  const baseJwks = authority.getPublicJwks();
+  const mergedKeys = [
+    ...baseJwks.keys,
+    ...publicJwks.filter(
+      (k) => !baseJwks.keys.some((b) => b.kid === k.kid)
+    ),
+  ];
 
-  app.get("/.well-known/authority-jwks.json", async () =>
-    authority.getPublicJwks()
-  );
+  app.get("/health", async () => {
+    const authHealth = authority.getHealth();
+    return {
+      ok: authHealth.status === "READY" || authHealth.persistence !== "memory",
+      service: "digi-rp",
+      trustBridge: {
+        status: "READY",
+        issuer: opts.trustIdIssuer,
+        digiAudienceConfigured: true,
+        digiAudience: audience,
+        jwksUrl: opts.jwksUrl,
+      },
+      authority: {
+        status: authHealth.status,
+        persistence: authHealth.persistence,
+        tokenAlg: authHealth.tokenAlg,
+        issuer: authHealth.issuer,
+        jwks: "READY" as const,
+        kid: authHealth.kid,
+      },
+    };
+  });
+
+  app.get("/.well-known/authority-jwks.json", async () => ({
+    keys: mergedKeys,
+  }));
+  // Alias stable path
+  app.get("/v1/authority/jwks", async () => ({ keys: mergedKeys }));
 
   app.post("/auth/trustid/exchange", async (req, reply) => {
     const body = z.object({ assertion: z.string().min(20) }).safeParse(req.body);
@@ -311,6 +338,8 @@ export async function buildDigiRp(opts: DigiRpOptions) {
         actor: z.string().min(3),
         action: z.string().min(1),
         resource: z.string().min(1),
+        correlationId: z.string().optional(),
+        actionId: z.string().optional(),
       })
       .safeParse(req.body);
     if (!body.success) {
@@ -326,7 +355,52 @@ export async function buildDigiRp(opts: DigiRpOptions) {
     if (!result.ok) {
       return reply.code(403).send({ decision: "DENY", reason: result.reason });
     }
-    return { decision: "ALLOW", grantId: result.grantId, jti: result.jti };
+    return {
+      decision: "ALLOW",
+      grantId: result.grantId,
+      jti: result.jti,
+      correlationId: body.data.correlationId ?? null,
+      actionId: body.data.actionId ?? null,
+    };
+  });
+
+  /** Consumer-facing consume alias (Option A: Digi-side shared consumption). */
+  app.post("/v1/authority/consume", async (req, reply) => {
+    const body = z
+      .object({
+        token: z.string().min(20),
+        audience: z.string().min(1),
+        actor: z.string().min(3),
+        action: z.string().min(1),
+        resource: z.string().min(1),
+        correlationId: z.string().optional(),
+        actionId: z.string().optional(),
+      })
+      .safeParse(req.body);
+    if (!body.success) {
+      return reply.code(400).send({ error: "invalid_request" });
+    }
+    const result = await authority.useToken({
+      token: body.data.token,
+      expectedAudience: body.data.audience,
+      expectedActor: body.data.actor,
+      expectedAction: body.data.action,
+      expectedResource: body.data.resource,
+    });
+    if (!result.ok) {
+      return reply.code(403).send({
+        decision: "DENY",
+        reason: result.reason,
+        correlationId: body.data.correlationId ?? null,
+      });
+    }
+    return {
+      decision: "ALLOW",
+      grantId: result.grantId,
+      jti: result.jti,
+      correlationId: body.data.correlationId ?? null,
+      actionId: body.data.actionId ?? null,
+    };
   });
 
   return { app, auditLog, audience, owners, replay, sessions, authority };

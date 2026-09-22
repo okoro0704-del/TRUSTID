@@ -35,6 +35,9 @@ export type AuthorityServiceOptions = {
   policies?: ActorPolicy[];
   now?: () => Date;
   tokenTtlSeconds?: number;
+  persistence?: "postgres" | "sqlite" | "memory";
+  /** Optional resolver: Digi ownerId ? TrustID subject for ElfCom authorship */
+  resolveOwnerTrustId?: (ownerId: string) => Promise<string | null>;
 };
 
 function newId(prefix: string): string {
@@ -47,6 +50,8 @@ export class AuthorityService {
   private policies: ActorPolicy[];
   private nowFn: () => Date;
   private tokenTtlSeconds: number;
+  private persistence: "postgres" | "sqlite" | "memory";
+  private resolveOwnerTrustId?: (ownerId: string) => Promise<string | null>;
 
   constructor(opts: AuthorityServiceOptions) {
     this.store = opts.store;
@@ -54,19 +59,26 @@ export class AuthorityService {
     this.policies = opts.policies ?? [];
     this.nowFn = opts.now ?? (() => new Date());
     this.tokenTtlSeconds = opts.tokenTtlSeconds ?? DIGI_AUTHORITY_TOKEN_TTL_SECONDS;
+    this.persistence = opts.persistence ?? "memory";
+    this.resolveOwnerTrustId = opts.resolveOwnerTrustId;
   }
 
   getHealth(): {
-    status: "READY";
+    status: "READY" | "DEGRADED";
     issuer: string;
     tokenAlg: "EdDSA";
     kid: string;
+    persistence: "postgres" | "sqlite" | "memory";
+    jwks: "READY";
   } {
+    const ready = this.persistence === "postgres" || this.persistence === "sqlite";
     return {
-      status: "READY",
+      status: ready ? "READY" : "DEGRADED",
       issuer: DIGI_AUTHORITY_ISSUER,
       tokenAlg: "EdDSA",
       kid: this.signingKey.kid,
+      persistence: this.persistence,
+      jwks: "READY",
     };
   }
 
@@ -191,7 +203,7 @@ export class AuthorityService {
       return { decision: "ASK_OWNER", requestId: req.id };
     }
 
-    // ALLOW or ALLOW_WITH_LIMITS ó find or create grant
+    // ALLOW or ALLOW_WITH_LIMITS ù find or create grant
     const existing = (await this.store.listGrants(input.ownerId, "ACTIVE")).find(
       (g) =>
         g.actorType === input.actor.type &&
@@ -445,6 +457,9 @@ export class AuthorityService {
     narrow: { actions: string[]; resources: string[]; ttlSeconds?: number }
   ) {
     const jti = newId("jti");
+    const ownerTrustId = this.resolveOwnerTrustId
+      ? await this.resolveOwnerTrustId(grant.ownerId)
+      : null;
     const minted = await mintAuthorityToken(this.signingKey, {
       ownerId: grant.ownerId,
       audience: grant.audience,
@@ -459,6 +474,7 @@ export class AuthorityService {
       jti,
       ttlSeconds: narrow.ttlSeconds ?? this.tokenTtlSeconds,
       now: this.nowFn(),
+      ...(ownerTrustId ? { ownerTrustId } : {}),
     });
     await this.audit("authority.token_issued", {
       ownerId: grant.ownerId,
@@ -470,6 +486,7 @@ export class AuthorityService {
         actions: narrow.actions,
         resources: narrow.resources,
         aud: grant.audience,
+        ownerTrustId: ownerTrustId ?? undefined,
       },
     });
     return minted;
@@ -587,9 +604,9 @@ export class AuthorityService {
     if (parent.status !== AUTHORITY_STATUS.ACTIVE) {
       return { ok: false, reason: "parent_not_active" };
     }
-    // Actor cannot self-escalate by creating a parent they don't own ó already checked.
+    // Actor cannot self-escalate by creating a parent they don't own ù already checked.
     // Delegation from twin to agent: parent must allow authority.delegate? Spec says
-    // twin is DENY for authority.delegate ó so only owner-initiated delegate via this API.
+    // twin is DENY for authority.delegate ù so only owner-initiated delegate via this API.
     const check = assertDelegationSubset(parent, {
       actions: input.actions,
       resources: input.resources,

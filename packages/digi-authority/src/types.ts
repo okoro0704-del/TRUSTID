@@ -147,6 +147,8 @@ export type AuthorityTokenClaims = {
   iat: number;
   nbf: number;
   exp: number;
+  /** Optional TrustID subject for service authorship (ElfCom). */
+  ownerTrustId?: string;
 };
 
 export type CheckInput = {

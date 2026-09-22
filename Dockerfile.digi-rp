@@ -1,0 +1,28 @@
+# Digi RP — ownership bridge + authority service (Phase T4)
+FROM node:20-alpine AS build
+WORKDIR /repo
+COPY package.json package-lock.json ./
+COPY apps ./apps
+COPY packages ./packages
+COPY scripts ./scripts
+RUN npm config set fetch-retries 5 \
+  && npm config set fetch-retry-mintimeout 20000 \
+  && npm config set fetch-retry-maxtimeout 120000 \
+  && npm ci \
+  && npm run build -w @trustid/shared \
+  && npm run build -w @trustid/digi-bridge \
+  && npm run build -w @trustid/digi-authority \
+  && npm run build -w @trustid/authority-verifier \
+  && npm run build -w @trustid/digi-rp
+
+FROM node:20-alpine AS runtime
+WORKDIR /app
+ENV NODE_ENV=production \
+    HOST=0.0.0.0 \
+    PORT=8795
+RUN apk add --no-cache wget
+COPY --from=build /repo /app
+EXPOSE 8795
+HEALTHCHECK --interval=20s --timeout=5s --start-period=25s --retries=5 \
+  CMD wget -qO- http://127.0.0.1:8795/health >/dev/null || exit 1
+CMD ["node", "apps/digi-rp/dist/index.js"]

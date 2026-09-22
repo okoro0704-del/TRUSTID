@@ -15,17 +15,18 @@ import {
 const OWNER = "digi_owner_fundz";
 const TWIN = { type: "digital_twin" as const, id: "mrfundzman" };
 
-async function makeService(store = new MemoryAuthorityStore()) {
+async function makeService(store = new MemoryAuthorityStore(), persistence: "memory" | "sqlite" | "postgres" = "memory") {
   const key = await generateAuthoritySigningKey("t3-test");
   const svc = new AuthorityService({
     store,
     signingKey: key,
     policies: [DIGITAL_TWIN_MRFUNDZMAN_POLICY],
+    persistence,
   });
   return { svc, key, store };
 }
 
-describe("T3 unit — policy fixture", () => {
+describe("T3 unit  policy fixture", () => {
   it("digital twin may create TV/radio programs", () => {
     const m = evaluateActorPolicy(DIGITAL_TWIN_MRFUNDZMAN_POLICY, {
       actor: TWIN,
@@ -80,7 +81,7 @@ describe("T3 unit — policy fixture", () => {
   });
 });
 
-describe("T3 unit — tokens", () => {
+describe("T3 unit  tokens", () => {
   it("mints and verifies EdDSA authority token", async () => {
     const key = await generateAuthoritySigningKey("k1");
     const { token, claims } = await mintAuthorityToken(key, {
@@ -163,7 +164,7 @@ describe("T3 unit — tokens", () => {
   });
 });
 
-describe("T3 unit — request / approve / limits / revoke", () => {
+describe("T3 unit  request / approve / limits / revoke", () => {
   it("TV publish ALLOW_WITH_LIMITS then limit deny", async () => {
     const { svc } = await makeService();
     const c1 = await svc.check({
@@ -401,7 +402,7 @@ describe("T3 SQL-backed integration", () => {
   it("owner ? grant ? approval ? token ? consume ? replay reject", async () => {
     const store = new SqliteAuthorityStore(":memory:");
     try {
-      const { svc } = await makeService(store);
+      const { svc } = await makeService(store, "sqlite");
       const ask = await svc.check({
         ownerId: OWNER,
         actor: TWIN,
@@ -436,17 +437,18 @@ describe("T3 SQL-backed integration", () => {
       const health = svc.getHealth();
       expect(health.status).toBe("READY");
       expect(health.tokenAlg).toBe("EdDSA");
+      expect(health.persistence).toBe("sqlite");
     } finally {
       store.close();
     }
   });
 });
 
-describe("T3 concurrency — one-time jti", () => {
+describe("T3 concurrency  one-time jti", () => {
   it("two simultaneous uses: one wins, one replay", async () => {
     const store = new SqliteAuthorityStore(":memory:");
     try {
-      const { svc } = await makeService(store);
+      const { svc } = await makeService(store, "sqlite");
       const ask = await svc.check({
         ownerId: OWNER,
         actor: TWIN,

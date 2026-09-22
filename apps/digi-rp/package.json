@@ -12,6 +12,7 @@
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^11.0.1",
+    "@trustid/authority-verifier": "*",
     "@trustid/digi-authority": "*",
     "@trustid/digi-bridge": "*",
     "@trustid/shared": "*",

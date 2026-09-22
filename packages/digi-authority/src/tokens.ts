@@ -41,6 +41,7 @@ export type MintAuthorityTokenInput = {
   ttlSeconds?: number;
   now?: Date;
   clockSkewSeconds?: number;
+  ownerTrustId?: string;
 };
 
 export async function mintAuthorityToken(
@@ -70,6 +71,7 @@ export async function mintAuthorityToken(
     iat,
     nbf,
     exp,
+    ...(input.ownerTrustId ? { ownerTrustId: input.ownerTrustId } : {}),
   };
 
   const token = await new SignJWT({
@@ -81,6 +83,7 @@ export async function mintAuthorityToken(
     grantId: claims.grantId,
     grantVersion: claims.grantVersion,
     oneTime: claims.oneTime,
+    ...(claims.ownerTrustId ? { ownerTrustId: claims.ownerTrustId } : {}),
   })
     .setProtectedHeader({ alg: "EdDSA", kid: key.kid, typ: "JWT" })
     .setIssuer(claims.iss)
@@ -186,7 +189,7 @@ export async function verifyAuthorityToken(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const claim = joseClaim(err);
-    // jose: unexpected "aud" claim value. Match aud before any /exp/ heuristic ù
+    // jose: unexpected "aud" claim value. Match aud before any /exp/ heuristic ?
     // the word "unexpected" contains the substring "exp".
     if (claim === "aud" || msg.includes('"aud"') || /audience/i.test(msg)) {
       return { ok: false, reason: "wrong_audience" };
