@@ -104,6 +104,7 @@ export async function buildApp() {
     const {
       BIOMETRIC_THRESHOLD_POLICY,
       BIOMETRIC_PAD_STATUS,
+      resolveDigiAudience,
     } = await import("@trustid/shared");
     const pgvectorEnabled = await isPgVectorEnabled();
     return {
@@ -122,6 +123,13 @@ export async function buildApp() {
         padStatus: BIOMETRIC_PAD_STATUS.INCOMPLETE,
         embeddingJsonAtRest: "aes-gcm-sealed",
         annColumnAtRest: "plaintext-for-hnsw",
+      },
+      trustBridge: {
+        status: "READY",
+        issuer: config.oidcIssuer,
+        digiAudienceConfigured: Boolean(resolveDigiAudience(config.nodeEnv)),
+        digiAudience: resolveDigiAudience(config.nodeEnv),
+        jwksPath: "/.well-known/jwks.json",
       },
       baas: getBaasBindings(),
       elfcomRealtimeUrl: getElfComClient().realtimeUrl,

@@ -26,6 +26,28 @@ export const DEFAULT_APP_SCOPES: Scope[] = [
   SCOPES.IDENTITY_VERIFICATION_STATUS,
 ];
 
+/**
+ * Digiconomy Digi relying-party audience (Phase T2 trust bridge).
+ * Env DIGI_AUDIENCE overrides; never accept client-supplied audience for Digi mint.
+ */
+export const DIGI_AUDIENCE_PRODUCTION = "digiconomy:digi";
+export const DIGI_AUDIENCE_DEV = "digiconomy:digi:dev";
+
+/** Short-lived Digi bridge assertion TTL (seconds). */
+export const DIGI_ASSERTION_TTL_SECONDS = 60;
+
+/** LifeOS / other product audiences — Digi must reject these. */
+export const LIFEOS_ASSERTION_AUDIENCE = "lifeos";
+
+export function resolveDigiAudience(nodeEnv?: string): string {
+  const explicit = process.env.DIGI_AUDIENCE?.trim();
+  if (explicit) return explicit;
+  const env = nodeEnv ?? process.env.NODE_ENV ?? "development";
+  return env === "production"
+    ? DIGI_AUDIENCE_PRODUCTION
+    : DIGI_AUDIENCE_DEV;
+}
+
 export const DEVICE_STATUS = {
   ACTIVE: "active",
   REVOKED: "revoked",
@@ -231,6 +253,19 @@ export const AUDIT_EVENTS = {
   ASSERTION_ISSUED: "identity.assertion.issued",
   ASSERTION_VERIFIED: "identity.assertion.verified",
   ASSERTION_REJECTED: "identity.assertion.rejected",
+  /** Digiconomy trust bridge (Phase T2) */
+  TRUST_ASSERTION_ISSUED: "trust_assertion_issued",
+  TRUST_ASSERTION_ACCEPTED: "trust_assertion_accepted",
+  TRUST_ASSERTION_REJECTED: "trust_assertion_rejected",
+  TRUST_ASSERTION_REPLAY_REJECTED: "trust_assertion_replay_rejected",
+  TRUST_ASSERTION_WRONG_ISSUER: "trust_assertion_wrong_issuer",
+  TRUST_ASSERTION_WRONG_AUDIENCE: "trust_assertion_wrong_audience",
+  TRUST_ASSERTION_EXPIRED: "trust_assertion_expired",
+  TRUST_ASSERTION_BAD_SIGNATURE: "trust_assertion_bad_signature",
+  TRUST_ASSERTION_UNKNOWN_KID: "trust_assertion_unknown_kid",
+  DIGI_OWNER_CREATED: "digi_owner_created",
+  DIGI_OWNER_RESOLVED: "digi_owner_resolved",
+  DIGI_SESSION_CREATED: "digi_session_created",
   DEVICE_REGISTERED: "device.registered",
   DEVICE_REVOKED: "device.revoked",
   DEVICE_RENAMED: "device.renamed",
