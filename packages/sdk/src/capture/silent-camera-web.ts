@@ -176,6 +176,10 @@ export async function captureSilentFaceFromWebCamera(
   const pad = new MediaPipeBlinkPadDetector();
 
   const aborted = () => Boolean(signal?.aborted);
+  const stopOnAbort = () => {
+    if (stream) stopStream(stream);
+  };
+  signal?.addEventListener("abort", stopOnAbort, { once: true });
 
   try {
     stream = await streamFactory({
@@ -423,6 +427,7 @@ export async function captureSilentFaceFromWebCamera(
       errorMessage: classified.message,
     };
   } finally {
+    signal?.removeEventListener("abort", stopOnAbort);
     stopStream(stream);
     if (video) {
       video.srcObject = null;
@@ -609,4 +614,3 @@ export async function captureSilentFaceEnrollmentFromWebCamera(
     pad.reset();
   }
 }
-

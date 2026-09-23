@@ -29,6 +29,25 @@ describe("face-vectorizer", () => {
 });
 
 describe("silent-camera-web", () => {
+  it("stops camera tracks immediately on cancellation even when video playback hangs", async () => {
+    const stop = vi.fn();
+    const controller = new AbortController();
+    let rejectPlayback!: (error: Error) => void;
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(
+      () => new Promise((_, reject) => { rejectPlayback = reject; }),
+    );
+    const pending = captureSilentFaceFromWebCamera(
+      async () => ({ getTracks: () => [{ stop }] }) as unknown as MediaStream,
+      { signal: controller.signal },
+    );
+    await Promise.resolve();
+    controller.abort();
+    expect(stop).toHaveBeenCalledTimes(1);
+    rejectPlayback(new Error("Capture aborted"));
+    await pending;
+    expect(document.querySelector("video")).toBeNull();
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     document.body.innerHTML = "";

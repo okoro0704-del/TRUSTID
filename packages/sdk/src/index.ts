@@ -199,11 +199,13 @@ export class TrustIdSdk {
     /** Locally cached Trust ID — enables Path A 1:1 verification */
     cachedTrustId?: string;
     deviceId?: string;
+    signal?: AbortSignal;
   }): Promise<import("./ambient.js").FaceLookupResult> {
     const vector = input.face?.vector;
     if (vector?.length === 512) {
       return this.api("/v1/auth/fast-vector-match", {
         method: "POST",
+        signal: input.signal,
         body: JSON.stringify({
           vector,
           faceVector: vector,
@@ -220,6 +222,7 @@ export class TrustIdSdk {
     }
     return this.api("/v1/identity/face-lookup", {
       method: "POST",
+      signal: input.signal,
       body: JSON.stringify({
         face: input.face,
         installId: input.installId,

@@ -245,17 +245,7 @@ export function useAmbientTrustIdAuth(
 
   const setPhaseSafe = useCallback((next: AmbientAuthPhase, runId?: number) => {
     const normalized = normalizePhase(next);
-    if (runId != null && runId !== runIdRef.current) {
-      // Stale run — only allow terminal stop of an active search UI.
-      const searching = isSearchingPhase(phaseRef.current);
-      const stopSearch =
-        normalized === "NO_MATCH" ||
-        normalized === "ERROR" ||
-        normalized === "AUTHENTICATED" ||
-        normalized === "NEEDS_APPROVAL" ||
-        normalized === "SWITCH_ACCOUNT";
-      if (!(searching && stopSearch)) return;
-    }
+    if (runId != null && runId !== runIdRef.current) return;
     // Never overwrite an active user-choice screen with a searching phase.
     if (
       isUserChoicePhase(phaseRef.current) &&
@@ -471,9 +461,7 @@ export function useAmbientTrustIdAuth(
   const enterNoMatch = useCallback(
     (runId: number) => {
       // Invalidate any concurrent/stale work; this scan attempt is done.
-      if (runId === runIdRef.current) {
-        runIdRef.current += 1;
-      }
+      if (runId !== runIdRef.current) return;
       abortCapture();
       setError(null);
       // Keep ArcFace identification face for Register (module session survives remounts).
@@ -500,18 +488,18 @@ export function useAmbientTrustIdAuth(
         });
       }
       setPhaseSafe("NO_MATCH", runId);
+      runIdRef.current += 1;
     },
     [abortCapture, setPhaseSafe, syncDiagnostics],
   );
 
   const enterServiceError = useCallback(
     (runId: number, message: string) => {
-      if (runId === runIdRef.current) {
-        runIdRef.current += 1;
-      }
+      if (runId !== runIdRef.current) return;
       abortCapture();
       setError(message);
       setPhaseSafe("ERROR", runId);
+      runIdRef.current += 1;
     },
     [abortCapture, setPhaseSafe],
   );
@@ -526,6 +514,15 @@ export function useAmbientTrustIdAuth(
     abortCapture();
     const ac = new AbortController();
     captureAbortRef.current = ac;
+
+    // Bound the entire attempt, including camera permission, model loading,
+    // and the network lookup. A timeout is not evidence of an unknown face.
+    const scanTimeout = window.setTimeout(() => {
+      enterServiceError(runId, "Face scan timed out. Please try again.");
+    }, 30_000);
+    ac.signal.addEventListener("abort", () => window.clearTimeout(scanTimeout), {
+      once: true,
+    });
 
     setPhaseSafe("PROMPTING", runId);
     setError(null);
@@ -615,6 +612,7 @@ export function useAmbientTrustIdAuth(
         installId,
         deviceFingerprint: payload.deviceFingerprint,
         cachedTrustId: getLastTrustId?.() ?? undefined,
+        signal: ac.signal,
       });
     } catch (e) {
       if (runId !== runIdRef.current) return;
@@ -628,8 +626,8 @@ export function useAmbientTrustIdAuth(
       return;
     }
 
-    // Definitive outcomes must stop the scan even across Strict Mode races
-    // when we are still showing a searching UI.
+    if (ac.signal.aborted || runId !== runIdRef.current) return;
+
     if (lookup.status === "SERVICE_UNAVAILABLE") {
       enterServiceError(
         runId,

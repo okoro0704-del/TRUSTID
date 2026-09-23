@@ -1,20 +1,22 @@
 /**
  * Ambient auth state machine: NO_MATCH terminates scan; service errors ? no-match.
  */
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { TrustIdAuthProvider } from "../src/context/TrustIdAuthProvider.js";
 import { useAmbientTrustIdAuth } from "../src/hooks/useAmbientTrustIdAuth.js";
 import type { TrustIdApiClient } from "../src/api/client.js";
 import { resetEnrollmentCandidateForDev } from "../src/hooks/enrollmentCandidateSession.js";
+import { TrustIdAmbientAuthProvider } from "../src/components/TrustIdAmbientAuthProvider.js";
 
 const faceLookup = vi.fn();
 const registerTrustId = vi.fn();
 const ambientSignIn = vi.fn();
 const enrollBiometric = vi.fn();
 
-vi.mock("@trustid/sdk", () => ({
+vi.mock("@trustid/sdk", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@trustid/sdk")>(),
   createTrustIdSdk: () => ({
     faceLookup,
     registerTrustId,
@@ -105,6 +107,26 @@ describe("useAmbientTrustIdAuth state machine", () => {
     expect(result.current.phase).toBe("NO_MATCH");
   });
 
+  it("shows registration after no-match, stops the camera, and waits for consent", async () => {
+    const capturePayload = vi.fn(async () => facePayload());
+    const view = render(
+      <TrustIdAmbientAuthProvider capturePayload={capturePayload}>
+        Signed in
+      </TrustIdAmbientAuthProvider>, { wrapper },
+    );
+    const register = await screen.findByRole("button", { name: "Register My Face" });
+    expect(view.container.querySelector(".tid-silent-splash-ring")).toBeNull();
+    expect((faceLookup.mock.calls[0][0].signal as AbortSignal).aborted).toBe(true);
+    expect(registerTrustId).not.toHaveBeenCalled();
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 700)); });
+    expect(capturePayload).toHaveBeenCalledTimes(1);
+    fireEvent.click(register);
+    await screen.findByText("Face saved successfully");
+    expect(registerTrustId).toHaveBeenCalledTimes(1);
+    expect(capturePayload).toHaveBeenCalledTimes(1);
+    view.unmount();
+  });
+
   it("RETRY starts a fresh scan after NO_MATCH", async () => {
     const capturePayload = vi.fn(async () => facePayload());
     const { result } = renderHook(
@@ -127,6 +149,48 @@ describe("useAmbientTrustIdAuth state machine", () => {
     await waitFor(() =>
       expect(faceLookup.mock.calls.length).toBeGreaterThan(callsBefore),
     );
+  });
+
+  it("aborts a hanging lookup after 30 seconds and ignores its late no-match result", async () => {
+    vi.useFakeTimers();
+    let resolveLookup!: (value: unknown) => void;
+    faceLookup.mockImplementation(() => new Promise(resolve => { resolveLookup = resolve; }));
+    const capturePayload = vi.fn(async () => facePayload());
+    const { result, unmount } = renderHook(
+      () => useAmbientTrustIdAuth({ capturePayload }), { wrapper },
+    );
+    try {
+      await act(async () => {});
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(faceLookup).toHaveBeenCalledTimes(1);
+      const signal = faceLookup.mock.calls[0][0].signal as AbortSignal;
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      expect(result.current.phase).toBe("ERROR");
+      expect(result.current.error).toMatch(/timed out/);
+      expect(signal.aborted).toBe(true);
+      await act(async () => { resolveLookup({ status: "NOT_FOUND", canRegister: true }); });
+      expect(result.current.phase).toBe("ERROR");
+      expect(capturePayload).toHaveBeenCalledTimes(1);
+      expect(registerTrustId).not.toHaveBeenCalled();
+    } finally {
+      unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let an older no-match response stop a fresh retry", async () => {
+    let resolveOld!: (value: unknown) => void;
+    faceLookup.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }));
+    faceLookup.mockImplementationOnce(() => new Promise(() => {}));
+    const { result } = renderHook(
+      () => useAmbientTrustIdAuth({ capturePayload: async () => facePayload() }), { wrapper },
+    );
+    await waitFor(() => expect(faceLookup).toHaveBeenCalledTimes(1));
+    act(() => result.current.retry());
+    await waitFor(() => expect(faceLookup).toHaveBeenCalledTimes(2));
+    await act(async () => { resolveOld({ status: "NOT_FOUND", canRegister: true }); });
+    expect(result.current.phase).toBe("PROMPTING");
+    expect((faceLookup.mock.calls[1][0].signal as AbortSignal).aborted).toBe(false);
   });
 
   it("SERVICE_UNAVAILABLE is not treated as NO_MATCH", async () => {
@@ -250,7 +314,7 @@ describe("useAmbientTrustIdAuth state machine", () => {
       { wrapper },
     );
 
-    // Legacy vectors never reach lookup / NO_MATCH — fail at vector stage.
+    // Legacy vectors never reach lookup / NO_MATCH ï¿½ fail at vector stage.
     await waitFor(() => expect(result.current.phase).toBe("ERROR"));
     expect(faceLookup).not.toHaveBeenCalled();
     expect(registerTrustId).not.toHaveBeenCalled();

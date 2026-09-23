@@ -70,7 +70,7 @@ export function TrustIdAmbientAuthProvider({
     return (
       <AmbientSplash brand={brand} msg="No Trust ID found">
         <p className="tid-ambient-splash-msg" style={{ marginTop: "0.65rem" }}>
-          We couldn&apos;t find a Trust ID registered to this face.
+          Scan complete. No Trust ID matches this face. Register your face to create one.
         </p>
         {error ? (
           <p
@@ -129,7 +129,7 @@ export function TrustIdAmbientAuthProvider({
               onClick={confirmCreateAccount}
               disabled={fingerprintBusy}
             >
-              Register Trust ID
+              Register My Face
             </button>
           </div>
         </div>
