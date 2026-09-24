@@ -266,9 +266,8 @@ async function loadFaceLandmarker(
         forVisionTasks: (path: string) => Promise<unknown>;
       };
     };
-
-    const wasmPath =
-      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm";
+    // Same-origin assets avoid opaque cross-origin loader failures on iOS Safari.
+    const wasmPath = "/mediapipe/wasm";
     faceCaptureDiag({
       stage: "mediapipe_fileset_start",
       component: "mediapipe",
