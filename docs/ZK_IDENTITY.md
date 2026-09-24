@@ -1,4 +1,4 @@
-# Zero-Knowledge Identity (TrustID)
+# Minimal Identity Attestations (TrustID)
 
 TrustID operates as a **Zero-PII IdP** for LifeOS and ecosystem apps.
 
@@ -8,13 +8,13 @@ TrustID operates as a **Zero-PII IdP** for LifeOS and ecosystem apps.
 |-------|----------|
 | At rest | No plaintext names, emails, phones, or unencrypted portraits. Contacts use peppered `lookupHash` + blind `commitment`. Names use `nameCommitment`. Portraits and assertion private keys are AES-GCM sealed. |
 | Session UX | Optional sealed `SessionPresentation` (ciphertext) for Trust Center display during an active HttpOnly session only. |
-| LifeOS | Receives **ZK trust claims** (`POST /zk/prove`) — not email/profile/portrait. Public signals include minTier, nullifier, satisfied flag. |
+| LifeOS | Receives minimal issuer attestations (`POST /zk/prove`) rather than email/profile/portrait. Public signals include minTier, nullifier, satisfied flag. These are not zero-knowledge proofs in the current implementation. |
 
 ## Protocol
 
 - Scope: `identity.zk_claims` (+ `identity.trust_level`)
 - Circuit id: `trust_tier_gte` (Circom source in `packages/zk/circuits/`)
-- Runtime prover: **groth16-hybrid-v1** (HMAC-FS attestation with Groth16-shaped public signals). Optional full snarkjs artifacts can replace the hybrid prover after Circom trusted setup.
+- Runtime attester: **HMAC-SHA-256 issuer attestation** with a legacy Groth16-shaped wire layout. It is neither Groth16 nor zero knowledge; the actual tier is public. A future genuine SNARK implementation would require separate proving, verification, setup, and security review work.
 - Verify: `POST /zk/verify` or fetch `GET /zk/verification-key`
 
 ## Honest limits
@@ -25,5 +25,5 @@ TrustID operates as a **Zero-PII IdP** for LifeOS and ecosystem apps.
 
 ## Env
 
-- `PII_PEPPER` — contact lookup HMAC pepper (required in production)
-- `SEAL_KEY` — AES-GCM / ZK issuer material (required in production)
+- `PII_PEPPER` Â— contact lookup HMAC pepper (required in production)
+- `SEAL_KEY` Â— AES-GCM / ZK issuer material (required in production)

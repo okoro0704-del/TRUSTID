@@ -34,7 +34,8 @@ export type ZkClaimBundle = {
   };
   issuedAt?: string;
   audience?: string;
-  protocol?: "groth16";
+  /** Current runtime is HMAC attestation; Groth16-shaped fields are legacy wire compatibility. */
+  protocol?: "groth16" | "hmac-sha256-attestation";
 };
 
 export type ZkProveBundleResponse = {

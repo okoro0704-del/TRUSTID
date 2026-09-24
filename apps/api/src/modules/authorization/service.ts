@@ -342,10 +342,13 @@ export async function exchangeAuthorizationCode(input: {
     throw Object.assign(new Error("invalid_grant"), { statusCode: 400 });
   }
 
-  await prisma.oAuthAuthorizationCode.update({
-    where: { id: row.id },
+  const consumed = await prisma.oAuthAuthorizationCode.updateMany({
+    where: { id: row.id, consumedAt: null, expiresAt: { gt: new Date() } },
     data: { consumedAt: new Date() },
   });
+  if (consumed.count !== 1) {
+    throw Object.assign(new Error("invalid_grant"), { statusCode: 400 });
+  }
 
   const scopes = parseJsonArray(row.scopes);
   const accessToken = randomToken(32);

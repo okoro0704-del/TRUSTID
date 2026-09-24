@@ -599,3 +599,4 @@ export type FaceLifecycleDiagnostics = {
   stage?: FaceLifecycleStage | string;
   errorCode?: BiometricErrorCode | string | null;
 };
+export { isAuthorityClaimsShape } from "./authority-claims.js";

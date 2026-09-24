@@ -29,6 +29,7 @@ export type DigiRpOptions = {
   jwksUrl: string;
   digiAudience?: string;
   cookieSecret?: string;
+  corsOrigins?: string[];
   owners?: OwnerStore;
   replay?: ReplayStore;
   sessions?: SessionStore;
@@ -62,9 +63,25 @@ async function resolveSessionOwner(
 
 export async function buildDigiRp(opts: DigiRpOptions) {
   const app = Fastify({ logger: false });
-  await app.register(cors, { origin: true, credentials: true });
+  const production = process.env.NODE_ENV === "production";
+  const cookieSecret = opts.cookieSecret ?? (production ? undefined : "digi-rp-dev-cookie-secret");
+  if (!cookieSecret || (production && (cookieSecret.length < 32 || /dev|change.me/i.test(cookieSecret)))) {
+    throw new Error("A production DIGI_COOKIE_SECRET of at least 32 characters is required");
+  }
+  if (production && (!opts.owners || !opts.replay || !opts.sessions)) {
+    throw new Error("Production Digi requires explicit durable owner, replay and session stores; memory defaults are development-only");
+  }
+  const allowedOrigins = opts.corsOrigins ?? (process.env.DIGI_CORS_ORIGINS ??
+    (production ? "" : "http://localhost:5173,http://localhost:5174")).split(",").map(s => s.trim()).filter(Boolean);
+  app.addHook("onRequest", async (req, reply) => {
+    if (req.headers.origin && !allowedOrigins.includes(req.headers.origin)) {
+      return reply.code(403).send({ error: "origin_not_allowed" });
+    }
+  });
+  await app.register(cors, { origin: allowedOrigins, credentials: true });
+
   await app.register(cookie, {
-    secret: opts.cookieSecret ?? "digi-rp-dev-cookie-secret",
+    secret: cookieSecret,
   });
 
   const audience = opts.digiAudience ?? resolveDigiAudience(process.env.NODE_ENV);
@@ -93,7 +110,7 @@ export async function buildDigiRp(opts: DigiRpOptions) {
     new AuthorityService({
       store: authorityStore,
       signingKey: loaded.primary,
-      policies: [DIGITAL_TWIN_MRFUNDZMAN_POLICY],
+      policies: production ? [] : [DIGITAL_TWIN_MRFUNDZMAN_POLICY],
       persistence,
     });
 
@@ -220,9 +237,12 @@ export async function buildDigiRp(opts: DigiRpOptions) {
       return reply.code(400).send({ error: "invalid_actor" });
     }
     const sessionOwner = await resolveSessionOwner(sessions, req);
-    const ownerId = body.data.ownerId ?? sessionOwner;
+    const ownerId = sessionOwner;
     if (!ownerId) {
       return reply.code(401).send({ error: "unauthorized" });
+    }
+    if (body.data.ownerId && body.data.ownerId !== ownerId) {
+      return reply.code(403).send({ error: "forbidden" });
     }
     const result = await authority.check({
       ownerId,
@@ -230,7 +250,8 @@ export async function buildDigiRp(opts: DigiRpOptions) {
       action: body.data.action,
       resource: body.data.resource,
       audience: body.data.audience,
-      stepUpProvided: body.data.stepUpProvided,
+      // Only future server-verified TrustID evidence may satisfy step-up.
+      stepUpProvided: false,
     });
     return result;
   });

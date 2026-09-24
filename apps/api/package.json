@@ -11,7 +11,7 @@
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:push:deploy": "prisma db push",
-    "db:push:reset": "prisma db push --force-reset",
+    "db:push:reset": "node ../../scripts/guard-local-reset.mjs",
     "db:seed": "tsx prisma/seed.ts",
     "test": "vitest run"
   },

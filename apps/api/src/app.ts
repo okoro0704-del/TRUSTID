@@ -38,6 +38,12 @@ import {
 } from "./modules/baas/registry.js";
 
 export async function buildApp() {
+  const cookieSecret = config.cookieSecret;
+  const allowedOrigins = config.corsOrigins;
+  if (!config.isDev) {
+    void config.piiPepper;
+    void config.sealKey;
+  }
   bootstrapElfComDispatcher();
   await bootstrapOAuthApplications();
 
@@ -73,14 +79,20 @@ export async function buildApp() {
     },
   );
 
+  app.addHook("onRequest", async (req, reply) => {
+    if (req.headers.origin && !allowedOrigins.includes(req.headers.origin)) {
+      return reply.code(403).send({ error: "origin_not_allowed" });
+    }
+  });
   await app.register(cors, {
-    origin: true,
+    origin: allowedOrigins,
     credentials: true,
   });
 
   await app.register(cookie, {
-    secret: config.cookieSecret,
+    secret: cookieSecret,
   });
+
 
   await app.register(websocket);
 
@@ -111,6 +123,7 @@ export async function buildApp() {
       ok: true,
       service: "trustid-api",
       role: "identity_provider",
+      trustTierProof: { implementation: "hmac-sha256-attestation", zeroKnowledge: false, groth16: false },
       webauthn: {
         rpID: config.webauthn.rpID,
         origins: config.webauthn.origins,

@@ -1,4 +1,5 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
+import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,13 +7,16 @@ import { PrismaClient } from "@prisma/client";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const apiRoot = path.resolve(__dirname, "../..");
-const testDbPath = path.join(apiRoot, "prisma", "test.db");
+const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "trustid-api-test-"));
+const testDbPath = path.join(testRoot, "test.db").replaceAll("\\", "/");
 
 /**
  * Uses a dedicated SQLite file. Deletes the file then pushes schema —
  * no --force-reset (avoid destructive migrate flags in CI/agent contexts).
  */
 export function setupTestDatabase() {
+  // Windows schema engine expects the freshly allocated SQLite file to exist.
+  fs.writeFileSync(testDbPath, "", { flag: "wx" });
   process.env.DATABASE_URL = `file:${testDbPath}`;
   process.env.NODE_ENV = "test";
   process.env.COOKIE_SECRET = "test-cookie-secret";
@@ -21,29 +25,15 @@ export function setupTestDatabase() {
   process.env.WEBAUTHN_ORIGIN = "http://localhost:5173";
   process.env.IDENTITY_VERIFICATION_MODE = "mock";
   process.env.ASSERTION_ISSUER = "http://localhost:5173";
-  process.env.TRUSTID_MEDIA_ROOT = path.join(apiRoot, "data", "test-media");
-
-  for (const p of [testDbPath, `${testDbPath}-journal`, `${testDbPath}-wal`, `${testDbPath}-shm`]) {
-    try {
-      if (fs.existsSync(p)) fs.unlinkSync(p);
-    } catch {
-      // Windows may briefly lock the file between vitest workers; db push recreates.
-    }
-  }
+  process.env.TRUSTID_MEDIA_ROOT = path.join(testRoot, "media");
 
   const repoRoot = path.resolve(apiRoot, "../..");
-  execSync("node scripts/sync-prisma-provider.mjs", {
-    cwd: repoRoot,
-    env: {
-      ...process.env,
-      DATABASE_URL: `file:${testDbPath}`,
-      PRISMA_PROVIDER: "sqlite",
-    },
-    stdio: "pipe",
-  });
-
-  execSync("npx prisma db push --skip-generate", {
-    cwd: apiRoot,
+  const schema = fs.readFileSync(path.join(apiRoot, "prisma/schema.prisma"), "utf8")
+    .replace(/(datasource db\s*\{\s*provider\s*=\s*)"[^"]+"/, '$1"sqlite"');
+  const isolatedSchema = path.join(testRoot, "schema.prisma");
+  fs.writeFileSync(isolatedSchema, schema);
+  execFileSync(process.execPath, [path.join(repoRoot, "node_modules/prisma/build/index.js"), "db", "push", "--skip-generate", "--schema", isolatedSchema], {
+    cwd: testRoot,
     env: { ...process.env, DATABASE_URL: `file:${testDbPath}` },
     stdio: "pipe",
   });

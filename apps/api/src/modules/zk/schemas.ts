@@ -39,7 +39,7 @@ export const zkClaimBundleSchema = z.object({
     .optional(),
   issuedAt: z.string().optional(),
   audience: z.string().optional(),
-  protocol: z.literal("groth16").optional(),
+  protocol: z.enum(["groth16", "hmac-sha256-attestation"]).optional(),
 });
 
 export const zkProveRequestSchema = z

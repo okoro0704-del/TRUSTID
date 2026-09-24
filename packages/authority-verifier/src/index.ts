@@ -1,11 +1,12 @@
 /**
- * Shared Digi authority token verifier for independent consumers (ElfCom, TV, ).
- * TrustID keys are NEVER used here  only Digi authority JWKS.
+ * Shared Digi authority token verifier for independent consumers (ElfCom, TV, Â).
+ * TrustID keys are NEVER used here Â only Digi authority JWKS.
  */
 
 import { createRemoteJWKSet, importJWK, jwtVerify, type JWK, type JWTVerifyGetKey } from "jose";
+import { isAuthorityClaimsShape } from "@trustid/shared";
 
-/** Logical issuer  not TrustID. Keep stable for T3/T4 consumers. */
+/** Logical issuer Â not TrustID. Keep stable for T3/T4 consumers. */
 export const DIGI_AUTHORITY_ISSUER = "digiconomy-authority";
 
 export const ELFCOM_AUDIENCE = "elfcom";
@@ -48,7 +49,7 @@ export type VerifyAuthorityInput = {
   action: string;
   /** Resource derived from the actual operation (never trust client "resource" alone). */
   resource: string;
-  /** Expected actor key (type:id). Required  do not trust X-Actor alone. */
+  /** Expected actor key (type:id). Required Â do not trust X-Actor alone. */
   actor: string;
   /** Optional expected Digi ownerId */
   ownerId?: string;
@@ -144,13 +145,18 @@ export async function verifyAuthority(
     }
 
     const { payload } = await jwtVerify(token, key as CryptoKey | JWTVerifyGetKey, {
+      algorithms: ["EdDSA"],
+      requiredClaims: ["iss", "sub", "aud", "iat", "nbf", "exp", "jti"],
       issuer: DIGI_AUTHORITY_ISSUER,
       audience: input.audience,
-      clockTolerance: input.clockToleranceSeconds ?? 5,
+      clockTolerance: input.clockToleranceSeconds ?? 0,
       currentDate: input.now,
     });
 
-    // Identity assertions must never pass  require authority-specific claims
+    if (!isAuthorityClaimsShape(payload)) return { ok: false, reason: "malformed", metric: "authority_verify_failure" };
+    if (Number(payload.iat) > Math.floor((input.now ?? new Date()).getTime() / 1000)) return { ok: false, reason: "not_yet_valid" };
+
+    // Identity assertions must never pass Â require authority-specific claims
     if (!payload.actor || !payload.actions || !payload.grantId || !payload.jti) {
       return { ok: false, reason: "not_authority_token", metric: "authority_verify_failure" };
     }
@@ -197,7 +203,7 @@ export async function verifyAuthority(
         metric: "authority_verify_failure",
       };
     }
-    // Exact resource match  no prefix / substring
+    // Exact resource match Â no prefix / substring
     if (!claims.resources.includes(input.resource)) {
       return {
         ok: false,
@@ -216,7 +222,6 @@ export async function verifyAuthority(
     if (
       claim === "exp" ||
       msg.includes('"exp"') ||
-      /timestamp check failed/i.test(msg) ||
       /jwt expired/i.test(msg)
     ) {
       return { ok: false, reason: "expired", metric: "authority_expired" };
@@ -232,5 +237,29 @@ export async function verifyAuthority(
       return { ok: false, reason: "unknown_kid", metric: "authority_verify_failure" };
     }
     return { ok: false, reason: "invalid_token", metric: "authority_verify_failure" };
+  }
+}
+
+/**
+ * Execution gate: offline signature checks alone cannot prove current revocation
+ * or remaining usage. The host supplies an authenticated Digi consumption client.
+ * Unavailable/invalid consumption fails closed. Never expose the callback to actors.
+ */
+export async function authorizeAuthority(
+  input: VerifyAuthorityInput & {
+    consume: (input: { token: string; audience: string; actor: string; action: string; resource: string }) => Promise<{
+      decision: string; grantId?: string; jti?: string; reason?: string;
+    }>;
+  },
+): Promise<VerifyAuthorityResult> {
+  const verified = await verifyAuthority(input);
+  if (!verified.ok) return verified;
+  try {
+    const current = await input.consume({ token: input.token, audience: input.audience, actor: input.actor, action: input.action, resource: input.resource });
+    if (current.decision !== "ALLOW") return { ok: false, reason: current.reason ?? "consume_denied" };
+    if (current.grantId !== verified.claims.grantId || current.jti !== verified.claims.jti) return { ok: false, reason: "consume_binding_mismatch" };
+    return verified;
+  } catch {
+    return { ok: false, reason: "authority_unavailable" };
   }
 }

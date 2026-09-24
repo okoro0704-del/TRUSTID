@@ -82,6 +82,13 @@ export const config = {
     return (process.env.NODE_ENV ?? "development") !== "production";
   },
   get cookieSecret() {
+    if (!this.isDev) {
+      const secret = process.env.COOKIE_SECRET || process.env.SESSION_SECRET;
+      if (!secret || secret.length < 32 || /dev-cookie|change.in.production/i.test(secret)) {
+        throw new Error("A production COOKIE_SECRET or SESSION_SECRET of at least 32 characters is required");
+      }
+      return secret;
+    }
     return required(
       "COOKIE_SECRET",
       process.env.SESSION_SECRET || "dev-cookie-secret-change-in-production",
@@ -288,7 +295,7 @@ export const config = {
     ]
       .filter(Boolean)
       .join(",");
-    return (process.env.CORS_ORIGINS ?? defaults)
+    return (process.env.CORS_ORIGINS ?? (this.isDev ? defaults : ""))
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);

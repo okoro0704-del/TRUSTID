@@ -170,7 +170,7 @@ export function assertDelegationSubset(parent: {
   if (child.audience !== parent.audience) {
     return { ok: false, reason: "audience_escalation" };
   }
-  if (child.validUntil.getTime() > parent.validUntil.getTime()) {
+  if (!Number.isFinite(child.validUntil.getTime()) || child.validUntil.getTime() > parent.validUntil.getTime()) {
     return { ok: false, reason: "expiry_escalation" };
   }
   for (const a of child.actions) {
@@ -182,6 +182,11 @@ export function assertDelegationSubset(parent: {
     if (!parent.resources.includes(r)) {
       return { ok: false, reason: "resource_escalation" };
     }
+  }
+  for (const [k, p] of Object.entries(parent.limits)) {
+    const v = child.limits[k];
+    if (typeof p === "number" && (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > p)) return { ok: false, reason: "limit_escalation" };
+    if (typeof p === "string" && p !== v) return { ok: false, reason: "limit_escalation" };
   }
   for (const [k, v] of Object.entries(child.limits)) {
     if (typeof v !== "number") continue;

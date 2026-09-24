@@ -1,6 +1,7 @@
 import { createHmac, createHash, timingSafeEqual } from "node:crypto";
 
 export const CIRCUIT_ID = "trust_tier_gte";
+/** Legacy wire identifier only: HMAC attestation, NOT Groth16 or ZK. */
 export const PROTOCOL = "groth16-hybrid-v1";
 
 export type TrustTierProof = {
@@ -39,12 +40,15 @@ export function getVerificationKey(issuerSecret: string) {
   return {
     protocol: PROTOCOL,
     circuit: CIRCUIT_ID,
-    /** Public verification material — HMAC key commitment (not the key) */
+    /** Public verification material Â— HMAC key commitment (not the key) */
     vk_hash: createHash("sha256")
       .update(attestKey(issuerSecret))
       .digest("hex"),
     nPublic: 4,
-    note: "Hybrid Groth16-compatible layout. Full snarkjs artifacts optional via Circom build.",
+    implementation: "hmac-sha256-attestation",
+    zeroKnowledge: false,
+    groth16: false,
+    note: "Issuer-secret HMAC attestation, not a zero-knowledge proof. The actual tier is public. Legacy wire layout retained for compatibility.",
   };
 }
 

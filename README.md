@@ -93,6 +93,12 @@ Create TrustID requires the API running. The PWA proxies `/api` → `localhost:8
 npm test
 ```
 
+`npm test` builds the security-critical shared packages and runs the API, biometric SDK, Digi bridge, Digi authority, authority verifier, Digi RP, vault, and UI suites.
+
+## Database safety
+
+`npm run setup` is intentionally disabled. It must never be used as a database initializer because earlier versions included a force reset. Use explicit, reviewed local development commands instead. The destructive `db:push:reset` path only permits an acknowledged, development-only disposable SQLite database and refuses production and arbitrary database URLs. See [Authority Foundation V1](docs/AUTHORITY_FOUNDATION_V1.md).
+
 ## Requirements
 
 - Node.js 20+

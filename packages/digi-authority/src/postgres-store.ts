@@ -176,7 +176,7 @@ function mapRequest(row: RequestRow): AuthorityRequest {
   };
 }
 
-/** Production Digi authority store — Postgres, multi-instance safe via UNIQUE jti. */
+/** Production Digi authority store Â— Postgres, multi-instance safe via UNIQUE jti. */
 export class PostgresAuthorityStore implements AuthorityStore {
   private pool: pg.Pool;
   private ready: Promise<void>;
@@ -279,6 +279,18 @@ export class PostgresAuthorityStore implements AuthorityStore {
       [id]
     );
     return r.rows[0]?.usage_count ?? 0;
+  }
+
+  async reserveUse(id: string, version: number, now: Date, maxUsage: number | null, oneTime: boolean): Promise<boolean> {
+    await this.ensure();
+    const result = await this.pool.query(
+      `UPDATE authority_grants SET usage_count = usage_count + 1,
+       status = CASE WHEN $5 THEN 'CONSUMED' ELSE status END
+       WHERE id = $1 AND grant_version = $2 AND status = 'ACTIVE'
+       AND valid_from <= $3 AND valid_until > $3
+       AND ($4::integer IS NULL OR usage_count < $4) RETURNING id`,
+      [id, version, now.toISOString(), maxUsage, oneTime]);
+    return result.rowCount === 1;
   }
 
   async createRequest(input: CreateRequestInput): Promise<AuthorityRequest> {

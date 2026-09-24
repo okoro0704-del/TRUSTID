@@ -1,0 +1,1377 @@
+{
+  "scope": "local synthetic tests only",
+  "evidence": [
+    {
+      "test": "Authority Foundation V1 end-to-end > owner assertion -> session -> grant -> signed token -> verifier -> consumption -> exactly one read -> audit",
+      "executions": [
+        "test-resource.read"
+      ],
+      "decisions": [
+        {
+          "decisionId": "bdd75524-830b-4d4d-965b-b0d94937136b",
+          "actor": "service:digi:test-agent",
+          "action": "test-resource.read",
+          "resource": "test-resource:alpha",
+          "decision": "ALLOW",
+          "reason": "ALLOW",
+          "subject": "own_0c23d7bae6b24adfb9d2a05f",
+          "grantId": "auth_af81c7afc19f4b4e",
+          "timestamp": "2026-09-24T06:16:58.000Z"
+        }
+      ],
+      "authorityAudit": [
+        {
+          "id": "aud_1f8b989634414c30",
+          "type": "authority.requested",
+          "ownerId": "own_0c23d7bae6b24adfb9d2a05f",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": null,
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "action": "test-resource.read",
+            "resource": "test-resource:alpha",
+            "audience": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:58.000Z"
+        },
+        {
+          "id": "aud_57ebd6956ff44efc",
+          "type": "authority.allowed",
+          "ownerId": "own_0c23d7bae6b24adfb9d2a05f",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_af81c7afc19f4b4e",
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "mode": "ALLOW"
+          },
+          "createdAt": "2026-09-24T06:16:58.000Z"
+        },
+        {
+          "id": "aud_5f808421b5184af1",
+          "type": "authority.token_issued",
+          "ownerId": "own_0c23d7bae6b24adfb9d2a05f",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_af81c7afc19f4b4e",
+          "requestId": null,
+          "jti": "jti_3beff0687c5d41d9",
+          "detail": {
+            "actions": [
+              "test-resource.read"
+            ],
+            "resources": [
+              "test-resource:alpha"
+            ],
+            "aud": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:58.000Z"
+        },
+        {
+          "id": "aud_21dc0a6d2f224a73",
+          "type": "authority.used",
+          "ownerId": "own_0c23d7bae6b24adfb9d2a05f",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_af81c7afc19f4b4e",
+          "requestId": null,
+          "jti": "jti_3beff0687c5d41d9",
+          "detail": {
+            "decision": "ALLOW",
+            "reason": "ALLOW",
+            "action": "test-resource.read",
+            "resource": "test-resource:alpha",
+            "audience": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:58.000Z"
+        }
+      ]
+    },
+    {
+      "test": "Authority Foundation V1 end-to-end > DENY delete on alpha as fixture-agent without execution",
+      "executions": [],
+      "decisions": [
+        {
+          "decisionId": "a1f22b08-9f4c-466c-9d7c-2e6091e7f41a",
+          "actor": "service:digi:test-agent",
+          "action": "test-resource.delete",
+          "resource": "test-resource:alpha",
+          "decision": "DENY",
+          "reason": "wrong_action",
+          "subject": null,
+          "grantId": null,
+          "timestamp": "2026-09-24T06:16:59.000Z"
+        }
+      ],
+      "authorityAudit": [
+        {
+          "id": "aud_f1ec63435b124a34",
+          "type": "authority.requested",
+          "ownerId": "own_19d1bb46ee353645b68248e0",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": null,
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "action": "test-resource.read",
+            "resource": "test-resource:alpha",
+            "audience": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_9fc94e8c313142ae",
+          "type": "authority.allowed",
+          "ownerId": "own_19d1bb46ee353645b68248e0",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_50b7fb9dcf184310",
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "mode": "ALLOW"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_8dc40f08a4d74131",
+          "type": "authority.token_issued",
+          "ownerId": "own_19d1bb46ee353645b68248e0",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_50b7fb9dcf184310",
+          "requestId": null,
+          "jti": "jti_e2601f11803a4028",
+          "detail": {
+            "actions": [
+              "test-resource.read"
+            ],
+            "resources": [
+              "test-resource:alpha"
+            ],
+            "aud": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        }
+      ]
+    },
+    {
+      "test": "Authority Foundation V1 end-to-end > DENY write on alpha as fixture-agent without execution",
+      "executions": [],
+      "decisions": [
+        {
+          "decisionId": "66feb39c-84e9-4d9a-89fc-eaace754a831",
+          "actor": "service:digi:test-agent",
+          "action": "test-resource.write",
+          "resource": "test-resource:alpha",
+          "decision": "DENY",
+          "reason": "wrong_action",
+          "subject": null,
+          "grantId": null,
+          "timestamp": "2026-09-24T06:16:59.000Z"
+        }
+      ],
+      "authorityAudit": [
+        {
+          "id": "aud_b864e3ed5e2f4ddb",
+          "type": "authority.requested",
+          "ownerId": "own_0b99de3ed743c81379b6850f",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": null,
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "action": "test-resource.read",
+            "resource": "test-resource:alpha",
+            "audience": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_e4df11f13c8846ce",
+          "type": "authority.allowed",
+          "ownerId": "own_0b99de3ed743c81379b6850f",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_45479f986aa94a91",
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "mode": "ALLOW"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_4f6c195e3bdb422e",
+          "type": "authority.token_issued",
+          "ownerId": "own_0b99de3ed743c81379b6850f",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_45479f986aa94a91",
+          "requestId": null,
+          "jti": "jti_09e6e1932dbc435d",
+          "detail": {
+            "actions": [
+              "test-resource.read"
+            ],
+            "resources": [
+              "test-resource:alpha"
+            ],
+            "aud": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        }
+      ]
+    },
+    {
+      "test": "Authority Foundation V1 end-to-end > DENY read on beta as fixture-agent without execution",
+      "executions": [],
+      "decisions": [
+        {
+          "decisionId": "0f48c816-9d02-4994-a2bc-5219dea2e3fd",
+          "actor": "service:digi:test-agent",
+          "action": "test-resource.read",
+          "resource": "test-resource:beta",
+          "decision": "DENY",
+          "reason": "wrong_resource",
+          "subject": null,
+          "grantId": null,
+          "timestamp": "2026-09-24T06:16:59.000Z"
+        }
+      ],
+      "authorityAudit": [
+        {
+          "id": "aud_8425b0afabc84ef4",
+          "type": "authority.requested",
+          "ownerId": "own_e7cb12af9ab576079b19957e",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": null,
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "action": "test-resource.read",
+            "resource": "test-resource:alpha",
+            "audience": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_26e7c3b1d6eb4d6c",
+          "type": "authority.allowed",
+          "ownerId": "own_e7cb12af9ab576079b19957e",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_4332663937e344cc",
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "mode": "ALLOW"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_ad24f2237ad14ac3",
+          "type": "authority.token_issued",
+          "ownerId": "own_e7cb12af9ab576079b19957e",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_4332663937e344cc",
+          "requestId": null,
+          "jti": "jti_2136322203994b5d",
+          "detail": {
+            "actions": [
+              "test-resource.read"
+            ],
+            "resources": [
+              "test-resource:alpha"
+            ],
+            "aud": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        }
+      ]
+    },
+    {
+      "test": "Authority Foundation V1 end-to-end > DENY read on alpha as fixture-other without execution",
+      "executions": [],
+      "decisions": [
+        {
+          "decisionId": "a0625889-6fa4-4164-a515-1ed2cd12d96e",
+          "actor": "service:digi:other-agent",
+          "action": "test-resource.read",
+          "resource": "test-resource:alpha",
+          "decision": "DENY",
+          "reason": "wrong_actor",
+          "subject": null,
+          "grantId": null,
+          "timestamp": "2026-09-24T06:16:59.000Z"
+        }
+      ],
+      "authorityAudit": [
+        {
+          "id": "aud_f5aaac83b1704ff4",
+          "type": "authority.requested",
+          "ownerId": "own_e4bffea1ee8a2a7749e455de",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": null,
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "action": "test-resource.read",
+            "resource": "test-resource:alpha",
+            "audience": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_0d7d0d98de4047fc",
+          "type": "authority.allowed",
+          "ownerId": "own_e4bffea1ee8a2a7749e455de",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_0d0e522a360a408a",
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "mode": "ALLOW"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_7d2f6217902f44c1",
+          "type": "authority.token_issued",
+          "ownerId": "own_e4bffea1ee8a2a7749e455de",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_0d0e522a360a408a",
+          "requestId": null,
+          "jti": "jti_e643fd48e62f414e",
+          "detail": {
+            "actions": [
+              "test-resource.read"
+            ],
+            "resources": [
+              "test-resource:alpha"
+            ],
+            "aud": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        }
+      ]
+    },
+    {
+      "test": "Authority Foundation V1 end-to-end > DENY read on alpha as unknown without execution",
+      "executions": [],
+      "decisions": [
+        {
+          "decisionId": "a2f88fd3-7c27-4cbb-9811-c99a5e6340d7",
+          "actor": "unknown:actor",
+          "action": "test-resource.read",
+          "resource": "test-resource:alpha",
+          "decision": "DENY",
+          "reason": "wrong_actor",
+          "subject": null,
+          "grantId": null,
+          "timestamp": "2026-09-24T06:16:59.000Z"
+        }
+      ],
+      "authorityAudit": [
+        {
+          "id": "aud_5663b568c6c14313",
+          "type": "authority.requested",
+          "ownerId": "own_845a6138bc235ffdd20023cf",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": null,
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "action": "test-resource.read",
+            "resource": "test-resource:alpha",
+            "audience": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_258ae639c4ae4ed7",
+          "type": "authority.allowed",
+          "ownerId": "own_845a6138bc235ffdd20023cf",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_c4b6461de8364b0e",
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "mode": "ALLOW"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_86ba6563ca41437d",
+          "type": "authority.token_issued",
+          "ownerId": "own_845a6138bc235ffdd20023cf",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_c4b6461de8364b0e",
+          "requestId": null,
+          "jti": "jti_0ca0aa6b2f6f4670",
+          "detail": {
+            "actions": [
+              "test-resource.read"
+            ],
+            "resources": [
+              "test-resource:alpha"
+            ],
+            "aud": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        }
+      ]
+    },
+    {
+      "test": "Authority Foundation V1 end-to-end > enforces exact expiration with deterministic time",
+      "executions": [
+        "test-resource.read"
+      ],
+      "decisions": [
+        {
+          "decisionId": "99a15563-2304-4152-8691-304d81e50657",
+          "actor": "service:digi:test-agent",
+          "action": "test-resource.read",
+          "resource": "test-resource:alpha",
+          "decision": "ALLOW",
+          "reason": "ALLOW",
+          "subject": "own_0f515c3740c6c0a6bfb0a763",
+          "grantId": "auth_4266a03f552c4082",
+          "timestamp": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "decisionId": "cf65bc9f-341e-478e-9c41-e35ea30791fe",
+          "actor": "service:digi:test-agent",
+          "action": "test-resource.read",
+          "resource": "test-resource:alpha",
+          "decision": "DENY",
+          "reason": "expired",
+          "subject": null,
+          "grantId": null,
+          "timestamp": "2026-09-24T06:17:09.000Z"
+        }
+      ],
+      "authorityAudit": [
+        {
+          "id": "aud_c3d2201de7e14512",
+          "type": "authority.requested",
+          "ownerId": "own_0f515c3740c6c0a6bfb0a763",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": null,
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "action": "test-resource.read",
+            "resource": "test-resource:alpha",
+            "audience": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_d7647ee43b544db2",
+          "type": "authority.allowed",
+          "ownerId": "own_0f515c3740c6c0a6bfb0a763",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_4266a03f552c4082",
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "mode": "ALLOW"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_571b80c71d514585",
+          "type": "authority.token_issued",
+          "ownerId": "own_0f515c3740c6c0a6bfb0a763",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_4266a03f552c4082",
+          "requestId": null,
+          "jti": "jti_054fc74e4e674ec9",
+          "detail": {
+            "actions": [
+              "test-resource.read"
+            ],
+            "resources": [
+              "test-resource:alpha"
+            ],
+            "aud": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_cfc4d830cac940cf",
+          "type": "authority.used",
+          "ownerId": "own_0f515c3740c6c0a6bfb0a763",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_4266a03f552c4082",
+          "requestId": null,
+          "jti": "jti_054fc74e4e674ec9",
+          "detail": {
+            "decision": "ALLOW",
+            "reason": "ALLOW",
+            "action": "test-resource.read",
+            "resource": "test-resource:alpha",
+            "audience": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        }
+      ]
+    },
+    {
+      "test": "Authority Foundation V1 end-to-end > reusable token remains reusable; revocation immediately prevents its next use",
+      "executions": [
+        "test-resource.read",
+        "test-resource.read"
+      ],
+      "decisions": [
+        {
+          "decisionId": "74492680-610c-4969-a32a-f412793e8574",
+          "actor": "service:digi:test-agent",
+          "action": "test-resource.read",
+          "resource": "test-resource:alpha",
+          "decision": "ALLOW",
+          "reason": "ALLOW",
+          "subject": "own_8d4dbe2306d907eb89336346",
+          "grantId": "auth_b0121eb49f104658",
+          "timestamp": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "decisionId": "32d5d660-4dea-4462-aa73-8c319fd50ceb",
+          "actor": "service:digi:test-agent",
+          "action": "test-resource.read",
+          "resource": "test-resource:alpha",
+          "decision": "ALLOW",
+          "reason": "ALLOW",
+          "subject": "own_8d4dbe2306d907eb89336346",
+          "grantId": "auth_b0121eb49f104658",
+          "timestamp": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "decisionId": "97be9709-0502-47f6-8cb7-cb3c3dbdd4a5",
+          "actor": "service:digi:test-agent",
+          "action": "test-resource.read",
+          "resource": "test-resource:alpha",
+          "decision": "DENY",
+          "reason": "revoked",
+          "subject": null,
+          "grantId": null,
+          "timestamp": "2026-09-24T06:16:59.000Z"
+        }
+      ],
+      "authorityAudit": [
+        {
+          "id": "aud_fc6de5702a9c47b3",
+          "type": "authority.requested",
+          "ownerId": "own_8d4dbe2306d907eb89336346",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": null,
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "action": "test-resource.read",
+            "resource": "test-resource:alpha",
+            "audience": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_b5673fd08225479f",
+          "type": "authority.allowed",
+          "ownerId": "own_8d4dbe2306d907eb89336346",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_b0121eb49f104658",
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "mode": "ALLOW"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_48ad2d4e6b06485c",
+          "type": "authority.token_issued",
+          "ownerId": "own_8d4dbe2306d907eb89336346",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_b0121eb49f104658",
+          "requestId": null,
+          "jti": "jti_9c0b88de1cd343bf",
+          "detail": {
+            "actions": [
+              "test-resource.read"
+            ],
+            "resources": [
+              "test-resource:alpha"
+            ],
+            "aud": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_8efd4e6ac35440d5",
+          "type": "authority.used",
+          "ownerId": "own_8d4dbe2306d907eb89336346",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_b0121eb49f104658",
+          "requestId": null,
+          "jti": "jti_9c0b88de1cd343bf",
+          "detail": {
+            "decision": "ALLOW",
+            "reason": "ALLOW",
+            "action": "test-resource.read",
+            "resource": "test-resource:alpha",
+            "audience": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_d4f4f8570c1d494f",
+          "type": "authority.used",
+          "ownerId": "own_8d4dbe2306d907eb89336346",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_b0121eb49f104658",
+          "requestId": null,
+          "jti": "jti_9c0b88de1cd343bf",
+          "detail": {
+            "decision": "ALLOW",
+            "reason": "ALLOW",
+            "action": "test-resource.read",
+            "resource": "test-resource:alpha",
+            "audience": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_63f3bec78d3d444d",
+          "type": "authority.revoked",
+          "ownerId": "own_8d4dbe2306d907eb89336346",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_b0121eb49f104658",
+          "requestId": null,
+          "jti": null,
+          "detail": {},
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_d9974034e6ec43ca",
+          "type": "authority.denied",
+          "ownerId": "own_8d4dbe2306d907eb89336346",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_b0121eb49f104658",
+          "requestId": null,
+          "jti": "jti_9c0b88de1cd343bf",
+          "detail": {
+            "decision": "DENY",
+            "reason": "revoked",
+            "action": "test-resource.read",
+            "resource": "test-resource:alpha",
+            "audience": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        }
+      ]
+    },
+    {
+      "test": "Authority Foundation V1 end-to-end > rejects tampering: actor",
+      "executions": [],
+      "decisions": [
+        {
+          "decisionId": "db5a36fb-fe25-4d9a-bb54-89a0ec0a7fb5",
+          "actor": "service:digi:test-agent",
+          "action": "test-resource.read",
+          "resource": "test-resource:alpha",
+          "decision": "DENY",
+          "reason": "invalid_token",
+          "subject": null,
+          "grantId": null,
+          "timestamp": "2026-09-24T06:16:59.000Z"
+        }
+      ],
+      "authorityAudit": [
+        {
+          "id": "aud_799eaab944984fda",
+          "type": "authority.requested",
+          "ownerId": "own_a02d3b44fa4be1c4db3cde42",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": null,
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "action": "test-resource.read",
+            "resource": "test-resource:alpha",
+            "audience": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_0c20929adb0a47db",
+          "type": "authority.allowed",
+          "ownerId": "own_a02d3b44fa4be1c4db3cde42",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_64ebe5b438704e01",
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "mode": "ALLOW"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_5b248f4b480d4b38",
+          "type": "authority.token_issued",
+          "ownerId": "own_a02d3b44fa4be1c4db3cde42",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_64ebe5b438704e01",
+          "requestId": null,
+          "jti": "jti_b8512a2aa7194c4a",
+          "detail": {
+            "actions": [
+              "test-resource.read"
+            ],
+            "resources": [
+              "test-resource:alpha"
+            ],
+            "aud": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        }
+      ]
+    },
+    {
+      "test": "Authority Foundation V1 end-to-end > rejects tampering: actions",
+      "executions": [],
+      "decisions": [
+        {
+          "decisionId": "714c600b-4df9-4c34-b211-793d7a2762c0",
+          "actor": "service:digi:test-agent",
+          "action": "test-resource.read",
+          "resource": "test-resource:alpha",
+          "decision": "DENY",
+          "reason": "invalid_token",
+          "subject": null,
+          "grantId": null,
+          "timestamp": "2026-09-24T06:16:59.000Z"
+        }
+      ],
+      "authorityAudit": [
+        {
+          "id": "aud_b6eddb6139064cd2",
+          "type": "authority.requested",
+          "ownerId": "own_1aae82ec67ed1fd6a8e54edc",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": null,
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "action": "test-resource.read",
+            "resource": "test-resource:alpha",
+            "audience": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_07be7a1296b54621",
+          "type": "authority.allowed",
+          "ownerId": "own_1aae82ec67ed1fd6a8e54edc",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_65f7287d04cb4415",
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "mode": "ALLOW"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_80eb5945b7514775",
+          "type": "authority.token_issued",
+          "ownerId": "own_1aae82ec67ed1fd6a8e54edc",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_65f7287d04cb4415",
+          "requestId": null,
+          "jti": "jti_b7a19fc979474b23",
+          "detail": {
+            "actions": [
+              "test-resource.read"
+            ],
+            "resources": [
+              "test-resource:alpha"
+            ],
+            "aud": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        }
+      ]
+    },
+    {
+      "test": "Authority Foundation V1 end-to-end > rejects tampering: resources",
+      "executions": [],
+      "decisions": [
+        {
+          "decisionId": "aa3f19e5-6406-4fb9-a9f7-5fcb5eeb452b",
+          "actor": "service:digi:test-agent",
+          "action": "test-resource.read",
+          "resource": "test-resource:alpha",
+          "decision": "DENY",
+          "reason": "invalid_token",
+          "subject": null,
+          "grantId": null,
+          "timestamp": "2026-09-24T06:16:59.000Z"
+        }
+      ],
+      "authorityAudit": [
+        {
+          "id": "aud_5108968a1a5a44be",
+          "type": "authority.requested",
+          "ownerId": "own_2ece41fa44a55557c3ef5955",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": null,
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "action": "test-resource.read",
+            "resource": "test-resource:alpha",
+            "audience": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_43157e2e59074a3b",
+          "type": "authority.allowed",
+          "ownerId": "own_2ece41fa44a55557c3ef5955",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_dd61af438b324cce",
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "mode": "ALLOW"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_7469924f1c6945c6",
+          "type": "authority.token_issued",
+          "ownerId": "own_2ece41fa44a55557c3ef5955",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_dd61af438b324cce",
+          "requestId": null,
+          "jti": "jti_8f994a3bce074cfe",
+          "detail": {
+            "actions": [
+              "test-resource.read"
+            ],
+            "resources": [
+              "test-resource:alpha"
+            ],
+            "aud": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        }
+      ]
+    },
+    {
+      "test": "Authority Foundation V1 end-to-end > rejects tampering: exp",
+      "executions": [],
+      "decisions": [
+        {
+          "decisionId": "7b585c45-2980-4ea5-91ca-2a5d61293b2d",
+          "actor": "service:digi:test-agent",
+          "action": "test-resource.read",
+          "resource": "test-resource:alpha",
+          "decision": "DENY",
+          "reason": "invalid_token",
+          "subject": null,
+          "grantId": null,
+          "timestamp": "2026-09-24T06:16:59.000Z"
+        }
+      ],
+      "authorityAudit": [
+        {
+          "id": "aud_f1ba7d1c8aed4639",
+          "type": "authority.requested",
+          "ownerId": "own_ca70de898358e58345a02e85",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": null,
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "action": "test-resource.read",
+            "resource": "test-resource:alpha",
+            "audience": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_01dea4b79ddc4da0",
+          "type": "authority.allowed",
+          "ownerId": "own_ca70de898358e58345a02e85",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_0f300b5c29284e68",
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "mode": "ALLOW"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_2fecb57ad0954707",
+          "type": "authority.token_issued",
+          "ownerId": "own_ca70de898358e58345a02e85",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_0f300b5c29284e68",
+          "requestId": null,
+          "jti": "jti_05d89c719d9c4735",
+          "detail": {
+            "actions": [
+              "test-resource.read"
+            ],
+            "resources": [
+              "test-resource:alpha"
+            ],
+            "aud": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        }
+      ]
+    },
+    {
+      "test": "Authority Foundation V1 end-to-end > rejects tampering: grantId",
+      "executions": [],
+      "decisions": [
+        {
+          "decisionId": "c80e7080-b839-4e60-86d4-a4405c7c88b2",
+          "actor": "service:digi:test-agent",
+          "action": "test-resource.read",
+          "resource": "test-resource:alpha",
+          "decision": "DENY",
+          "reason": "invalid_token",
+          "subject": null,
+          "grantId": null,
+          "timestamp": "2026-09-24T06:16:59.000Z"
+        }
+      ],
+      "authorityAudit": [
+        {
+          "id": "aud_d15571f680fa4560",
+          "type": "authority.requested",
+          "ownerId": "own_fca1afdc01041f7fdb7b7895",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": null,
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "action": "test-resource.read",
+            "resource": "test-resource:alpha",
+            "audience": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_9c34732eb6004a63",
+          "type": "authority.allowed",
+          "ownerId": "own_fca1afdc01041f7fdb7b7895",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_06d267621e464dc5",
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "mode": "ALLOW"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_76f262d10b314d2f",
+          "type": "authority.token_issued",
+          "ownerId": "own_fca1afdc01041f7fdb7b7895",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_06d267621e464dc5",
+          "requestId": null,
+          "jti": "jti_33c6c8bcafbb4557",
+          "detail": {
+            "actions": [
+              "test-resource.read"
+            ],
+            "resources": [
+              "test-resource:alpha"
+            ],
+            "aud": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        }
+      ]
+    },
+    {
+      "test": "Authority Foundation V1 end-to-end > rejects tampering: jti",
+      "executions": [],
+      "decisions": [
+        {
+          "decisionId": "018d1905-97a6-42fc-9d9c-8892f6c9ba44",
+          "actor": "service:digi:test-agent",
+          "action": "test-resource.read",
+          "resource": "test-resource:alpha",
+          "decision": "DENY",
+          "reason": "invalid_token",
+          "subject": null,
+          "grantId": null,
+          "timestamp": "2026-09-24T06:16:59.000Z"
+        }
+      ],
+      "authorityAudit": [
+        {
+          "id": "aud_57b0cdb2b41548db",
+          "type": "authority.requested",
+          "ownerId": "own_15f53f6da3b3df4a1cbadb66",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": null,
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "action": "test-resource.read",
+            "resource": "test-resource:alpha",
+            "audience": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_de745bcffaa14698",
+          "type": "authority.allowed",
+          "ownerId": "own_15f53f6da3b3df4a1cbadb66",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_877f569ae1594f72",
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "mode": "ALLOW"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_f03f7a9157a64bd6",
+          "type": "authority.token_issued",
+          "ownerId": "own_15f53f6da3b3df4a1cbadb66",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_877f569ae1594f72",
+          "requestId": null,
+          "jti": "jti_e557539a01e140ff",
+          "detail": {
+            "actions": [
+              "test-resource.read"
+            ],
+            "resources": [
+              "test-resource:alpha"
+            ],
+            "aud": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        }
+      ]
+    },
+    {
+      "test": "Authority Foundation V1 end-to-end > rejects tampering: signature",
+      "executions": [],
+      "decisions": [
+        {
+          "decisionId": "94a8ebc5-724a-4c65-b224-1d7f74e2ca1d",
+          "actor": "service:digi:test-agent",
+          "action": "test-resource.read",
+          "resource": "test-resource:alpha",
+          "decision": "DENY",
+          "reason": "invalid_token",
+          "subject": null,
+          "grantId": null,
+          "timestamp": "2026-09-24T06:16:59.000Z"
+        }
+      ],
+      "authorityAudit": [
+        {
+          "id": "aud_712de98e91fb4733",
+          "type": "authority.requested",
+          "ownerId": "own_62a8fd9f1456de1d9dfccdbf",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": null,
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "action": "test-resource.read",
+            "resource": "test-resource:alpha",
+            "audience": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_9318e9fb4f5f4ed3",
+          "type": "authority.allowed",
+          "ownerId": "own_62a8fd9f1456de1d9dfccdbf",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_54762cdc8a0f4f55",
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "mode": "ALLOW"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_4299889732f748c6",
+          "type": "authority.token_issued",
+          "ownerId": "own_62a8fd9f1456de1d9dfccdbf",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_54762cdc8a0f4f55",
+          "requestId": null,
+          "jti": "jti_d273e5f8785d4d31",
+          "detail": {
+            "actions": [
+              "test-resource.read"
+            ],
+            "resources": [
+              "test-resource:alpha"
+            ],
+            "aud": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        }
+      ]
+    },
+    {
+      "test": "Authority Foundation V1 end-to-end > denies missing/malformed authority ",
+      "executions": [],
+      "decisions": [
+        {
+          "decisionId": "26b078c0-2abb-4079-8b8e-73aa46037f4f",
+          "actor": "service:digi:test-agent",
+          "action": "test-resource.read",
+          "resource": "test-resource:alpha",
+          "decision": "DENY",
+          "reason": "malformed_token",
+          "subject": null,
+          "grantId": null,
+          "timestamp": "2026-09-24T06:16:59.000Z"
+        }
+      ],
+      "authorityAudit": [
+        {
+          "id": "aud_517791fa70c14d3e",
+          "type": "authority.requested",
+          "ownerId": "own_7fc41ec50228b5770f5c971b",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": null,
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "action": "test-resource.read",
+            "resource": "test-resource:alpha",
+            "audience": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_3074c412296a4f58",
+          "type": "authority.allowed",
+          "ownerId": "own_7fc41ec50228b5770f5c971b",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_d90a92a2b4db4a01",
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "mode": "ALLOW"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_0cd06868c4ae4656",
+          "type": "authority.token_issued",
+          "ownerId": "own_7fc41ec50228b5770f5c971b",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_d90a92a2b4db4a01",
+          "requestId": null,
+          "jti": "jti_ae5134da663a498f",
+          "detail": {
+            "actions": [
+              "test-resource.read"
+            ],
+            "resources": [
+              "test-resource:alpha"
+            ],
+            "aud": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        }
+      ]
+    },
+    {
+      "test": "Authority Foundation V1 end-to-end > denies missing/malformed authority not-a-token",
+      "executions": [],
+      "decisions": [
+        {
+          "decisionId": "f220b722-4c93-4c2f-b862-98836c6d66d9",
+          "actor": "service:digi:test-agent",
+          "action": "test-resource.read",
+          "resource": "test-resource:alpha",
+          "decision": "DENY",
+          "reason": "malformed_token",
+          "subject": null,
+          "grantId": null,
+          "timestamp": "2026-09-24T06:16:59.000Z"
+        }
+      ],
+      "authorityAudit": [
+        {
+          "id": "aud_39374b022f74403d",
+          "type": "authority.requested",
+          "ownerId": "own_335a5caafd58b184812fb43c",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": null,
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "action": "test-resource.read",
+            "resource": "test-resource:alpha",
+            "audience": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_d6dec31b52784754",
+          "type": "authority.allowed",
+          "ownerId": "own_335a5caafd58b184812fb43c",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_bacb9436724f4fa4",
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "mode": "ALLOW"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_9a4e02d0b9ba459e",
+          "type": "authority.token_issued",
+          "ownerId": "own_335a5caafd58b184812fb43c",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_bacb9436724f4fa4",
+          "requestId": null,
+          "jti": "jti_58674316258b4d98",
+          "detail": {
+            "actions": [
+              "test-resource.read"
+            ],
+            "resources": [
+              "test-resource:alpha"
+            ],
+            "aud": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        }
+      ]
+    },
+    {
+      "test": "Authority Foundation V1 end-to-end > actor credentials and fabricated owner IDs cannot create or enlarge authority",
+      "executions": [],
+      "decisions": [],
+      "authorityAudit": [
+        {
+          "id": "aud_96d5abf0d8ca4a7e",
+          "type": "authority.requested",
+          "ownerId": "own_552a75248a0da507f108205c",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": null,
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "action": "test-resource.read",
+            "resource": "test-resource:alpha",
+            "audience": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_7b94ea87882c4eef",
+          "type": "authority.allowed",
+          "ownerId": "own_552a75248a0da507f108205c",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_aa8aa9ea9a1a4408",
+          "requestId": null,
+          "jti": null,
+          "detail": {
+            "mode": "ALLOW"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        },
+        {
+          "id": "aud_a9f8d6ecf4404685",
+          "type": "authority.token_issued",
+          "ownerId": "own_552a75248a0da507f108205c",
+          "actorType": "service",
+          "actorId": "digi:test-agent",
+          "grantId": "auth_aa8aa9ea9a1a4408",
+          "requestId": null,
+          "jti": "jti_0bca78820d7347ec",
+          "detail": {
+            "actions": [
+              "test-resource.read"
+            ],
+            "resources": [
+              "test-resource:alpha"
+            ],
+            "aud": "foundation-test"
+          },
+          "createdAt": "2026-09-24T06:16:59.000Z"
+        }
+      ]
+    }
+  ]
+}

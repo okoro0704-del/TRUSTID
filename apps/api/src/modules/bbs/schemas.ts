@@ -36,7 +36,7 @@ export const bbsVerifySchema = z.object({
     nullifier: z.string().optional(),
     audience: z.string().optional(),
     issuedAt: z.string().optional(),
-    protocol: z.literal("groth16").optional(),
+    protocol: z.enum(["groth16", "hmac-sha256-attestation"]).optional(),
     disclosed: z.record(z.unknown()).optional(),
   }),
   masterSignature: z.string().min(32),

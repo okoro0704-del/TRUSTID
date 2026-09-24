@@ -23,7 +23,7 @@ function hashToBigIntString(value: string): string {
   return BigInt(`0x${hex}`).toString();
 }
 
-function groth16ShapeFromAttestation(attestation: string, protocol: string): Groth16Proof {
+function legacyProofShapeFromAttestation(attestation: string, protocol: string): Groth16Proof {
   return {
     pi_a: [attestation.slice(0, 32), attestation.slice(32, 64), "1"],
     pi_b: [
@@ -61,7 +61,7 @@ export function complianceTierFromTrustTierProof(
     },
     issuedAt,
     audience,
-    protocol: "groth16",
+    protocol: "hmac-sha256-attestation",
   };
 }
 
@@ -96,13 +96,13 @@ export function proveUniqueness(input: {
   const attestation = signSignals(input.issuerSecret, publicSignals);
   return {
     claimType: "uniqueness",
-    proof: groth16ShapeFromAttestation(attestation, UNIQUENESS_CIRCUIT),
+    proof: legacyProofShapeFromAttestation(attestation, UNIQUENESS_CIRCUIT),
     publicSignals,
     nullifier: input.nullifier,
     disclosed: { verified: true },
     issuedAt: input.issuedAt,
     audience: input.audience,
-    protocol: "groth16",
+    protocol: "hmac-sha256-attestation",
   };
 }
 
@@ -127,13 +127,13 @@ export function proveAuthorization(input: {
   const attestation = signSignals(input.issuerSecret, publicSignals);
   return {
     claimType: "authorization",
-    proof: groth16ShapeFromAttestation(attestation, AUTHORIZATION_CIRCUIT),
+    proof: legacyProofShapeFromAttestation(attestation, AUTHORIZATION_CIRCUIT),
     publicSignals,
     nullifier: input.nullifier,
     disclosed: { authorized: input.authorized },
     issuedAt: input.issuedAt,
     audience: input.audience,
-    protocol: "groth16",
+    protocol: "hmac-sha256-attestation",
   };
 }
 
@@ -156,13 +156,13 @@ export function provePaymentStepUp(input: {
   const attestation = signSignals(input.issuerSecret, publicSignals);
   return {
     claimType: "payment_step_up",
-    proof: groth16ShapeFromAttestation(attestation, PAYMENT_STEP_UP_CIRCUIT),
+    proof: legacyProofShapeFromAttestation(attestation, PAYMENT_STEP_UP_CIRCUIT),
     publicSignals,
     nullifier: input.nullifier,
     disclosed: { authorized: input.authorized },
     issuedAt: input.issuedAt,
     audience: input.audience,
-    protocol: "groth16",
+    protocol: "hmac-sha256-attestation",
   };
 }
 

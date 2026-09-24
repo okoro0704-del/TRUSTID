@@ -100,7 +100,8 @@ export class AuthorityService {
   private grantIsLive(grant: AuthorityGrant, now: Date): boolean {
     if (grant.status !== AUTHORITY_STATUS.ACTIVE) return false;
     if (now.getTime() < grant.validFrom.getTime()) return false;
-    if (now.getTime() > grant.validUntil.getTime()) return false;
+    if (!Number.isFinite(grant.validFrom.getTime()) || !Number.isFinite(grant.validUntil.getTime())) return false;
+    if (now.getTime() >= grant.validUntil.getTime()) return false;
     return true;
   }
 
@@ -126,6 +127,7 @@ export class AuthorityService {
       requestId: fields.requestId ?? null,
       jti: fields.jti ?? null,
       detail: fields.detail ?? {},
+      createdAt: this.nowFn(),
     });
   }
 
@@ -203,7 +205,7 @@ export class AuthorityService {
       return { decision: "ASK_OWNER", requestId: req.id };
     }
 
-    // ALLOW or ALLOW_WITH_LIMITS ù find or create grant
+    // ALLOW or ALLOW_WITH_LIMITS ¬ù find or create grant
     const existing = (await this.store.listGrants(input.ownerId, "ACTIVE")).find(
       (g) =>
         g.actorType === input.actor.type &&
@@ -425,6 +427,9 @@ export class AuthorityService {
     }
     const actions = narrow?.actions ?? grant.actions;
     const resources = narrow?.resources ?? grant.resources;
+    if (!actions.length || !resources.length) return { ok: false, reason: "empty_scope" };
+    if (narrow?.ttlSeconds !== undefined && (!Number.isInteger(narrow.ttlSeconds) || narrow.ttlSeconds <= 0 || narrow.ttlSeconds > this.tokenTtlSeconds)) return { ok: false, reason: "ttl_escalation" };
+    if (Math.floor(grant.validUntil.getTime() / 1000) <= Math.floor(now.getTime() / 1000)) return { ok: false, reason: "grant_expired" };
     for (const a of actions) {
       if (!grant.actions.includes(a)) {
         return { ok: false, reason: "action_not_in_grant" };
@@ -472,7 +477,8 @@ export class AuthorityService {
       grantVersion: grant.grantVersion,
       oneTime: grant.oneTime,
       jti,
-      ttlSeconds: narrow.ttlSeconds ?? this.tokenTtlSeconds,
+      ttlSeconds: Math.min(narrow.ttlSeconds ?? this.tokenTtlSeconds, DIGI_AUTHORITY_TOKEN_TTL_SECONDS,
+        Math.floor(grant.validUntil.getTime() / 1000) - Math.floor(this.nowFn().getTime() / 1000)),
       now: this.nowFn(),
       ...(ownerTrustId ? { ownerTrustId } : {}),
     });
@@ -516,24 +522,40 @@ export class AuthorityService {
       now: this.nowFn(),
     });
     if (!verified.ok) {
+      const attemptedActor = parseActorKey(input.expectedActor);
       await this.audit("authority.denied", {
-        detail: { reason: verified.reason, phase: "verify" },
+        actorType: attemptedActor?.type, actorId: attemptedActor?.id,
+        detail: { decision: "DENY", reason: verified.reason, phase: "verify", action: input.expectedAction, resource: input.expectedResource, audience: input.expectedAudience },
       });
       return { ok: false, reason: verified.reason };
     }
 
+    const deny = async (reason: string) => {
+      const actor = parseActorKey(verified.claims.actor);
+      await this.audit("authority.denied", {
+        ownerId: verified.claims.sub, actorType: actor?.type, actorId: actor?.id,
+        grantId: verified.claims.grantId, jti: verified.claims.jti,
+        detail: { decision: "DENY", reason, action: input.expectedAction, resource: input.expectedResource, audience: input.expectedAudience },
+      });
+      return { ok: false as const, reason };
+    };
     const grant = await this.store.getGrant(verified.claims.grantId);
     if (!grant || grant.status === AUTHORITY_STATUS.REVOKED) {
-      await this.audit("authority.denied", {
-        grantId: verified.claims.grantId,
-        jti: verified.claims.jti,
-        detail: { reason: "revoked_or_missing" },
-      });
-      return { ok: false, reason: "revoked" };
+      return deny("revoked");
     }
-    if (grant.grantVersion !== verified.claims.grantVersion) {
-      return { ok: false, reason: "grant_version_mismatch" };
-    }
+    if (grant.status === "CONSUMED") return deny("replay");
+    if (!this.grantIsLive(grant, this.nowFn())) return deny("grant_not_active");
+    if (grant.grantVersion !== verified.claims.grantVersion) return deny("grant_version_mismatch");
+    if (grant.ownerId !== verified.claims.sub || actorKey({ type: grant.actorType, id: grant.actorId }) !== verified.claims.actor ||
+      grant.audience !== verified.claims.aud || !grant.actions.includes(input.expectedAction) || !grant.resources.includes(input.expectedResource)) return deny("grant_binding_mismatch");
+    if (grant.approvalMode !== "ALLOW" && grant.approvalMode !== "ALLOW_WITH_LIMITS") return deny("grant_not_approved");
+    if (Object.values(grant.conditions).some(Boolean)) return deny("unsupported_conditions");
+    // Chained delegation is disabled until ancestor revocation and shared budgets
+    // can be atomically checked across the entire chain by all stores.
+    if (grant.parentGrantId) return deny("delegation_chain_unsupported");
+    const countKeys = ["maxPosts", "maxMessages", "maxDeployments"];
+    if (Object.keys(grant.limits).some(k => !countKeys.includes(k))) return deny("unsupported_limits");
+    if (Object.values(grant.limits).some(v => typeof v !== "number" || !Number.isSafeInteger(v) || v < 0)) return deny("invalid_limits");
 
     const exceeded = limitExceeded(grant.limits, grant.usageCount);
     if (exceeded) {
@@ -561,10 +583,11 @@ export class AuthorityService {
         });
         return { ok: false, reason: "replay" };
       }
-      await this.store.updateGrantStatus(grant.id, AUTHORITY_STATUS.CONSUMED);
     }
 
-    await this.store.bumpGrantUsage(grant.id);
+    const counts = Object.values(grant.limits).filter((v): v is number => typeof v === "number");
+    const reserved = await this.store.reserveUse(grant.id, grant.grantVersion, this.nowFn(), counts.length ? Math.min(...counts) : null, verified.claims.oneTime || grant.oneTime);
+    if (!reserved) return deny(grant.oneTime ? "replay" : "grant_unavailable_or_limit");
     await this.audit("authority.used", {
       ownerId: grant.ownerId,
       actorType: grant.actorType,
@@ -572,6 +595,8 @@ export class AuthorityService {
       grantId: grant.id,
       jti: verified.claims.jti,
       detail: {
+        decision: "ALLOW",
+        reason: "ALLOW",
         action: input.expectedAction,
         resource: input.expectedResource,
         audience: input.expectedAudience,
@@ -597,54 +622,9 @@ export class AuthorityService {
     | { ok: true; grant: AuthorityGrant }
     | { ok: false; reason: string }
   > {
-    const parent = await this.store.getGrant(input.parentGrantId);
-    if (!parent || parent.ownerId !== input.ownerId) {
-      return { ok: false, reason: "parent_not_found" };
-    }
-    if (parent.status !== AUTHORITY_STATUS.ACTIVE) {
-      return { ok: false, reason: "parent_not_active" };
-    }
-    // Actor cannot self-escalate by creating a parent they don't own ù already checked.
-    // Delegation from twin to agent: parent must allow authority.delegate? Spec says
-    // twin is DENY for authority.delegate ù so only owner-initiated delegate via this API.
-    const check = assertDelegationSubset(parent, {
-      actions: input.actions,
-      resources: input.resources,
-      validUntil: input.validUntil,
-      limits: input.limits ?? {},
-      audience: parent.audience,
-      ownerId: input.ownerId,
-    });
-    if (!check.ok) {
-      await this.audit("authority.denied", {
-        ownerId: input.ownerId,
-        grantId: parent.id,
-        detail: { reason: check.reason, phase: "delegate" },
-      });
-      return { ok: false, reason: check.reason };
-    }
-    const now = this.nowFn();
-    const grant = await this.store.createGrant({
-      id: newId("auth"),
-      ownerId: input.ownerId,
-      actorType: input.actor.type,
-      actorId: input.actor.id,
-      audience: parent.audience,
-      actions: input.actions,
-      resources: input.resources,
-      limits: input.limits ?? {},
-      conditions: {},
-      approvalMode: APPROVAL_MODES.ALLOW,
-      consequence: parent.consequence,
-      oneTime: false,
-      validFrom: now,
-      validUntil: input.validUntil,
-      status: AUTHORITY_STATUS.ACTIVE,
-      parentGrantId: parent.id,
-      policyVersion: parent.policyVersion,
-      grantVersion: 1,
-    });
-    return { ok: true, grant };
+    // Existing method retained, but unsafe chain creation is explicitly disabled.
+    // No actor/owner route may mint a child until ancestor budgets are atomic.
+    return { ok: false, reason: "delegation_chain_unsupported" };
   }
 
   verifyTokenLocally(input: {

@@ -14,17 +14,18 @@
     "android": "npm run android -w @trustid/device",
     "ios": "npm run ios -w @trustid/device",
     "cap:sync": "npm run cap:sync -w @trustid/device",
-    "build": "npm run build -w @trustid/shared && npm run build -w @trustid/zk && npm run build -w @trustid/bbs-sdk && npm run build -w @trustid/baas-sdk && npm run build -w @trustid/device-security && npm run build -w @trustid/vault-sdk && npm run build -w @trustid/ui-react && npm run build -w @trustid/sovereign-crypto && npm run build -w @trustid/api && npm run build -w @trustid/web && npm run build -w @trustid/mock-lifeos && npm run build -w @trustid/device",
+    "build": "npm run build -w @trustid/shared && npm run build -w @trustid/zk && npm run build -w @trustid/bbs-sdk && npm run build -w @trustid/baas-sdk && npm run build -w @trustid/sdk && npm run build -w @trustid/device-security && npm run build -w @trustid/vault-sdk && npm run build -w @trustid/ui-react && npm run build -w @trustid/sovereign-crypto && npm run build -w @trustid/digi-bridge && npm run build -w @trustid/digi-authority && npm run build -w @trustid/authority-verifier && npm run build -w @trustid/api && npm run build -w @trustid/web && npm run build -w @trustid/mock-lifeos && npm run build -w @trustid/digi-rp && npm run build -w @trustid/device",
     "build:api": "npm run build -w @trustid/shared && npm run build -w @trustid/zk && npm run build -w @trustid/bbs-sdk && npm run build -w @trustid/baas-sdk && npm run build -w @trustid/sdk && npm run build -w @trustid/sovereign-crypto && node scripts/sync-prisma-provider.mjs && npm run db:generate -w @trustid/api && npm run build -w @trustid/api",
     "build:web": "npm run build -w @trustid/shared && npm run build -w @trustid/zk && npm run build -w @trustid/baas-sdk && npm run build -w @trustid/device-security && npm run build -w @trustid/vault-sdk && npm run build -w @trustid/ui-react && npm run build -w @trustid/sovereign-crypto && node scripts/sync-prisma-provider.mjs && npm run db:generate -w @trustid/api && npm run build -w @trustid/api && node scripts/prepare-netlify-db.mjs && npm run build -w @trustid/web",
     "start": "node scripts/sync-prisma-provider.mjs && npm run db:push:deploy -w @trustid/api && npm run db:seed -w @trustid/api && npm run start -w @trustid/api",
     "db:generate": "node scripts/sync-prisma-provider.mjs && npm run db:generate -w @trustid/api",
     "db:push": "node scripts/sync-prisma-provider.mjs && npm run db:push -w @trustid/api",
     "db:push:deploy": "node scripts/sync-prisma-provider.mjs && npm run db:push:deploy -w @trustid/api",
-    "db:push:reset": "node scripts/sync-prisma-provider.mjs && npm run db:push:reset -w @trustid/api",
+    "db:push:reset": "node scripts/guard-local-reset.mjs",
     "db:seed": "npm run db:seed -w @trustid/api",
-    "setup": "npm install && npm run build -w @trustid/shared && npm run build -w @trustid/zk && npm run build -w @trustid/bbs-sdk && npm run build -w @trustid/baas-sdk && npm run build -w @trustid/device-security && npm run build -w @trustid/sovereign-crypto && npm run db:generate && npm run db:push:reset && npm run db:seed",
-    "test": "npm run test -w @trustid/api && npm run test -w @trustid/digi-bridge && npm run test -w @trustid/digi-authority && npm run test -w @trustid/authority-verifier && npm run test -w @trustid/digi-rp && npm run test -w @trustid/vault-sdk && npm run test -w @trustid/ui-react"
+    "setup": "node scripts/guard-local-reset.mjs --explain",
+    "test": "npm run build:security && node --test scripts/tests/*.test.mjs && npm run test -w @trustid/api && npm run test -w @trustid/sdk && npm run test -w @trustid/digi-bridge && npm run test -w @trustid/digi-authority && npm run test -w @trustid/authority-verifier && npm run test -w @trustid/digi-rp && npm run test -w @trustid/vault-sdk && npm run test -w @trustid/ui-react",
+    "build:security": "npm run build -w @trustid/shared && npm run build -w @trustid/zk && npm run build -w @trustid/sdk && npm run build -w @trustid/digi-bridge && npm run build -w @trustid/digi-authority && npm run build -w @trustid/authority-verifier"
   },
   "dependencies": {
     "@fastify/aws-lambda": "^5.1.4"

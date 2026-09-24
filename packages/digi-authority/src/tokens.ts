@@ -1,4 +1,5 @@
 import { exportJWK, generateKeyPair, importJWK, SignJWT, jwtVerify, type JWK } from "jose";
+import { isAuthorityClaimsShape } from "@trustid/shared";
 import {
   DIGI_AUTHORITY_ISSUER,
   DIGI_AUTHORITY_TOKEN_TTL_SECONDS,
@@ -50,6 +51,7 @@ export async function mintAuthorityToken(
 ): Promise<{ token: string; claims: AuthorityTokenClaims }> {
   const now = input.now ?? new Date();
   const ttl = input.ttlSeconds ?? DIGI_AUTHORITY_TOKEN_TTL_SECONDS;
+  if (!Number.isInteger(ttl) || ttl <= 0 || ttl > DIGI_AUTHORITY_TOKEN_TTL_SECONDS) throw new Error("invalid_authority_ttl");
   const skew = input.clockSkewSeconds ?? 0;
   const iat = Math.floor(now.getTime() / 1000);
   const nbf = iat - skew;
@@ -73,6 +75,8 @@ export async function mintAuthorityToken(
     exp,
     ...(input.ownerTrustId ? { ownerTrustId: input.ownerTrustId } : {}),
   };
+
+  if (!isAuthorityClaimsShape(claims)) throw new Error("invalid_authority_claims");
 
   const token = await new SignJWT({
     actor: claims.actor,
@@ -136,11 +140,16 @@ export async function verifyAuthorityToken(
     }
     const key = await importJWK(jwk, "EdDSA");
     const { payload } = await jwtVerify(input.token, key, {
+      algorithms: ["EdDSA"],
+      requiredClaims: ["iss", "sub", "aud", "iat", "nbf", "exp", "jti"],
       issuer: DIGI_AUTHORITY_ISSUER,
       audience: input.expectedAudience,
-      clockTolerance: input.clockToleranceSeconds ?? 5,
+      clockTolerance: input.clockToleranceSeconds ?? 0,
       currentDate: input.now,
     });
+
+    if (!isAuthorityClaimsShape(payload)) return { ok: false, reason: "malformed" };
+    if (Number(payload.iat) > Math.floor((input.now ?? new Date()).getTime() / 1000)) return { ok: false, reason: "not_yet_valid" };
 
     const claims: AuthorityTokenClaims = {
       iss: DIGI_AUTHORITY_ISSUER,
@@ -197,7 +206,6 @@ export async function verifyAuthorityToken(
     if (
       claim === "exp" ||
       msg.includes('"exp"') ||
-      /timestamp check failed/i.test(msg) ||
       /jwt expired/i.test(msg)
     ) {
       return { ok: false, reason: "expired" };

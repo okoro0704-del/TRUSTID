@@ -68,6 +68,8 @@ export interface AuthorityStore {
     revokedAt?: Date | null
   ): Promise<AuthorityGrant | null>;
   bumpGrantUsage(id: string): Promise<number>;
+  /** Atomic live-state/version/usage check and reservation, before execution. */
+  reserveUse(id: string, version: number, now: Date, maxUsage: number | null, oneTime: boolean): Promise<boolean>;
   createRequest(input: CreateRequestInput): Promise<AuthorityRequest>;
   getRequest(id: string): Promise<AuthorityRequest | null>;
   listPendingRequests(ownerId: string): Promise<AuthorityRequest[]>;
@@ -114,6 +116,15 @@ export class MemoryAuthorityStore implements AuthorityStore {
   private requests = new Map<string, AuthorityRequest>();
   private consumed = new Set<string>();
   private audit: AuditEvent[] = [];
+
+  async reserveUse(id: string, version: number, now: Date, maxUsage: number | null, oneTime: boolean): Promise<boolean> {
+    const g = this.grants.get(id);
+    if (!g || g.status !== "ACTIVE" || g.grantVersion !== version ||
+      now < g.validFrom || now >= g.validUntil || (maxUsage !== null && g.usageCount >= maxUsage)) return false;
+    g.usageCount++;
+    if (oneTime) g.status = "CONSUMED";
+    return true;
+  }
 
   async createGrant(input: CreateGrantInput): Promise<AuthorityGrant> {
     const g = toGrant({

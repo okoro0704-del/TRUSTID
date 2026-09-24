@@ -170,6 +170,14 @@ function mapRequest(row: RequestRow): AuthorityRequest {
 
 /** SQL-backed store using Node.js built-in `node:sqlite` (no native addon). */
 export class SqliteAuthorityStore implements AuthorityStore {
+  async reserveUse(id: string, version: number, now: Date, maxUsage: number | null, oneTime: boolean): Promise<boolean> {
+    const result = this.db.prepare(`UPDATE authority_grants SET usage_count = usage_count + 1,
+      status = CASE WHEN ? THEN 'CONSUMED' ELSE status END
+      WHERE id = ? AND grant_version = ? AND status = 'ACTIVE'
+      AND valid_from <= ? AND valid_until > ? AND (? IS NULL OR usage_count < ?)`)
+      .run(oneTime ? 1 : 0, id, version, now.toISOString(), now.toISOString(), maxUsage, maxUsage);
+    return Number(result.changes) === 1;
+  }
   private db: DatabaseSync;
 
   constructor(filename = ":memory:") {
