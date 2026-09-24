@@ -63,8 +63,9 @@ function canUseMediapipeGpu(): boolean {
       errorMessage: renderer ? `renderer=${renderer.slice(0, 80)}` : "renderer=unknown",
     });
     if (!renderer) {
-      // Unknown renderer in restricted contexts — avoid GPU hang risk.
-      return false;
+      // Safari often hides WEBGL_debug_renderer_info even when hardware WebGL
+      // is available. Try the bounded GPU path; it falls back to CPU after 12s.
+      return true;
     }
     if (
       /swiftshader|llvmpipe|softpipe|microsoft basic render|angle \(google\, vulkan|angle \(google\, swiftshader/i.test(

@@ -12,6 +12,23 @@
 [functions]
   directory = "netlify/functions-disabled"
 
+# Biometric runtimes are pinned by package/model version and integrity checked.
+# Cache them across visits so mobile Safari does not repeat a 25+ MB cold load.
+[[headers]]
+  for = "/mediapipe/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/models/trustid/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/ort/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
 # Proxy API to Railway — browser sees trustedid.netlify.app (first-party cookies)
 [[redirects]]
   from = "/api/*"
