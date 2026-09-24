@@ -518,7 +518,10 @@ export function useAmbientTrustIdAuth(
     // Bound the entire attempt, including camera permission, model loading,
     // and the network lookup. A timeout is not evidence of an unknown face.
     const scanTimeout = window.setTimeout(() => {
-      enterServiceError(runId, "Face scan timed out. Please try again.");
+      enterServiceError(
+        runId,
+        "BIOMETRIC_SERVICE_UNAVAILABLE — Face scan timed out before a reusable face template was created. Please try again.",
+      );
     }, 30_000);
     ac.signal.addEventListener("abort", () => window.clearTimeout(scanTimeout), {
       once: true,

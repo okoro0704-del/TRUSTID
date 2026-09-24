@@ -283,7 +283,7 @@ export function TrustIdAmbientAuthProvider({
   }
 
   if (phase === "ERROR") {
-    const serviceDown = /BIOMETRIC_SERVICE_UNAVAILABLE|BIOMETRIC_MODEL_UNAVAILABLE/i.test(
+    const serviceDown = /BIOMETRIC_SERVICE_UNAVAILABLE|BIOMETRIC_MODEL_UNAVAILABLE|timed out/i.test(
       error ?? "",
     );
     return (
@@ -341,7 +341,9 @@ export function TrustIdAmbientAuthProvider({
 
   const msg =
     phase === "ENROLLING"
-      ? "Register your face — capturing enrollment samples…"
+      ? faceDiagnostics?.vectorCreated
+        ? "Saving your scanned face…"
+        : "Register your face — capturing enrollment samples…"
       : phase === "SAVING_FINGERPRINT"
         ? "Register fingerprint backup…"
         : "Looking for your Trust ID…";
