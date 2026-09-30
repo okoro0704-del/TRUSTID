@@ -8,7 +8,7 @@ import type {
   SessionStore,
 } from "./types.js";
 
-function hashToken(token: string): string {
+export function hashSessionToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
@@ -17,7 +17,8 @@ function newId(prefix: string): string {
 }
 
 /**
- * In-memory Digi stores for tests. Production Digi RP uses durable DB.
+ * In-memory Digi stores for unit tests and explicit development.
+ * Production Digi RP refuses these and requires PostgreSQL stores.
  * Unique (issuer, subject) enforced; concurrent create races recover.
  */
 export function createMemoryOwnerStore(): OwnerStore {
@@ -48,6 +49,7 @@ export function createMemoryOwnerStore(): OwnerStore {
   }
 
   return {
+    durability: "memory",
     async findByIssuerSubject(issuer, subject) {
       return byKey.get(key(issuer, subject)) ?? null;
     },
@@ -107,6 +109,7 @@ export function createMemoryReplayStore(): ReplayStore {
   }
 
   return {
+    durability: "memory",
     async tryConsume(input) {
       return withLock(input.jti, async () => {
         if (consumed.has(input.jti)) return false;
@@ -126,9 +129,10 @@ export function createMemorySessionStore(): SessionStore {
   const byId = new Map<string, DigiSession>();
 
   return {
+    durability: "memory",
     async create({ ownerId, ttlSeconds = 60 * 60 * 8 }) {
       const token = randomBytes(32).toString("base64url");
-      const tokenHash = hashToken(token);
+      const tokenHash = hashSessionToken(token);
       const now = new Date();
       const session: DigiSession = {
         id: newId("ses"),
@@ -143,7 +147,7 @@ export function createMemorySessionStore(): SessionStore {
       return { session, token };
     },
     async resolve(token) {
-      const session = byHash.get(hashToken(token));
+      const session = byHash.get(hashSessionToken(token));
       if (!session) return null;
       if (session.revokedAt) return null;
       if (session.expiresAt.getTime() < Date.now()) return null;

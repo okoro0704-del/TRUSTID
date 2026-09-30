@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createMemoryOwnerStore,
+  createMemoryReplayStore,
+  createMemorySessionStore,
+} from "@trustid/digi-bridge";
 import { buildDigiRp } from "../src/app.js";
 import { loadAuthoritySigningKey } from "../src/keys.js";
 const options={trustIdIssuer:"https://test.invalid",jwksUrl:"https://test.invalid/jwks"};
@@ -9,6 +14,16 @@ describe("Digi production fail-closed defaults",()=>{
   });
   it("does not silently use ephemeral owner/replay/session stores in production",async()=>{
     vi.stubEnv("NODE_ENV","production");await expect(buildDigiRp({...options,cookieSecret:"test-only-strong-cookie-secret-32-chars"})).rejects.toThrow(/durable owner/);
+  });
+  it("rejects explicit memory stores in production", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    await expect(buildDigiRp({
+      ...options,
+      cookieSecret: "test-only-strong-cookie-secret-32-chars",
+      owners: createMemoryOwnerStore(),
+      replay: createMemoryReplayStore(),
+      sessions: createMemorySessionStore(),
+    })).rejects.toThrow(/memory defaults are development-only/);
   });
   it("does not generate ephemeral production signing keys",async()=>{
     vi.stubEnv("NODE_ENV","production");vi.stubEnv("DIGI_AUTHORITY_PRIVATE_JWK","");await expect(loadAuthoritySigningKey()).rejects.toThrow(/required/);

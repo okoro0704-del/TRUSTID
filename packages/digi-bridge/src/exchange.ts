@@ -48,7 +48,8 @@ function mapRejectEvent(
 }
 
 /**
- * Digi exchange: verify TrustID assertion ? consume jti ? resolve owner ? Digi session.
+ * Digi exchange: verify TrustID assertion, then consume jti, resolve owner, and create a Digi session.
+ * Verification stays outside the database transaction. Durable writes commit together when runWrite is set.
  */
 export async function exchangeTrustIdAssertion(input: {
   assertion: string;
@@ -60,6 +61,13 @@ export async function exchangeTrustIdAssertion(input: {
   sessions: SessionStore;
   audit?: DigiAuditSink;
   nowSec?: number;
+  /**
+   * Optional transaction boundary for the durable writes.
+   * Verification has already finished and must not be included.
+   * PostgreSQL composition passes one transaction so a later failure
+   * rolls consumption back. Memory stores omit it.
+   */
+  runWrite?: <T>(fn: () => Promise<T>) => Promise<T>;
 }): Promise<ExchangeSuccess | ExchangeFailure> {
   const verified = await verifyDigiAssertion({
     assertion: input.assertion,
@@ -76,55 +84,91 @@ export async function exchangeTrustIdAssertion(input: {
     return { ok: false, error: "unauthorized", reason: verified.reason };
   }
 
-  const consumed = await input.replay.tryConsume({
-    jti: verified.jti,
-    issuer: verified.issuer,
-    subject: verified.subject,
-    expiresAt: new Date(verified.exp * 1000),
-  });
-  if (!consumed) {
+  const runWrite = input.runWrite ?? (async <T>(fn: () => Promise<T>) => fn());
+  let outcome:
+    | { kind: "replay" }
+    | {
+        kind: "ok";
+        ownerId: string;
+        identityId: string;
+        created: boolean;
+        sessionId: string;
+        token: string;
+        expiresAt: string;
+      };
+  try {
+    outcome = await runWrite(async () => {
+      const consumed = await input.replay.tryConsume({
+        jti: verified.jti,
+        issuer: verified.issuer,
+        subject: verified.subject,
+        expiresAt: new Date(verified.exp * 1000),
+      });
+      if (!consumed) return { kind: "replay" as const };
+      const { owner, created, identity } = await input.owners.resolveOrCreate({
+        issuer: verified.issuer,
+        subject: verified.subject,
+      });
+      const { session, token } = await input.sessions.create({
+        ownerId: owner.id,
+      });
+      return {
+        kind: "ok" as const,
+        ownerId: owner.id,
+        identityId: identity.id,
+        created,
+        sessionId: session.id,
+        token,
+        expiresAt: session.expiresAt.toISOString(),
+      };
+    });
+  } catch {
+    try {
+      await input.audit?.record("digi_persistence_failed", {
+        reason: "storage_failure",
+      });
+    } catch {
+      /* audit must not replace the storage failure */
+    }
+    throw new Error("Digi Core persistence failed");
+  }
+
+  if (outcome.kind === "replay") {
     await input.audit?.record("trust_assertion_replay_rejected", {
       jti: verified.jti,
     });
     return { ok: false, error: "unauthorized", reason: "replay" };
   }
 
-  await input.audit?.record("trust_assertion_accepted", {
-    jti: verified.jti,
-    issuer: verified.issuer,
-    audience: verified.audience,
-  });
-
-  const { owner, created, identity } = await input.owners.resolveOrCreate({
-    issuer: verified.issuer,
-    subject: verified.subject,
-  });
-
-  await input.audit?.record(
-    created ? "digi_owner_created" : "digi_owner_resolved",
-    {
-      ownerId: owner.id,
-      identityId: identity.id,
+  try {
+    await input.audit?.record("trust_assertion_accepted", {
+      jti: verified.jti,
       issuer: verified.issuer,
-    },
-  );
-
-  const { session, token } = await input.sessions.create({
-    ownerId: owner.id,
-  });
-
-  await input.audit?.record("digi_session_created", {
-    ownerId: owner.id,
-    sessionId: session.id,
-  });
+      audience: verified.audience,
+    });
+    await input.audit?.record(
+      outcome.created ? "digi_owner_created" : "digi_owner_resolved",
+      {
+        ownerId: outcome.ownerId,
+        identityId: outcome.identityId,
+        issuer: verified.issuer,
+      },
+    );
+    await input.audit?.record("digi_session_created", {
+      ownerId: outcome.ownerId,
+      sessionId: outcome.sessionId,
+    });
+  } catch {
+    /* committed state is already durable; do not hide the session */
+  }
 
   return {
     ok: true,
-    ownerId: owner.id,
-    ownerCreated: created,
-    sessionToken: token,
-    sessionId: session.id,
-    expiresAt: session.expiresAt.toISOString(),
+    ownerId: outcome.ownerId,
+    ownerCreated: outcome.created,
+    sessionToken: outcome.token,
+    sessionId: outcome.sessionId,
+    expiresAt: outcome.expiresAt,
     subject: verified.subject,
   };
 }

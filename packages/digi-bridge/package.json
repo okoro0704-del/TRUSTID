@@ -17,9 +17,11 @@
   },
   "dependencies": {
     "@trustid/shared": "*",
-    "jose": "^6.2.8"
+    "jose": "^6.2.8",
+    "pg": "^8.14.1"
   },
   "devDependencies": {
+    "@types/pg": "^8.11.11",
     "typescript": "^5.8.2",
     "vitest": "^3.0.9"
   }

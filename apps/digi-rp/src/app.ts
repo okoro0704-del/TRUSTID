@@ -33,6 +33,8 @@ export type DigiRpOptions = {
   owners?: OwnerStore;
   replay?: ReplayStore;
   sessions?: SessionStore;
+  /** Joins owner, replay, and session writes when the stores are PostgreSQL. */
+  runWrite?: <T>(fn: () => Promise<T>) => Promise<T>;
   authorityStore?: AuthorityStore;
   authorityService?: AuthorityService;
   authorityPersistence?: "postgres" | "sqlite" | "memory";
@@ -63,13 +65,33 @@ async function resolveSessionOwner(
 
 export async function buildDigiRp(opts: DigiRpOptions) {
   const app = Fastify({ logger: false });
+  app.removeContentTypeParser("application/json");
+  app.addContentTypeParser("application/json", { parseAs: "string" }, (_request, body, done) => {
+    const text = typeof body === "string" ? body : "";
+    if (!text.trim()) {
+      done(null, {});
+      return;
+    }
+    try {
+      done(null, JSON.parse(text));
+    } catch (error) {
+      done(error as Error, undefined);
+    }
+  });
   const production = process.env.NODE_ENV === "production";
   const cookieSecret = opts.cookieSecret ?? (production ? undefined : "digi-rp-dev-cookie-secret");
   if (!cookieSecret || (production && (cookieSecret.length < 32 || /dev|change.me/i.test(cookieSecret)))) {
     throw new Error("A production DIGI_COOKIE_SECRET of at least 32 characters is required");
   }
-  if (production && (!opts.owners || !opts.replay || !opts.sessions)) {
-    throw new Error("Production Digi requires explicit durable owner, replay and session stores; memory defaults are development-only");
+  if (
+    production &&
+    (opts.owners?.durability !== "postgres" ||
+      opts.replay?.durability !== "postgres" ||
+      opts.sessions?.durability !== "postgres")
+  ) {
+    throw new Error(
+      "Production Digi requires explicit durable owner, replay and session stores; memory defaults are development-only",
+    );
   }
   const allowedOrigins = opts.corsOrigins ?? (process.env.DIGI_CORS_ORIGINS ??
     (production ? "" : "http://localhost:5173,http://localhost:5174")).split(",").map(s => s.trim()).filter(Boolean);
@@ -98,6 +120,13 @@ export async function buildDigiRp(opts: DigiRpOptions) {
       auditLog.push({ event, meta });
     },
   };
+  sessions.setAudit?.(audit);
+  const corePersistence =
+    owners.durability === "postgres" &&
+    replay.durability === "postgres" &&
+    sessions.durability === "postgres"
+      ? "postgres"
+      : "memory";
 
   const authorityStore = opts.authorityStore ?? new MemoryAuthorityStore();
   const loaded = await loadAuthoritySigningKey();
@@ -128,6 +157,7 @@ export async function buildDigiRp(opts: DigiRpOptions) {
     return {
       ok: authHealth.status === "READY" || authHealth.persistence !== "memory",
       service: "digi-rp",
+      core: { persistence: corePersistence },
       trustBridge: {
         status: "READY",
         issuer: opts.trustIdIssuer,
@@ -158,16 +188,22 @@ export async function buildDigiRp(opts: DigiRpOptions) {
       return reply.code(400).send({ error: "invalid_request" });
     }
 
-    const result = await exchangeTrustIdAssertion({
-      assertion: body.data.assertion,
-      expectedIssuer: opts.trustIdIssuer,
-      expectedAudience: audience,
-      jwks,
-      owners,
-      replay,
-      sessions,
-      audit,
-    });
+    let result: Awaited<ReturnType<typeof exchangeTrustIdAssertion>>;
+    try {
+      result = await exchangeTrustIdAssertion({
+        assertion: body.data.assertion,
+        expectedIssuer: opts.trustIdIssuer,
+        expectedAudience: audience,
+        jwks,
+        owners,
+        replay,
+        sessions,
+        audit,
+        runWrite: opts.runWrite,
+      });
+    } catch {
+      return reply.code(503).send({ error: "unavailable" });
+    }
 
     if (!result.ok) {
       return reply.code(401).send({
