@@ -1,20 +1,32 @@
 apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android'
 
+// Single version source of truth: apps/device/release.json (also read by the OTA publisher).
+// -PtrustidVersionCode / -PtrustidVersionName exist only for unpublished OTA test fixtures.
+def trustidRelease = new groovy.json.JsonSlurper().parse(file('../../release.json'))
+def trustidVersionCode = (project.findProperty('trustidVersionCode') ?: trustidRelease.versionCode) as Integer
+def trustidVersionName = (project.findProperty('trustidVersionName') ?: trustidRelease.versionName) as String
+
 android {
     namespace "com.trustid.device"
     compileSdk rootProject.ext.compileSdkVersion
+    buildFeatures {
+        buildConfig true
+    }
     defaultConfig {
-        applicationId "com.trustid.device"
+        applicationId trustidRelease.applicationId
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode trustidVersionCode
+        versionName trustidVersionName
+        buildConfigField "String", "TRUSTID_OTA_MANIFEST_URL", "\"${trustidRelease.otaManifestUrl}\""
+        buildConfigField "String", "TRUSTID_RELEASE_CHANNEL", "\"${trustidRelease.channel}\""
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
-            ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+             // <dir>releases keeps published OTA APKs (web public/releases) out of the shell itself.
+            ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~:!<dir>releases'
         }
     }
     compileOptions {
@@ -50,6 +62,8 @@ dependencies {
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
     testImplementation "junit:junit:$junitVersion"
+    // android.jar ships org.json as stubs; OTA manifest parsing tests need the real implementation.
+    testImplementation "org.json:json:20231013"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')

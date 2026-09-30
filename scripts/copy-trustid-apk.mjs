@@ -1,8 +1,11 @@
 /**
  * Copy the debug APK to a stable path the user can always reinstall from.
  * Target: <repo>/TrustID-debug.apk
+ *
+ * The OTA channel copy (apps/web/public/releases/TrustID.apk) is written only by
+ * scripts/publish-trustid-ota.mjs, together with its manifest.
  */
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -12,8 +15,6 @@ const built = join(
   "apps/device/android/app/build/outputs/apk/debug/app-debug.apk",
 );
 const stable = join(root, "TrustID-debug.apk");
-const artifactDir = join(root, "artifacts/apk");
-const artifact = join(artifactDir, "TrustID-debug.apk");
 
 if (!existsSync(built)) {
   console.error(`APK not found: ${built}`);
@@ -21,7 +22,5 @@ if (!existsSync(built)) {
 }
 
 copyFileSync(built, stable);
-mkdirSync(artifactDir, { recursive: true });
-copyFileSync(built, artifact);
 
-console.log(JSON.stringify({ ok: true, stable, artifact }, null, 2));
+console.log(JSON.stringify({ ok: true, stable }, null, 2));

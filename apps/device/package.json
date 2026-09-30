@@ -17,7 +17,9 @@
     "cap:open:ios": "npx cap open ios",
     "android": "npm run cap:sync && npx cap open android",
     "ios": "npm run cap:sync && npx cap open ios",
-    "android:apk": "npm run cap:sync:device && cd android && gradlew.bat assembleDebug && node ../../../scripts/copy-trustid-apk.mjs"
+    "android:apk": "npm run cap:sync:device && cd android && gradlew.bat assembleDebug && node ../../../scripts/copy-trustid-apk.mjs",
+    "android:test": "cd android && gradlew.bat testDebugUnitTest",
+    "android:ota:publish": "node ../../scripts/publish-trustid-ota.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^6.2.0",

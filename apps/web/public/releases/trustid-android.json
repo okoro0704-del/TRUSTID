@@ -1,0 +1,16 @@
+{
+  "schema": "trustid.android-ota.v1",
+  "applicationId": "com.trustid.device",
+  "channel": "development-debug",
+  "releaseId": "trustid-android-1.1-2-3a275845da77",
+  "versionName": "1.1",
+  "versionCode": 2,
+  "publishedAt": "2026-09-30T11:37:48.542Z",
+  "apkUrl": "https://trustedid.netlify.app/releases/TrustID.apk",
+  "apkSha256": "3a275845da777f6eac3c3c601ce0c16bc634eaa7ee45f9eb0874038764c6b200",
+  "apkSize": 46658068,
+  "signerSha256": [
+    "8e5eb29468beea2d36135b8500c376e493277a97140a69d1688bd3ea4cf336aa"
+  ],
+  "minSdk": 22
+}

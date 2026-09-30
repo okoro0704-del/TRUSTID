@@ -6,7 +6,9 @@ import android.os.Build;
 import android.os.Bundle;
 import android.view.WindowManager;
 import com.getcapacitor.BridgeActivity;
+import com.trustid.device.ota.TrustIdUpdater;
 import com.trustid.device.plugins.AppLockPlugin;
+import com.trustid.device.plugins.AppUpdatePlugin;
 import com.trustid.device.plugins.BiometricGatePlugin;
 import com.trustid.device.plugins.HeadsUpNotificationPlugin;
 import com.trustid.device.plugins.MediaVaultPlugin;
@@ -25,9 +27,23 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(SilentAuthPlugin.class);
         registerPlugin(SilentFaceCapturePlugin.class);
         registerPlugin(HeadsUpNotificationPlugin.class);
+        registerPlugin(AppUpdatePlugin.class);
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         ensureHeadsUpApprovalChannels();
+        TrustIdUpdater.onCreate(this);
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        TrustIdUpdater.onResume(this);
+    }
+
+    @Override
+    public void onPause() {
+        TrustIdUpdater.onPause();
+        super.onPause();
     }
 
     /** IMPORTANCE_HIGH so approval pushes appear as heads-up popups. */

@@ -7,6 +7,7 @@ import {
 } from "@trustid/ui-react";
 import "@trustid/ui-react/styles.css";
 import { App } from "./App";
+import { NativeShellUpdateBanner } from "./components/NativeShellUpdateBanner";
 import { createWebAmbientCapture, captureFingerprintBackup } from "./lib/ambientCapture";
 import { getOrCreateInstallId, getLocalOccupancy, markLocalOccupancy } from "./lib/deviceInstall";
 import { getRememberedAccount, rememberFromIdentity } from "./lib/rememberedAccount";
@@ -145,6 +146,7 @@ createRoot(document.getElementById("root")!).render(
           <App />
         </AmbientShell>
       </TrustIdAuthProvider>
+      <NativeShellUpdateBanner />
     </BrowserRouter>
   </StrictMode>,
 );

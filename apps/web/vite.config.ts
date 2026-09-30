@@ -1,6 +1,27 @@
+import { rmSync } from "node:fs";
+import { resolve } from "node:path";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
+
+/**
+ * public/releases holds the published Android OTA APK + manifest for Netlify.
+ * The device (Capacitor) bundle must never embed the previous APK inside itself.
+ */
+function dropOtaReleasesFromDeviceBundle(mode: string): Plugin {
+  let outDir = "dist";
+  return {
+    name: "trustid-drop-ota-releases",
+    apply: "build",
+    configResolved(config) {
+      outDir = resolve(config.root, config.build.outDir);
+    },
+    closeBundle() {
+      if (mode !== "device") return;
+      rmSync(resolve(outDir, "releases"), { recursive: true, force: true });
+    },
+  };
+}
 
 /**
  * onnxruntime-web dynamically imports `${wasmPaths}*.mjs`.
@@ -21,16 +42,17 @@ function ortPublicWasm(): Plugin {
   };
 }
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [
     ortPublicWasm(),
+    dropOtaReleasesFromDeviceBundle(mode),
     react(),
     VitePWA({
       registerType: "autoUpdate",
       includeAssets: ["favicon.svg"],
       workbox: {
         // onnxruntime-web WASM is large — served from /ort (copied at build); do not precache
-        globIgnores: ["**/*.wasm", "**/ort*.mjs", "**/ort*.js", "**/ort/**"],
+        globIgnores: ["**/*.wasm", "**/ort*.mjs", "**/ort*.js", "**/ort/**", "releases/**"],
         maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
       },
       manifest: {
@@ -79,4 +101,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));
