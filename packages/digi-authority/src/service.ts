@@ -86,14 +86,32 @@ export class AuthorityService {
     return { keys: [this.signingKey.publicJwk] };
   }
 
+  private lanes = new Map<string, Promise<void>>();
+
+  private enqueue<T>(key: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.lanes.get(key) ?? Promise.resolve();
+    const run = previous.then(task, task);
+    this.lanes.set(key, run.then(() => undefined, () => undefined));
+    return run;
+  }
+
   private findPolicy(actor: ActorRef, audience: string): ActorPolicy | null {
+    const matchesAudience = (audienceOnPolicy: string) =>
+      audienceOnPolicy === "*" || audienceOnPolicy === audience;
     return (
       this.policies.find(
-        (p) =>
-          p.actorType === actor.type &&
-          p.actorId === actor.id &&
-          (p.audience === "*" || p.audience === audience)
-      ) ?? null
+        (policy) =>
+          policy.actorType === actor.type &&
+          policy.actorId === actor.id &&
+          matchesAudience(policy.audience)
+      ) ??
+      this.policies.find(
+        (policy) =>
+          policy.actorType === actor.type &&
+          policy.actorId === "*" &&
+          matchesAudience(policy.audience)
+      ) ??
+      null
     );
   }
 
@@ -134,6 +152,18 @@ export class AuthorityService {
   /** Machine check: evaluate policy + existing grants. */
   async check(input: CheckInput): Promise<CheckResult> {
     const now = this.nowFn();
+    if (
+      input.actor.type === "app" &&
+      (input.ownerId === input.actor.id || input.ownerId === actorKey(input.actor))
+    ) {
+      await this.audit("authority.denied", {
+        ownerId: input.ownerId,
+        actorType: input.actor.type,
+        actorId: input.actor.id,
+        detail: { reason: "owner_boundary", action: input.action, resource: input.resource },
+      });
+      return { decision: "DENY", reason: "owner_boundary" };
+    }
     await this.audit("authority.requested", {
       ownerId: input.ownerId,
       actorType: input.actor.type,
@@ -299,12 +329,33 @@ export class AuthorityService {
     | { ok: true; grant: AuthorityGrant; token: string }
     | { ok: false; reason: string }
   > {
+    return this.enqueue(`request:${requestId}`, () => this.approvePending(ownerId, requestId, opts));
+  }
+
+  private async approvePending(
+    ownerId: string,
+    requestId: string,
+    opts?: { oneTime?: boolean; ttlMs?: number }
+  ): Promise<
+    | { ok: true; grant: AuthorityGrant; token: string }
+    | { ok: false; reason: string }
+  > {
     const req = await this.store.getRequest(requestId);
     if (!req || req.ownerId !== ownerId) {
       return { ok: false, reason: "not_found" };
     }
     if (req.status !== AUTHORITY_STATUS.PENDING) {
       return { ok: false, reason: "not_pending" };
+    }
+    if (req.actorType === "app" && (ownerId === req.actorId || ownerId === actorKey({ type: req.actorType, id: req.actorId }))) {
+      await this.audit("authority.denied", {
+        ownerId,
+        actorType: req.actorType,
+        actorId: req.actorId,
+        requestId,
+        detail: { reason: "actor_cannot_approve" },
+      });
+      return { ok: false, reason: "actor_cannot_approve" };
     }
     if (
       req.consequence === "CRITICAL" &&
@@ -350,6 +401,7 @@ export class AuthorityService {
       actorId: req.actorId,
       grantId: grant.id,
       requestId,
+      detail: { oneTime, reusable: !oneTime },
     });
 
     const minted = await this.issueTokenFromGrant(grant, {
@@ -360,6 +412,13 @@ export class AuthorityService {
   }
 
   async denyRequest(
+    ownerId: string,
+    requestId: string
+  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+    return this.enqueue(`request:${requestId}`, () => this.denyPending(ownerId, requestId));
+  }
+
+  private async denyPending(
     ownerId: string,
     requestId: string
   ): Promise<{ ok: true } | { ok: false; reason: string }> {

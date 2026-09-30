@@ -16,8 +16,8 @@ import {
 } from "@trustid/digi-bridge";
 import {
   AuthorityService,
-  DIGITAL_TWIN_MRFUNDZMAN_POLICY,
   MemoryAuthorityStore,
+  digiAuthorityPolicies,
   parseActorKey,
   type AuthorityStore,
 } from "@trustid/digi-authority";
@@ -139,7 +139,7 @@ export async function buildDigiRp(opts: DigiRpOptions) {
     new AuthorityService({
       store: authorityStore,
       signingKey: loaded.primary,
-      policies: production ? [] : [DIGITAL_TWIN_MRFUNDZMAN_POLICY],
+      policies: digiAuthorityPolicies(production),
       persistence,
     });
 
@@ -324,14 +324,22 @@ export async function buildDigiRp(opts: DigiRpOptions) {
   app.post("/authority/requests/:id/approve", async (req, reply) => {
     const ownerId = await resolveSessionOwner(sessions, req);
     if (!ownerId) return reply.code(401).send({ error: "unauthorized" });
+    const parsed = z.object({ oneTime: z.boolean().optional() }).strict().safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_request" });
     const id = (req.params as { id: string }).id;
-    const result = await authority.approveRequest(ownerId, id);
+    const result = await authority.approveRequest(
+      ownerId,
+      id,
+      parsed.data.oneTime === undefined ? undefined : { oneTime: parsed.data.oneTime }
+    );
     if (!result.ok) {
-      return reply.code(400).send({ error: result.reason });
+      const status = result.reason === "actor_cannot_approve" ? 403 : 400;
+      return reply.code(status).send({ error: result.reason });
     }
     return {
       ok: true,
       grantId: result.grant.id,
+      oneTime: result.grant.oneTime,
       token: result.token,
     };
   });

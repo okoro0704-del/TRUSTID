@@ -10,6 +10,8 @@ import {
 export type PolicyRule = {
   actions: string[];
   resources?: string[]; // if omitted, any resource under audience
+  /** Protocol binding. Not a wildcard over arbitrary resources. */
+  resourceBinding?: "ddi-pdi-capability";
   decision: ApprovalMode;
   limits?: AuthorityLimits;
   consequence?: ConsequenceLevel;
@@ -24,6 +26,46 @@ export type ActorPolicy = {
   rules: PolicyRule[];
   defaultDecision?: ApprovalMode;
 };
+
+const DDI_PDI_CAPABILITY =
+  /^(identity|communication|data|jobs|distribution|value|intelligence)\.[A-Za-z][A-Za-z0-9_]*$/;
+
+/** Canonical DDI resource: ddi:pdi:<infrastructureId>:<capability>, action === capability. */
+export function ddiPdiCapabilityBinding(action: string, resource: string): boolean {
+  if (!DDI_PDI_CAPABILITY.test(action)) return false;
+  const prefix = "ddi:pdi:";
+  const suffix = `:${action}`;
+  if (!resource.startsWith(prefix) || !resource.endsWith(suffix)) return false;
+  const infrastructureId = resource.slice(prefix.length, resource.length - suffix.length);
+  return infrastructureId.length > 0 && !infrastructureId.startsWith(":") && !infrastructureId.endsWith(":");
+}
+
+/**
+ * Built-in protocol policy. Any application actor may ask the Digi owner.
+ * Matching does not grant access; the decision is ASK_OWNER.
+ */
+export const DDI_PDI_APPLICATION_POLICY: ActorPolicy = {
+  actorType: "app",
+  actorId: "*",
+  audience: "ddi",
+  defaultDecision: APPROVAL_MODES.DENY,
+  rules: [
+    {
+      actions: [],
+      resourceBinding: "ddi-pdi-capability",
+      decision: APPROVAL_MODES.ASK_OWNER,
+      consequence: CONSEQUENCE_LEVELS.LOW,
+      oneTime: false,
+    },
+  ],
+};
+
+/** Production keeps only the PDI protocol policy. The twin fixture stays non-production. */
+export function digiAuthorityPolicies(production: boolean): ActorPolicy[] {
+  return production
+    ? [DDI_PDI_APPLICATION_POLICY]
+    : [DDI_PDI_APPLICATION_POLICY, DIGITAL_TWIN_MRFUNDZMAN_POLICY];
+}
 
 /** Reference Digital Twin policy for Mr FundzMan (fixture, not global). */
 export const DIGITAL_TWIN_MRFUNDZMAN_POLICY: ActorPolicy = {
@@ -105,10 +147,11 @@ export function evaluateActorPolicy(
   policy: ActorPolicy,
   input: { actor: ActorRef; action: string; audience: string; resource: string }
 ): PolicyMatch {
-  if (
-    policy.actorType !== input.actor.type ||
-    policy.actorId !== input.actor.id
-  ) {
+  const sameActor =
+    policy.actorId === "*"
+      ? policy.actorType === input.actor.type
+      : policy.actorType === input.actor.type && policy.actorId === input.actor.id;
+  if (!sameActor) {
     return {
       decision: APPROVAL_MODES.DENY,
       limits: {},
@@ -128,8 +171,12 @@ export function evaluateActorPolicy(
   }
 
   for (const rule of policy.rules) {
-    if (!rule.actions.includes(input.action)) continue;
-    if (rule.resources && !rule.resources.includes(input.resource)) continue;
+    if (rule.resourceBinding === "ddi-pdi-capability") {
+      if (!ddiPdiCapabilityBinding(input.action, input.resource)) continue;
+    } else {
+      if (!rule.actions.includes(input.action)) continue;
+      if (rule.resources && !rule.resources.includes(input.resource)) continue;
+    }
     return {
       decision: rule.decision,
       limits: { ...(rule.limits ?? {}) },
