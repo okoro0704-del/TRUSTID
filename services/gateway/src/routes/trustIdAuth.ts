@@ -27,7 +27,6 @@ export async function trustIdAuthRoutes(fastify: FastifyInstance) {
     "/api/v1/trustid/auth",
     async (request: FastifyRequest<{ Body: AuthBody }>, reply: FastifyReply) => {
       const {
-        fullName,
         faceVectorPayload,
         livenessToken,
         deviceFingerprint,
@@ -91,37 +90,13 @@ export async function trustIdAuthRoutes(fastify: FastifyInstance) {
         return createTrustIdSession(existingTrustId, reply, fastify);
       }
 
-      const client = await pg.connect();
-      try {
-        await client.query("BEGIN");
-
-        const regResult = await client.query<{ trust_id: string }>(
-          `INSERT INTO portal.trust_id_registry (full_name) VALUES ($1) RETURNING trust_id`,
-          [fullName || "Sovereign Identity"],
-        );
-        const newTrustId = regResult.rows[0]!.trust_id;
-
-        await client.query(
-          `INSERT INTO portal.biometric_vectors (trust_id, face_embedding, liveness_score)
-           VALUES ($1, $2::vector, $3)`,
-          [newTrustId, vectorString, 0.99],
-        );
-
-        await client.query(
-          `INSERT INTO portal.trusted_devices (trust_id, device_fingerprint, device_name, is_master_device, status)
-           VALUES ($1, $2, $3, TRUE, 'ACTIVE')`,
-          [newTrustId, deviceFingerprint, deviceName || "Master Device"],
-        );
-
-        await client.query("COMMIT");
-        return createTrustIdSession(newTrustId, reply, fastify, 201);
-      } catch (error) {
-        await client.query("ROLLBACK");
-        request.log.error(error);
-        return reply.status(500).send({ error: "Failed to enroll sovereign identity." });
-      } finally {
-        client.release();
-      }
+      // Identity creation is owned by the API's canonical duplicate-enrollment gate
+      // (serialized ANN retrieval + exact rerank). A Top-1 check here is neither
+      // serialized nor reranked, so this route must never create identities.
+      return reply.status(409).send({
+        error: "ENROLLMENT_REQUIRES_CANONICAL_GATE",
+        message: "No matching identity. Enroll through POST /v1/identity/register-trust-id.",
+      });
     },
   );
 }

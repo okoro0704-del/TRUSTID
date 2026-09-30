@@ -8,7 +8,7 @@ import {
   type TrustIdAccessLevel,
 } from "@trustid/shared";
 import { prisma } from "../../db/client.js";
-import { commitName, deviceFingerprintHash, newTrustId } from "../../lib/crypto.js";
+import { deviceFingerprintHash } from "../../lib/crypto.js";
 import { recordAudit } from "../audit/service.js";
 import {
   assertInstallAvailableForNewTrustId,
@@ -20,6 +20,7 @@ import { createSession } from "../sessions/service.js";
 import { biometricMatcher } from "./matcher.js";
 import type { BiometricMatchResult } from "./matcher.js";
 import type { BiometricPayload } from "./schemas.js";
+import { createBiometricIdentity } from "./enrollment-gate.js";
 import { isAiVectorPayload } from "./vector-matcher.js";
 
 export type MultiModalPayload = {
@@ -232,56 +233,25 @@ export async function matchMultiModalFusion(input: {
   };
 }
 
-/** Zero-UI auto-enroll: create Trust ID + enroll captured template(s). */
-export async function autoEnrollFromBiometrics(input: {
+type AutoEnrollInput = {
   payload: MultiModalPayload;
   installId?: string;
   ip?: string;
   userAgent?: string;
-}) {
+};
+
+/** Zero-UI auto-enroll: create Trust ID + enroll captured template(s). */
+export async function autoEnrollFromBiometrics(input: AutoEnrollInput) {
   if (input.installId) {
     await assertInstallAvailableForNewTrustId(input.installId);
   }
 
-  let trustId = newTrustId();
-  for (let i = 0; i < 5; i++) {
-    const clash = await prisma.user.findUnique({ where: { trustId } });
-    if (!clash) break;
-    trustId = newTrustId();
-  }
-
-  const nameCommit = commitName("Trust", "ID");
-  const user = await prisma.user.create({
-    data: {
-      trustId,
-      status: "active",
-      profile: {
-        create: {
-          nameCommitment: nameCommit.nameCommitment,
-          nameSalt: nameCommit.nameSalt,
-        },
-      },
-    },
+  const { user, trustId } = await createBiometricIdentity({
+    face: input.payload.face,
+    fingerprint: input.payload.fingerprint,
+    ip: input.ip,
+    userAgent: input.userAgent,
   });
-
-  if (input.payload.face) {
-    await biometricMatcher.enrollTemplate({
-      userId: user.id,
-      trustId: user.trustId,
-      biometric: input.payload.face,
-      ip: input.ip,
-      userAgent: input.userAgent,
-    });
-  }
-  if (input.payload.fingerprint) {
-    await biometricMatcher.enrollTemplate({
-      userId: user.id,
-      trustId: user.trustId,
-      biometric: input.payload.fingerprint,
-      ip: input.ip,
-      userAgent: input.userAgent,
-    });
-  }
 
   // First terminal becomes Primary / Master so later devices can request approval.
   const masterDevice = await prisma.device.create({
@@ -538,11 +508,16 @@ export async function ambientSignInAndSession(input: {
       isFingerprintMatched: fusion.isFingerprintMatched,
     };
   } catch (err) {
-    // No primary device yet (legacy accounts) — allow ambient session once.
-    const identity = await getDashboardIdentity(fusion.userId);
-    const { token } = await createSession({
+    // Fail closed: identity assurance on an unknown device is not session
+    // authorization. Approval infrastructure failure never mints a session.
+    await recordAudit({
+      type: AUDIT_EVENTS.AMBIENT_SIGNIN_FAILED,
       userId: fusion.userId,
-      kind: "ambient",
+      actorType: "system",
+      metadata: {
+        reason: "master_approval_unavailable",
+        matchedModality: fusion.matchedModality,
+      },
       ip: input.ip,
       userAgent: input.userAgent,
     });
@@ -550,12 +525,12 @@ export async function ambientSignInAndSession(input: {
       matched: true as const,
       enrolled: false,
       fusion,
-      sessionToken: token,
-      identity,
       trustId: fusion.trustId,
-      accessLevel: fusion.accessLevel,
+      accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
       isMasterDevice: false,
-      offerSaveDeviceKey: true,
+      needsMasterApproval: true,
+      approvalUnavailable: true,
+      offerSaveDeviceKey: false,
       fusionScore: fusion.fusionScore,
       faceMatchScore: fusion.faceMatchScore,
       fingerprintMatchScore: fusion.fingerprintMatchScore,
@@ -565,7 +540,7 @@ export async function ambientSignInAndSession(input: {
       error:
         err instanceof Error
           ? `Master approval unavailable: ${err.message}`
-          : undefined,
+          : "Master approval unavailable",
     };
   }
 }

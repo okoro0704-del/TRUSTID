@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { BiometricEvalCollectorPage } from "./pages/internal/BiometricEvalCollector";
 import { SecurePage } from "./pages/Secure";
@@ -25,6 +26,11 @@ import { AccountPage } from "./pages/trust/Account";
 import { IdentityPage } from "./pages/trust/Identity";
 import { ControlCenterPage } from "./pages/trust/ControlCenter";
 
+/** Development builds only; production bundles never include the lab dashboard. */
+const AssuranceLabPage = import.meta.env.DEV
+  ? lazy(() => import("./pages/internal/AssuranceLab"))
+  : null;
+
 export function App() {
   return (
     <Routes>
@@ -44,6 +50,16 @@ export function App() {
         path="/internal/biometric-eval"
         element={<BiometricEvalCollectorPage />}
       />
+      {AssuranceLabPage ? (
+        <Route
+          path="/internal/assurance-lab"
+          element={
+            <Suspense fallback={null}>
+              <AssuranceLabPage />
+            </Suspense>
+          }
+        />
+      ) : null}
       <Route path="/dashboard" element={<TrustCenterLayout />}>
         <Route index element={<OverviewPage />} />
         <Route path="apps" element={<AppLockerPage />} />

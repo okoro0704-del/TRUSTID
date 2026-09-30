@@ -487,6 +487,15 @@ export const BIOMETRIC_HNSW_EF_SEARCH_DEFAULT = 64;
 export const BIOMETRIC_ANN_QUERY_TIMEOUT_MS = 2_000;
 
 /**
+ * Conservative 1:N ambiguity guard. If the two best distinct identities both
+ * pass the operating threshold and are separated by no more than this cosine
+ * distance, identity resolution fails closed as AMBIGUOUS_MATCH.
+ *
+ * This is a safety policy, not an empirically calibrated recognition metric.
+ */
+export const BIOMETRIC_AMBIGUITY_MARGIN_DISTANCE = 0.02;
+
+/**
  * Threshold governance — production acceptance must not pretend calibration exists.
  * Set BIOMETRIC_REQUIRE_CALIBRATED_THRESHOLD=true to fail closed until calibrated.
  */

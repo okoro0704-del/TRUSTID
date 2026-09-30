@@ -27,6 +27,8 @@ apps/device/ios/App/Podfile.lock
 *.tsbuildinfo
 artifacts/biometric-evaluation/subjects/
 artifacts/biometric-evaluation/exports/
+# Assurance Lab participant evidence, reports, and local benchmark output
+artifacts/assurance-lab/
 TrustID-debug.apk
 artifacts/apk/
 # Copied from node_modules by scripts/copy-ort-wasm.mjs at build/dev time

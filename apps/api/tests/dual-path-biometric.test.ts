@@ -6,6 +6,10 @@ import { face512, facePayload } from "./helpers/face.js";
 import { __clearHotVectorCacheForTests } from "../src/modules/trust-id/vector-hot-cache.js";
 import { MATCH_STRATEGIES } from "../src/modules/trust-id/fast-vector-match.js";
 
+function basis(index: number): number[] {
+  return Array.from({ length: 512 }, (_, i) => (i === index ? 1 : 0));
+}
+
 describe("1:1 vs 1:N dual-path biometric login", () => {
   let app: Awaited<ReturnType<typeof buildApp>>;
 
@@ -89,7 +93,8 @@ describe("1:1 vs 1:N dual-path biometric login", () => {
   });
 
   it("falls back to 1:N when cachedTrustId face does not match", async () => {
-    const vectorB = face512(99);
+    const vectorA = basis(0);
+    const vectorB = basis(1);
     const installA = "88888888-8888-4888-8888-888888888888";
     const installB = "99999999-9999-4999-8999-999999999999";
 
@@ -97,7 +102,7 @@ describe("1:1 vs 1:N dual-path biometric login", () => {
       method: "POST",
       url: "/v1/identity/register-trust-id",
       payload: {
-        face: facePayload(11),
+        face: facePayload(11, { vector: vectorA }),
         installId: installA,
         deviceFingerprint: "hw-switch-a-device-fingerprint-03",
       },
@@ -106,7 +111,7 @@ describe("1:1 vs 1:N dual-path biometric login", () => {
       method: "POST",
       url: "/v1/identity/register-trust-id",
       payload: {
-        face: facePayload(99),
+        face: facePayload(99, { vector: vectorB }),
         installId: installB,
         deviceFingerprint: "hw-switch-b-device-fingerprint-04",
       },

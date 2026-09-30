@@ -1,6 +1,7 @@
 import {
   BIOMETRIC_AI_EMBEDDING_DIMS,
   BIOMETRIC_AI_MODEL_NAME,
+  BIOMETRIC_AI_MODEL_VERSION,
   BIOMETRIC_ERROR_CODES,
   BIOMETRIC_MODALITIES,
   BIOMETRIC_PGVECTOR_MAX_DISTANCE,
@@ -237,7 +238,7 @@ export async function handleFastVectorMatch(
         vector,
         confidence: body.confidence,
         modelName: body.modelName ?? BIOMETRIC_AI_MODEL_NAME,
-        modelVersion: body.modelVersion,
+        modelVersion: body.modelVersion ?? BIOMETRIC_AI_MODEL_VERSION,
         deviceFingerprint: body.deviceFingerprint ?? body.deviceId,
       },
       deviceFingerprint: body.deviceFingerprint ?? body.deviceId,
@@ -250,8 +251,22 @@ export async function handleFastVectorMatch(
   const durationMs = performance.now() - started;
 
   if (!result.matched) {
+    if (result.errorCode === BIOMETRIC_ERROR_CODES.AMBIGUOUS_MATCH) {
+      return {
+        status: "AMBIGUOUS" as const,
+        strategy: MATCH_STRATEGIES.GLOBAL_1_N,
+        durationMs,
+        canRegister: false,
+        errorCode: result.errorCode,
+        message:
+          "More than one close identity candidate was found. Use stronger verification or account recovery.",
+        thresholdStatus: BIOMETRIC_THRESHOLD_POLICY.status,
+      };
+    }
     if (
-      result.errorCode === BIOMETRIC_ERROR_CODES.BIOMETRIC_SERVICE_UNAVAILABLE
+      result.errorCode === BIOMETRIC_ERROR_CODES.BIOMETRIC_SERVICE_UNAVAILABLE ||
+      result.errorCode === BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_VERSION_MISMATCH ||
+      result.errorCode === BIOMETRIC_ERROR_CODES.BIOMETRIC_TEMPLATE_LEGACY
     ) {
       return {
         status: "SERVICE_UNAVAILABLE" as const,

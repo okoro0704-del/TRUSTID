@@ -23,7 +23,6 @@ import {
 import {
   approveMasterChallenge,
   ambientSignInAndSession,
-  biometricMatcher,
   issueMasterChallenge,
   registerMasterDevice,
   verifyBiometricAndSession,
@@ -33,13 +32,19 @@ import {
   bindMasterDeviceForUser,
   registerTrustIdWithMasterDevice,
 } from "../modules/trust-id/register.js";
+import { attachBiometricTemplate } from "../modules/trust-id/enrollment-gate.js";
 import { handleFastVectorMatch } from "../modules/trust-id/fast-vector-match.js";
 import { registerDevicePushToken } from "../modules/notifications/push.js";
 import { mintElfComCapabilityJwt } from "../modules/elfcom/capability.js";
 import { loginOptions, verifyLogin } from "../modules/authentication/webauthn.js";
 import { getInstallOccupancy } from "../modules/authentication/device-install.js";
 import { prisma } from "../db/client.js";
-import { BIOMETRIC_MODALITIES, DEVICE_STATUS } from "@trustid/shared";
+import {
+  BIOMETRIC_AI_MODEL_NAME,
+  BIOMETRIC_AI_MODEL_VERSION,
+  BIOMETRIC_MODALITIES,
+  DEVICE_STATUS,
+} from "@trustid/shared";
 import type { AuthenticationResponseJSON } from "@simplewebauthn/server";
 
 function httpError(err: unknown, reply: import("fastify").FastifyReply) {
@@ -103,8 +108,8 @@ export async function trustIdRoutes(app: FastifyInstance) {
       modality: BIOMETRIC_MODALITIES.FACE,
       vector: body.faceVector,
       confidence: body.confidence,
-      modelName: body.modelName,
-      modelVersion: body.modelVersion,
+      modelName: body.modelName ?? BIOMETRIC_AI_MODEL_NAME,
+      modelVersion: body.modelVersion ?? BIOMETRIC_AI_MODEL_VERSION,
       deviceFingerprint: body.deviceFingerprint,
     };
 
@@ -514,7 +519,11 @@ export async function trustIdRoutes(app: FastifyInstance) {
     }
   });
 
-  /** Enroll encrypted biometric template for 1:N matching (post-registration). */
+  /**
+   * Enroll a template for 1:N matching on the signed-in identity (post-registration).
+   * Faces go through the canonical duplicate gate; a face that already belongs to
+   * another identity is refused (409), and an unavailable check fails closed (503).
+   */
   app.post("/v1/trust-id/enroll-biometric", async (req, reply) => {
     await requireSession(req, reply);
     if (!req.auth) return;
@@ -522,7 +531,7 @@ export async function trustIdRoutes(app: FastifyInstance) {
       .object({ biometric: verifyBiometricRequestSchema.shape.biometric })
       .parse(req.body ?? {});
     try {
-      const enrolled = await biometricMatcher.enrollTemplate({
+      const enrolled = await attachBiometricTemplate({
         userId: req.auth.userId,
         biometric: body.biometric,
         ...clientMeta(req),

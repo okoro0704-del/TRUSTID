@@ -100,7 +100,7 @@ describe("trustIdAuthRoutes", () => {
     expect(body.token).toBe("jwt-trust-existing");
   });
 
-  it("enrolls new account when no vector match exists", async () => {
+  it("refuses to create an identity outside the canonical enrollment gate", async () => {
     const { app, calls } = makeApp({ identityDistance: null, knownDevice: false });
     await trustIdAuthRoutes(app);
     await app.ready();
@@ -117,10 +117,11 @@ describe("trustIdAuthRoutes", () => {
       },
     });
 
-    expect(res.statusCode).toBe(201);
+    expect(res.statusCode).toBe(409);
     const body = res.json();
-    expect(body.status).toBe("AUTHENTICATED");
-    expect(body.trustId).toBe("trust-new-1");
-    expect(calls.some((q) => q.includes("INSERT INTO portal.trust_id_registry"))).toBe(true);
+    expect(body.error).toBe("ENROLLMENT_REQUIRES_CANONICAL_GATE");
+    expect(body.trustId).toBeUndefined();
+    expect(body.token).toBeUndefined();
+    expect(calls.some((q) => q.includes("INSERT INTO"))).toBe(false);
   });
 });

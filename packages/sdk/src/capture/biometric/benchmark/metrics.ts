@@ -120,7 +120,7 @@ export function buildPairScores(
   return pairs;
 }
 
-function ratesAtThreshold(
+export function ratesAtThreshold(
   genuine: number[],
   impostor: number[],
   thrSim: number,
@@ -221,12 +221,6 @@ export function computeVerificationReport(
     split?: string;
   } = {},
 ): VerificationReport {
-  const operatingDistance = options.operatingThresholdDistance ?? 0.35;
-  const operatingSim = 1 - operatingDistance;
-  const farTargets = options.farTargets ?? [
-    1e-2, 1e-3, 1e-4, 1e-5, 1e-6,
-  ];
-
   const working =
     options.split != null
       ? filterDatasetBySplit(dataset, options.split)
@@ -236,49 +230,113 @@ export function computeVerificationReport(
   const pairs = buildPairScores(working, {
     maxImpostorPairs: options.maxImpostorPairs,
   });
-  const genuine = pairs.filter((p) => p.genuine).map((p) => p.similarity);
-  const impostor = pairs.filter((p) => !p.genuine).map((p) => p.similarity);
+  return computeVerificationReportFromScores({
+    datasetName: working.name,
+    modelName: working.modelName,
+    modelVersion: working.modelVersion,
+    subjectCount,
+    imageCount: working.samples.length,
+    genuineSimilarities: pairs.filter((p) => p.genuine).map((p) => p.similarity),
+    impostorSimilarities: pairs.filter((p) => !p.genuine).map((p) => p.similarity),
+    syntheticPlumbingOnly: working.syntheticPlumbingOnly,
+    operatingThresholdDistance: options.operatingThresholdDistance,
+    farTargets: options.farTargets,
+    split: options.split,
+  });
+}
+
+/** Count of values >= t in an ascending-sorted array. */
+function countAtLeast(sortedAsc: number[], t: number): number {
+  let lo = 0;
+  let hi = sortedAsc.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (sortedAsc[mid]! < t) lo = mid + 1;
+    else hi = mid;
+  }
+  return sortedAsc.length - lo;
+}
+
+const ROC_MAX_POINTS = 500;
+
+/**
+ * Verification report from already-labelled genuine/impostor similarity scores.
+ * Used by computeVerificationReport and by callers (e.g. the Assurance Lab)
+ * that generate pairs under their own documented sampling policy.
+ */
+export function computeVerificationReportFromScores(input: {
+  datasetName: string;
+  modelName: string;
+  modelVersion: number;
+  subjectCount: number;
+  imageCount: number;
+  genuineSimilarities: number[];
+  impostorSimilarities: number[];
+  syntheticPlumbingOnly?: boolean;
+  operatingThresholdDistance?: number;
+  farTargets?: number[];
+  split?: string;
+}): VerificationReport {
+  const operatingDistance = input.operatingThresholdDistance ?? 0.35;
+  const operatingSim = 1 - operatingDistance;
+  const farTargets = input.farTargets ?? [1e-2, 1e-3, 1e-4, 1e-5, 1e-6];
+  const genuine = input.genuineSimilarities;
+  const impostor = input.impostorSimilarities;
   const genuineDistances = genuine.map((s) => 1 - s);
   const impostorDistances = impostor.map((s) => 1 - s);
 
-  const status = working.syntheticPlumbingOnly
+  const status = input.syntheticPlumbingOnly
     ? "SYNTHETIC_PLUMBING_ONLY"
     : genuine.length < 2 || impostor.length < 10
       ? "INSUFFICIENT_DATA"
       : "MEASURED";
 
-  const thresholds = [...new Set([...genuine, ...impostor])]
-    .sort((a, b) => b - a)
-    .slice(0, 500);
-
-  const roc: FarFrrPoint[] = thresholds.map((t) => {
-    const r = ratesAtThreshold(genuine, impostor, t);
+  const genuineAsc = [...genuine].sort((a, b) => a - b);
+  const impostorAsc = [...impostor].sort((a, b) => a - b);
+  const pointAt = (t: number): FarFrrPoint => {
+    const tp = countAtLeast(genuineAsc, t);
+    const fp = countAtLeast(impostorAsc, t);
+    const fn = genuine.length - tp;
+    const tn = impostor.length - fp;
     return {
       thresholdSimilarity: t,
       thresholdDistance: 1 - t,
-      far: r.far,
-      frr: r.frr,
-      tar: r.tar,
-      trr: r.trr,
-      tp: r.tp,
-      tn: r.tn,
-      fp: r.fp,
-      fn: r.fn,
+      far: impostor.length === 0 ? NaN : fp / impostor.length,
+      frr: genuine.length === 0 ? NaN : fn / genuine.length,
+      tar: genuine.length === 0 ? NaN : tp / genuine.length,
+      trr: impostor.length === 0 ? NaN : tn / impostor.length,
+      tp,
+      tn,
+      fp,
+      fn,
     };
-  });
+  };
 
+  const allThresholds = [...new Set([...genuine, ...impostor])].sort((a, b) => b - a);
+
+  // EER over every observed threshold, not only the ROC display subset.
   let eer: number | null = null;
   let eerThr: number | null = null;
   let bestDiff = Infinity;
-  for (const p of roc) {
+  for (const t of allThresholds) {
+    const p = pointAt(t);
     if (!Number.isFinite(p.far) || !Number.isFinite(p.frr)) continue;
     const d = Math.abs(p.far - p.frr);
     if (d < bestDiff) {
       bestDiff = d;
       eer = (p.far + p.frr) / 2;
-      eerThr = p.thresholdSimilarity;
+      eerThr = t;
     }
   }
+
+  // ROC display points span the full observed range (evenly subsampled when large).
+  const rocThresholds =
+    allThresholds.length <= ROC_MAX_POINTS
+      ? allThresholds
+      : Array.from({ length: ROC_MAX_POINTS }, (_, i) =>
+          allThresholds[Math.round((i * (allThresholds.length - 1)) / (ROC_MAX_POINTS - 1))]!,
+        );
+  const roc: FarFrrPoint[] = rocThresholds.map(pointAt);
 
   const operatingPoints: OperatingPointReport[] = farTargets.map((targetFar) => {
     const est = farEstimability(impostor.length, targetFar);
@@ -329,11 +387,11 @@ export function computeVerificationReport(
 
   return {
     kind: "BIOMETRIC_1_1_VERIFICATION",
-    datasetName: working.name,
-    modelName: working.modelName,
-    modelVersion: working.modelVersion,
-    subjectCount,
-    imageCount: working.samples.length,
+    datasetName: input.datasetName,
+    modelName: input.modelName,
+    modelVersion: input.modelVersion,
+    subjectCount: input.subjectCount,
+    imageCount: input.imageCount,
     genuineCount: genuine.length,
     impostorCount: impostor.length,
     genuineSimilarities: genuine,
@@ -358,7 +416,7 @@ export function computeVerificationReport(
     trrAtThreshold: Number.isFinite(atOp.trr) ? atOp.trr : null,
     operatingThresholdSimilarity: operatingSim,
     operatingThresholdDistance: operatingDistance,
-    split: options.split,
+    split: input.split,
     status,
   };
 }

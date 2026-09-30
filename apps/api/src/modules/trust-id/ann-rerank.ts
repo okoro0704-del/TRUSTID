@@ -62,11 +62,28 @@ export function exactRerankCandidates(
 export function decideAfterRerank(
   ranked: RerankResult[],
   thresholdDistance: number,
-): { accepted: RerankResult | null; reason: "accept" | "no_match" | "empty" } {
+  ambiguityMarginDistance = 0,
+): {
+  accepted: RerankResult | null;
+  reason: "accept" | "ambiguous" | "no_match" | "empty";
+  competing?: RerankResult;
+} {
   if (!ranked.length) return { accepted: null, reason: "empty" };
   const best = ranked[0]!;
-  if (best.distance <= thresholdDistance) {
-    return { accepted: best, reason: "accept" };
+  if (best.distance > thresholdDistance) {
+    return { accepted: null, reason: "no_match" };
   }
-  return { accepted: null, reason: "no_match" };
+
+  const competing = ranked.find(
+    (candidate) => candidate.userId !== best.userId,
+  );
+  if (
+    competing &&
+    competing.distance <= thresholdDistance &&
+    competing.distance - best.distance <= ambiguityMarginDistance
+  ) {
+    return { accepted: null, reason: "ambiguous", competing };
+  }
+
+  return { accepted: best, reason: "accept" };
 }

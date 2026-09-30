@@ -27,6 +27,8 @@ import { bbsRoutes } from "./routes/bbs.js";
 import { trustIdRoutes } from "./routes/trust-id.js";
 import { baasRoutes } from "./routes/baas.js";
 import { biometricEvalRoutes } from "./routes/biometric-eval.js";
+import { biometricGovernanceRoutes } from "./routes/biometric-governance.js";
+import { assuranceLabRoutes } from "./routes/assurance-lab.js";
 import { registerRealtimeGateway } from "./modules/realtime/index.js";
 import {
   getBaasBindings,
@@ -205,6 +207,8 @@ export async function buildApp() {
   await app.register(baasRoutes);
   await app.register(wipeRoutes);
   await app.register(biometricEvalRoutes);
+  await app.register(biometricGovernanceRoutes);
+  await app.register(assuranceLabRoutes);
 
   await registerRealtimeGateway(app);
 

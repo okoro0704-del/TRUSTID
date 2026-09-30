@@ -12,6 +12,7 @@ import {
   BIOMETRIC_AI_MODEL_NAME,
   BIOMETRIC_AI_MODEL_VERSION,
   BIOMETRIC_ALIGNMENT_VERSION,
+  BIOMETRIC_AMBIGUITY_MARGIN_DISTANCE,
   BIOMETRIC_ANN_QUERY_TIMEOUT_MS,
   BIOMETRIC_DETECTOR_VERSION,
   BIOMETRIC_ERROR_CODES,
@@ -39,6 +40,11 @@ import {
 } from "../../lib/pgvector.js";
 import { recordAudit } from "../audit/service.js";
 import type { BiometricPayload } from "./schemas.js";
+import {
+  assessDuplicateEnrollmentCandidates,
+  unavailableDuplicateEnrollmentAssessment,
+  type DuplicateEnrollmentAssessment,
+} from "./duplicate-enrollment.js";
 import {
   decideAfterRerank,
   exactRerankCandidates,
@@ -92,6 +98,9 @@ function isLegacyStoredTemplate(
 function parseStoredVector(embeddingJson: string): {
   vector: number[];
   modelName?: string;
+  modelVersion?: number;
+  embeddingDimensions?: number;
+  normalization?: string;
   gallery?: number[][];
   legacy: boolean;
 } {
@@ -123,12 +132,18 @@ function parseStoredVector(embeddingJson: string): {
         primary?: number[];
         gallery?: number[][];
         modelName?: string;
+        modelVersion?: number;
+        embeddingDimensions?: number;
+        normalization?: string;
       };
       if (obj.primary && Array.isArray(obj.primary)) {
         return {
           vector: obj.primary,
           gallery: obj.gallery,
           modelName: obj.modelName,
+          modelVersion: obj.modelVersion,
+          embeddingDimensions: obj.embeddingDimensions,
+          normalization: obj.normalization,
           legacy: isLegacyModelName(obj.modelName),
         };
       }
@@ -149,8 +164,19 @@ function normalizeVector(v: number[]): number[] {
       { statusCode: 400, errorCode: BIOMETRIC_ERROR_CODES.EMBEDDING_FAILED },
     );
   }
+  if (v.some((x) => !Number.isFinite(x))) {
+    throw Object.assign(new Error("Embedding contains non-finite values"), {
+      statusCode: 400,
+      errorCode: BIOMETRIC_ERROR_CODES.EMBEDDING_FAILED,
+    });
+  }
   const norm = Math.sqrt(v.reduce((s, x) => s + x * x, 0));
-  if (norm === 0) return v;
+  if (!Number.isFinite(norm) || norm <= 1e-12) {
+    throw Object.assign(new Error("Embedding norm must be finite and non-zero"), {
+      statusCode: 400,
+      errorCode: BIOMETRIC_ERROR_CODES.EMBEDDING_FAILED,
+    });
+  }
   return v.map((x) => x / norm);
 }
 
@@ -286,6 +312,21 @@ export class PgVectorMatcherService {
       modality === "face"
         ? BIOMETRIC_AI_MODEL_NAME
         : modelName || "fingerprint_keystore_v1";
+    const resolvedModelVersion =
+      input.modelVersion ??
+      input.biometric.modelVersion ??
+      BIOMETRIC_AI_MODEL_VERSION;
+    if (modality === "face" && resolvedModelVersion !== BIOMETRIC_AI_MODEL_VERSION) {
+      throw Object.assign(
+        new Error(
+          `Face enrollment model version ${resolvedModelVersion} is incompatible with ${BIOMETRIC_AI_MODEL_VERSION}.`,
+        ),
+        {
+          statusCode: 400,
+          errorCode: BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_VERSION_MISMATCH,
+        },
+      );
+    }
 
     const vector = resolveVector(input.biometric);
     const gallery =
@@ -299,10 +340,10 @@ export class PgVectorMatcherService {
       primary: vector,
       gallery,
       modelName: resolvedModelName,
-      modelVersion:
-        input.modelVersion ??
-        input.biometric.modelVersion ??
-        BIOMETRIC_AI_MODEL_VERSION,
+      modelVersion: resolvedModelVersion,
+      embeddingDimensions: BIOMETRIC_AI_EMBEDDING_DIMS,
+      normalization: "L2",
+      distanceMetric: "cosine_distance",
       detectorVersion: BIOMETRIC_DETECTOR_VERSION,
       alignmentVersion: BIOMETRIC_ALIGNMENT_VERSION,
       preprocessingVersion: BIOMETRIC_PREPROCESSING_VERSION,
@@ -367,7 +408,50 @@ export class PgVectorMatcherService {
   }
 
   /**
-   * 1:1 verification against a claimed Trust ID — never scans the gallery.
+   * Enrollment-only duplicate check. This does not authenticate or merge a
+   * person; it only decides whether automatic identity creation may proceed.
+   */
+  async assessDuplicateEnrollment(input: {
+    biometric: BiometricPayload;
+    topK?: number;
+  }): Promise<DuplicateEnrollmentAssessment> {
+    if (
+      input.biometric.modality !== "face" ||
+      input.biometric.modelName !== BIOMETRIC_AI_MODEL_NAME ||
+      input.biometric.modelVersion !== BIOMETRIC_AI_MODEL_VERSION
+    ) {
+      return unavailableDuplicateEnrollmentAssessment(
+        "incompatible_or_missing_face_model_metadata",
+      );
+    }
+    const probe = resolveVector(input.biometric);
+    const topK = resolveTopK(input.topK ?? resolveAnnTopK());
+    const ann = await this.fetchAnnTopK(probe, input.biometric.modality, topK);
+    if (ann.status === "unavailable") {
+      return unavailableDuplicateEnrollmentAssessment(ann.reason);
+    }
+    const hot = await searchHotVectorCache(
+      probe,
+      operatingThresholdDistance(),
+    );
+    const candidates = [...ann.candidates];
+    if (hot && !candidates.some((candidate) => candidate.embeddingId === hot.embeddingId)) {
+      candidates.push({
+        embeddingId: hot.embeddingId,
+        userId: hot.userId,
+        trustId: hot.trustId,
+        annDistance: hot.distance,
+      });
+    }
+    return assessDuplicateEnrollmentCandidates(
+      exactRerankCandidates(probe, candidates),
+      operatingThresholdDistance(),
+      BIOMETRIC_AMBIGUITY_MARGIN_DISTANCE,
+    );
+  }
+
+  /**
+   * 1:1 verification against a claimed Trust ID - never scans the gallery.
    */
   async verifyOneToOne(input: {
     claimedTrustId: string;
@@ -405,6 +489,23 @@ export class PgVectorMatcherService {
       };
     }
 
+    if (
+      input.biometric.modality === "face" &&
+      (input.biometric.modelName !== BIOMETRIC_AI_MODEL_NAME ||
+        input.biometric.modelVersion !== BIOMETRIC_AI_MODEL_VERSION)
+    ) {
+      return {
+        matched: false,
+        mode,
+        accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
+        isMasterDevice: false,
+        errorCode: BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_VERSION_MISMATCH,
+        error: "Probe model metadata is missing or incompatible with the active face pipeline.",
+        durationMs: performance.now() - started,
+        thresholdStatus: BIOMETRIC_THRESHOLD_POLICY.status,
+      };
+    }
+
     const probe = resolveVector(input.biometric);
     const trustId = input.claimedTrustId.trim();
     if (!trustId) {
@@ -430,18 +531,27 @@ export class PgVectorMatcherService {
         userId: true,
         trustId: true,
         modelName: true,
+        modelVersion: true,
         embeddingJson: true,
       },
     });
 
-    if (!row || isLegacyStoredTemplate(row.modelName, row.embeddingJson)) {
+    if (
+      !row ||
+      isLegacyStoredTemplate(row.modelName, row.embeddingJson) ||
+      row.modelVersion !== BIOMETRIC_AI_MODEL_VERSION ||
+      input.biometric.modelVersion !== BIOMETRIC_AI_MODEL_VERSION ||
+      input.biometric.modelName !== BIOMETRIC_AI_MODEL_NAME
+    ) {
       return {
         matched: false,
         mode,
         accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
         isMasterDevice: false,
         errorCode: row
-          ? BIOMETRIC_ERROR_CODES.BIOMETRIC_TEMPLATE_LEGACY
+          ? row.modelVersion !== BIOMETRIC_AI_MODEL_VERSION
+            ? BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_VERSION_MISMATCH
+            : BIOMETRIC_ERROR_CODES.BIOMETRIC_TEMPLATE_LEGACY
           : BIOMETRIC_ERROR_CODES.NO_MATCH,
         durationMs: performance.now() - started,
         thresholdStatus: BIOMETRIC_THRESHOLD_POLICY.status,
@@ -554,31 +664,29 @@ export class PgVectorMatcherService {
       };
     }
 
+    if (
+      input.biometric.modality === "face" &&
+      (input.biometric.modelName !== BIOMETRIC_AI_MODEL_NAME ||
+        input.biometric.modelVersion !== BIOMETRIC_AI_MODEL_VERSION)
+    ) {
+      return {
+        matched: false,
+        mode,
+        accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
+        isMasterDevice: false,
+        errorCode: BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_VERSION_MISMATCH,
+        error: "Probe model metadata is missing or incompatible with the active face pipeline.",
+        durationMs: performance.now() - started,
+        thresholdStatus: BIOMETRIC_THRESHOLD_POLICY.status,
+      };
+    }
+
     const probe = resolveVector(input.biometric);
 
     // Bounded hot cache only (cap 256) — not a full-gallery scan
+    // Bounded cache may contribute a candidate, but can never bypass
+    // gallery search, reranking, ambiguity handling, or the threshold decision.
     const hot = await searchHotVectorCache(probe, threshold);
-    if (hot && acceptsAtThreshold(hot.distance, threshold)) {
-      return this.finalizeIdentifyHit({
-        best: {
-          embeddingId: hot.embeddingId,
-          userId: hot.userId,
-          trustId: hot.trustId,
-          distance: hot.distance,
-        },
-        probe,
-        modality,
-        deviceFingerprint,
-        requireMasterAccess: input.requireMasterAccess,
-        started,
-        cacheHit: true,
-        topK,
-        candidateCount: 1,
-        ip: input.ip,
-        userAgent: input.userAgent,
-      });
-    }
-
     const ann = await this.fetchAnnTopK(probe, modality, topK);
     if (ann.status === "unavailable") {
       logMatchEvent("error", "ann_unavailable_fail_closed", {
@@ -615,8 +723,21 @@ export class PgVectorMatcherService {
       };
     }
 
-    const ranked = exactRerankCandidates(probe, ann.candidates);
-    const decision = decideAfterRerank(ranked, threshold);
+    const candidates = [...ann.candidates];
+    if (hot && !candidates.some((candidate) => candidate.embeddingId === hot.embeddingId)) {
+      candidates.push({
+        embeddingId: hot.embeddingId,
+        userId: hot.userId,
+        trustId: hot.trustId,
+        annDistance: hot.distance,
+      });
+    }
+    const ranked = exactRerankCandidates(probe, candidates);
+    const decision = decideAfterRerank(
+      ranked,
+      threshold,
+      BIOMETRIC_AMBIGUITY_MARGIN_DISTANCE,
+    );
 
     if (!decision.accepted) {
       await recordAudit({
@@ -624,7 +745,10 @@ export class PgVectorMatcherService {
         actorType: "system",
         metadata: {
           modality,
-          reason: "no_ai_vector_match",
+          reason:
+            decision.reason === "ambiguous"
+              ? "ambiguous_ai_vector_match"
+              : "no_ai_vector_match",
           candidateCount: ranked.length,
           topK,
           bestDistance: ranked[0]?.distance,
@@ -639,12 +763,15 @@ export class PgVectorMatcherService {
         accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
         isMasterDevice: false,
         durationMs: performance.now() - started,
-        cacheHit: false,
+        cacheHit: Boolean(hot),
         candidateCount: ranked.length,
         topK,
         distance: ranked[0]?.distance,
         thresholdStatus: BIOMETRIC_THRESHOLD_POLICY.status,
-        errorCode: BIOMETRIC_ERROR_CODES.NO_MATCH,
+        errorCode:
+          decision.reason === "ambiguous"
+            ? BIOMETRIC_ERROR_CODES.AMBIGUOUS_MATCH
+            : BIOMETRIC_ERROR_CODES.NO_MATCH,
       };
     }
 
@@ -694,11 +821,12 @@ export class PgVectorMatcherService {
     const durationMs = performance.now() - input.started;
     const stored = await prisma.biometricEmbedding.findUnique({
       where: { id: input.best.embeddingId },
-      select: { modelName: true, embeddingJson: true },
+      select: { modelName: true, modelVersion: true, embeddingJson: true },
     });
     if (
       !stored ||
-      isLegacyStoredTemplate(stored.modelName, stored.embeddingJson)
+      isLegacyStoredTemplate(stored.modelName, stored.embeddingJson) ||
+      stored.modelVersion !== BIOMETRIC_AI_MODEL_VERSION
     ) {
       return {
         matched: false,
@@ -794,7 +922,14 @@ export class PgVectorMatcherService {
     | { status: "unavailable"; reason: string }
   > {
     const rowsRaw = await prisma.biometricEmbedding.findMany({
-      where: { modality, status: "active" },
+      where: {
+        modality,
+        status: "active",
+        modelName:
+          modality === "face" ? BIOMETRIC_AI_MODEL_NAME : undefined,
+        modelVersion:
+          modality === "face" ? BIOMETRIC_AI_MODEL_VERSION : undefined,
+      },
       select: {
         id: true,
         userId: true,
@@ -841,7 +976,14 @@ export class PgVectorMatcherService {
       // Empty gallery → NO_MATCH (no ANN needed). Non-empty without ANN → fail closed
       // unless TRUSTID_SQLITE_ANN=1 (local Vitest only — bounded exact Top-K, never production).
       const activeCount = await prisma.biometricEmbedding.count({
-        where: { modality, status: "active" },
+        where: {
+          modality,
+          status: "active",
+          modelName:
+            modality === "face" ? BIOMETRIC_AI_MODEL_NAME : undefined,
+          modelVersion:
+            modality === "face" ? BIOMETRIC_AI_MODEL_VERSION : undefined,
+        },
       });
       if (activeCount === 0) {
         return { status: "ok", candidates: [] };
@@ -855,6 +997,11 @@ export class PgVectorMatcherService {
     const literal = toPgVectorLiteral(probe);
     const ef = resolveEfSearch(topK);
     const timeoutMs = annTimeoutMs();
+    const modelFilter =
+      modality === "face"
+        ? `AND be.model_name = '${BIOMETRIC_AI_MODEL_NAME}'
+           AND be.model_version = ${BIOMETRIC_AI_MODEL_VERSION}`
+        : "";
 
     try {
       await prisma.$executeRawUnsafe(
@@ -883,6 +1030,7 @@ export class PgVectorMatcherService {
         FROM biometric_embeddings be
         WHERE be.modality = '${modality}'
           AND be.status = 'active'
+          ${modelFilter}
           AND be.vector IS NOT NULL
         ORDER BY be.vector <=> '${literal}'::vector ASC
         LIMIT ${Math.floor(topK)}

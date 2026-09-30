@@ -83,6 +83,7 @@ describe("face template lifecycle", () => {
         modality: BIOMETRIC_MODALITIES.FACE,
         vector: aiVector512(42.0001),
         modelName: BIOMETRIC_AI_MODEL_NAME,
+        modelVersion: BIOMETRIC_AI_MODEL_VERSION,
       },
     });
     expect(verify.matched).toBe(true);
@@ -111,6 +112,7 @@ describe("face template lifecycle", () => {
         modality: BIOMETRIC_MODALITIES.FACE,
         vector: aiVector512(9999),
         modelName: BIOMETRIC_AI_MODEL_NAME,
+        modelVersion: BIOMETRIC_AI_MODEL_VERSION,
       },
     });
     expect(verify.matched).toBe(false);

@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./assurance-lab": {
+      "types": "./dist/capture/biometric/assurance-lab/index.d.ts",
+      "import": "./dist/capture/biometric/assurance-lab/index.js"
     }
   },
   "scripts": {
