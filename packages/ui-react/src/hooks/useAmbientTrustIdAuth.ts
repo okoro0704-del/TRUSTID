@@ -515,18 +515,6 @@ export function useAmbientTrustIdAuth(
     const ac = new AbortController();
     captureAbortRef.current = ac;
 
-    // Bound the entire attempt, including camera permission, model loading,
-    // and the network lookup. A timeout is not evidence of an unknown face.
-    const scanTimeout = window.setTimeout(() => {
-      enterServiceError(
-        runId,
-        "BIOMETRIC_SERVICE_UNAVAILABLE — Face scan timed out before a reusable face template was created. Please try again.",
-      );
-    }, 30_000);
-    ac.signal.addEventListener("abort", () => window.clearTimeout(scanTimeout), {
-      once: true,
-    });
-
     setPhaseSafe("PROMPTING", runId);
     setError(null);
     setApprovalPollToken(null);
@@ -606,6 +594,19 @@ export function useAmbientTrustIdAuth(
       modelReady: true,
       stage: "vector_created",
       errorCode: null,
+    });
+
+    // Bound the identification request only. Model download has its own
+    // warm-up budget; a 30s cap here was aborting ArcFace while it was
+    // still pending. A timeout is not evidence of an unknown face.
+    const scanTimeout = window.setTimeout(() => {
+      enterServiceError(
+        runId,
+        "BIOMETRIC_SERVICE_UNAVAILABLE — Face scan timed out before a reusable face template was created. Please try again.",
+      );
+    }, 30_000);
+    ac.signal.addEventListener("abort", () => window.clearTimeout(scanTimeout), {
+      once: true,
     });
 
     let lookup;
