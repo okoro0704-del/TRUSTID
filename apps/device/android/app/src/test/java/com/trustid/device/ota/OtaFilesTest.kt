@@ -12,11 +12,12 @@ class OtaFilesTest {
   private fun names(dir: File) = dir.list()!!.sorted()
 
   @Test
-  fun removesInstalledOlderAndPartialTrustIdApksOnly() {
+  fun removesInstalledAndOlderTrustIdApksOnly() {
     val dir = tmp.newFolder(OtaFiles.DIR_NAME)
     for (name in listOf(
       "TrustID-1.apk",
       "TrustID-2.apk",
+      "TrustID-2.apk.part",
       "TrustID-3.apk",
       "TrustID-3.apk.part",
       "notes.txt",
@@ -25,17 +26,18 @@ class OtaFilesTest {
       File(dir, name).writeText("x")
     }
     val removed = OtaFiles.cleanStale(dir, installedVersionCode = 2)
-    assertEquals(listOf("TrustID-1.apk", "TrustID-2.apk", "TrustID-3.apk.part"), removed.sorted())
-    assertEquals(listOf("OtherApp-9.apk", "TrustID-3.apk", "notes.txt"), names(dir))
+    assertEquals(listOf("TrustID-1.apk", "TrustID-2.apk", "TrustID-2.apk.part"), removed.sorted())
+    assertEquals(listOf("OtherApp-9.apk", "TrustID-3.apk", "TrustID-3.apk.part", "notes.txt"), names(dir))
   }
 
   @Test
-  fun keepsOnlyTheAdvertisedVersion() {
+  fun keepsOnlyTheAdvertisedVersionIncludingItsResumablePart() {
     val dir = tmp.newFolder(OtaFiles.DIR_NAME)
     File(dir, "TrustID-3.apk").writeText("x")
-    File(dir, "TrustID-4.apk").writeText("x")
+    File(dir, "TrustID-3.apk.part").writeText("x")
+    File(dir, "TrustID-4.apk.part").writeText("x")
     OtaFiles.cleanStale(dir, installedVersionCode = 2, keepVersionCode = 4)
-    assertEquals(listOf("TrustID-4.apk"), names(dir))
+    assertEquals(listOf("TrustID-4.apk.part"), names(dir))
   }
 
   @Test

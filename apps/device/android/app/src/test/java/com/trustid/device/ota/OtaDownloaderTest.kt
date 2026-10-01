@@ -25,11 +25,54 @@ class OtaDownloaderTest {
 
   private class ScriptedHttp(private val responses: MutableList<() -> OtaHttpResponse>) : OtaHttp {
     var calls = 0
+    val ranges = mutableListOf<String?>()
     override fun get(url: String, headers: Map<String, String>): OtaHttpResponse {
       calls++
+      ranges.add(headers["Range"])
       if (responses.isEmpty()) throw IOException("no scripted response")
       return responses.removeAt(0).invoke()
     }
+  }
+
+  /** Honors `Range: bytes=N-` and drops the connection after [chunk] bytes per request. */
+  private class FlakyRangeServer(private val bytes: ByteArray, private val chunk: Int) : OtaHttp {
+    val ranges = mutableListOf<String?>()
+    override fun get(url: String, headers: Map<String, String>): OtaHttpResponse {
+      val range = headers["Range"]
+      ranges.add(range)
+      val start = range?.removePrefix("bytes=")?.removeSuffix("-")?.toInt() ?: 0
+      val end = minOf(bytes.size, start + chunk)
+      val stream =
+        object : InputStream() {
+          var pos = start
+          override fun read(): Int {
+            if (pos >= end) {
+              if (end < bytes.size) throw SocketTimeoutException("connection dropped")
+              return -1
+            }
+            return bytes[pos++].toInt() and 0xff
+          }
+        }
+      val status = if (range != null) 206 else 200
+      val contentRange = if (range != null) "bytes $start-${bytes.size - 1}/${bytes.size}" else null
+      return OtaHttpResponse(
+        status,
+        "application/vnd.android.package-archive",
+        (bytes.size - start).toLong(),
+        stream,
+        contentRange,
+      )
+    }
+  }
+
+  private fun partialOk(body: ByteArray, from: Int, contentRange: String) = {
+    OtaHttpResponse(
+      206,
+      "application/vnd.android.package-archive",
+      (body.size - from).toLong(),
+      ByteArrayInputStream(body, from, body.size - from),
+      contentRange,
+    )
   }
 
   private fun ok(body: ByteArray, contentType: String, length: Long = body.size.toLong()) = {
@@ -124,7 +167,7 @@ class OtaDownloaderTest {
   }
 
   @Test
-  fun interruptedDownloadIsRetriedAndLeavesNoPartialFile() {
+  fun interruptedDownloadResumesWithRangeAndServerIgnoringRangeRestartsCleanly() {
     val http =
       ScriptedHttp(
         mutableListOf(
@@ -133,15 +176,77 @@ class OtaDownloaderTest {
         ),
       )
     val file = downloader(http).downloadApk(manifest(), otaDir())
+    assertEquals(listOf(null, "bytes=1000-"), http.ranges)
     assertArrayEquals(APK_BYTES, file.readBytes())
     assertEquals(listOf("TrustID-2.apk"), otaDir().list()!!.toList())
   }
 
   @Test
-  fun persistentInterruptionFailsAndCleansUp() {
-    val http = ScriptedHttp(MutableList(3) { interrupted(APK_BYTES, cutAfter = 500) })
-    expect(OtaFailure.DOWNLOAD_INTERRUPTED) { downloader(http).downloadApk(manifest(), otaDir()) }
+  fun flakyNetworkCompletesByResumingManyTimes() {
+    val server = FlakyRangeServer(APK_BYTES, chunk = 500)
+    val file = downloader(server).downloadApk(manifest(), otaDir())
+    assertArrayEquals(APK_BYTES, file.readBytes())
+    assertEquals(null, server.ranges.first())
+    assertEquals("bytes=500-", server.ranges[1])
+    assertTrue(server.ranges.size > 3)
+    assertEquals(listOf("TrustID-2.apk"), otaDir().list()!!.toList())
+  }
+
+  @Test
+  fun partialDownloadSurvivesForTheNextCheck() {
+    val first = FlakyRangeServer(APK_BYTES, chunk = 1500)
+    val oneShot = OtaDownloader(first, maxAttempts = 1, sleeper = {}, maxResumes = 1)
+    expect(OtaFailure.DOWNLOAD_INTERRUPTED) { oneShot.downloadApk(manifest(), otaDir()) }
+    assertEquals(1500L, File(otaDir(), "TrustID-2.apk.part").length())
+
+    val second = FlakyRangeServer(APK_BYTES, chunk = APK_BYTES.size)
+    val file = downloader(second).downloadApk(manifest(), otaDir())
+    assertEquals(listOf("bytes=1500-"), second.ranges)
+    assertArrayEquals(APK_BYTES, file.readBytes())
+  }
+
+  @Test
+  fun stalledDownloadGivesUpAfterBoundedAttempts() {
+    val server = FlakyRangeServer(APK_BYTES, chunk = 0)
+    expect(OtaFailure.DOWNLOAD_INTERRUPTED) { downloader(server).downloadApk(manifest(), otaDir()) }
+    assertEquals(3, server.ranges.size)
+    assertFalse(File(otaDir(), "TrustID-2.apk").exists())
+  }
+
+  @Test
+  fun corruptResumedPrefixIsCaughtByFullHash() {
+    otaDir().mkdirs()
+    File(otaDir(), "TrustID-2.apk.part").writeBytes(ByteArray(1000) { 7 })
+    val server = FlakyRangeServer(APK_BYTES, chunk = APK_BYTES.size)
+    expect(OtaFailure.HASH_MISMATCH) { downloader(server).downloadApk(manifest(), otaDir()) }
+    assertEquals(listOf<String?>("bytes=1000-"), server.ranges)
     assertTrue(otaDir().list()!!.isEmpty())
+  }
+
+  @Test
+  fun unexpectedContentRangeRestartsFromZero() {
+    otaDir().mkdirs()
+    File(otaDir(), "TrustID-2.apk.part").writeBytes(APK_BYTES.copyOf(1000))
+    val http =
+      ScriptedHttp(
+        mutableListOf(
+          partialOk(APK_BYTES, 0, "bytes 0-${APK_BYTES.size - 1}/${APK_BYTES.size}"),
+          ok(APK_BYTES, "application/vnd.android.package-archive"),
+        ),
+      )
+    val file = downloader(http).downloadApk(manifest(), otaDir())
+    assertEquals(listOf("bytes=1000-", null), http.ranges)
+    assertArrayEquals(APK_BYTES, file.readBytes())
+  }
+
+  @Test
+  fun rangeNotSatisfiableRestartsFromZero() {
+    otaDir().mkdirs()
+    File(otaDir(), "TrustID-2.apk.part").writeBytes(APK_BYTES.copyOf(1000))
+    val http = ScriptedHttp(mutableListOf(status(416), ok(APK_BYTES, "application/vnd.android.package-archive")))
+    val file = downloader(http).downloadApk(manifest(), otaDir())
+    assertEquals(listOf("bytes=1000-", null), http.ranges)
+    assertArrayEquals(APK_BYTES, file.readBytes())
   }
 
   @Test

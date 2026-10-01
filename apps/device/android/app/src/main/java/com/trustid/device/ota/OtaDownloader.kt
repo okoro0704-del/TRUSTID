@@ -4,6 +4,7 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
@@ -16,6 +17,7 @@ class OtaHttpResponse(
   val contentType: String?,
   val contentLength: Long,
   val body: InputStream,
+  val contentRange: String? = null,
   private val onClose: () -> Unit = {},
 ) : Closeable {
   override fun close() {
@@ -52,7 +54,9 @@ class UrlConnectionOtaHttp(
     val stream =
       if (status in 200..299) conn.inputStream else conn.errorStream ?: ByteArrayInputStream(ByteArray(0))
     val length = conn.getHeaderField("Content-Length")?.toLongOrNull() ?: -1L
-    return OtaHttpResponse(status, conn.contentType, length, stream) { conn.disconnect() }
+    return OtaHttpResponse(status, conn.contentType, length, stream, conn.getHeaderField("Content-Range")) {
+      conn.disconnect()
+    }
   }
 }
 
@@ -63,8 +67,9 @@ object OtaFiles {
   fun apkFileName(versionCode: Long) = "TrustID-$versionCode.apk"
 
   /**
-   * Deletes only TrustID OTA files in the private OTA directory: partial downloads,
-   * versions already installed (or older), and anything other than [keepVersionCode].
+   * Deletes only TrustID OTA files in the private OTA directory: versions already
+   * installed (or older), and anything other than [keepVersionCode]. A partial
+   * download of the advertised version is kept so it can resume.
    */
   fun cleanStale(dir: File, installedVersionCode: Long, keepVersionCode: Long? = null): List<String> {
     val removed = mutableListOf<String>()
@@ -72,10 +77,8 @@ object OtaFiles {
     for (file in files) {
       val match = NAME.matchEntire(file.name) ?: continue
       val versionCode = match.groupValues[1].toLongOrNull() ?: continue
-      val partial = match.groupValues[2].isNotEmpty()
       val stale =
-        partial ||
-          versionCode <= installedVersionCode ||
+        versionCode <= installedVersionCode ||
           (keepVersionCode != null && versionCode != keepVersionCode)
       if (stale && file.isFile && file.delete()) removed.add(file.name)
     }
@@ -88,10 +91,16 @@ class OtaDownloader(
   private val maxAttempts: Int = 3,
   private val backoffMs: (attempt: Int) -> Long = { attempt -> 2_000L * attempt },
   private val sleeper: (Long) -> Unit = { Thread.sleep(it) },
+  private val maxResumes: Int = 200,
 ) {
   fun fetchManifest(url: String, trustedHost: String): OtaManifest =
     retrying { fetchManifestOnce(url, trustedHost) }
 
+  /**
+   * Downloads into `<name>.part`, resuming with HTTP Range after interruptions.
+   * Only attempts that make no progress count toward [maxAttempts]; [maxResumes]
+   * bounds the total. The full-file SHA-256 is always checked before the rename.
+   */
   fun downloadApk(manifest: OtaManifest, dir: File, cancelled: () -> Boolean = { false }): File {
     if (!dir.isDirectory && !dir.mkdirs()) {
       throw OtaException(OtaFailure.STORAGE, "cannot create OTA cache directory")
@@ -105,7 +114,22 @@ class OtaDownloader(
         target.delete()
       }
     }
-    return retrying { downloadOnce(manifest, dir, target, cancelled) }
+    val part = File(dir, "${target.name}.part")
+    var stalled = 0
+    var resumes = 0
+    while (true) {
+      val before = if (part.isFile) part.length() else 0L
+      try {
+        return downloadOnce(manifest, part, target, cancelled)
+      } catch (e: OtaException) {
+        if (!e.failure.retryable) throw e
+        val progressed = part.isFile && part.length() > before
+        stalled = if (progressed) 0 else stalled + 1
+        resumes++
+        if (stalled >= maxAttempts || resumes >= maxResumes) throw e
+        sleeper(backoffMs(maxOf(stalled, 1)))
+      }
+    }
   }
 
   private fun fetchManifestOnce(url: String, trustedHost: String): OtaManifest {
@@ -129,29 +153,55 @@ class OtaDownloader(
 
   private fun downloadOnce(
     manifest: OtaManifest,
-    dir: File,
+    part: File,
     target: File,
     cancelled: () -> Boolean,
   ): File {
-    val part = File(dir, "${target.name}.part")
-    part.delete()
+    var offset = if (part.isFile) part.length() else 0L
+    if (offset >= manifest.apkSize) {
+      part.delete()
+      offset = 0L
+    }
+    val headers = mutableMapOf("Accept-Encoding" to "identity")
+    if (offset > 0) headers["Range"] = "bytes=$offset-"
+
     try {
-      open(manifest.apkUrl, mapOf("Accept-Encoding" to "identity")).use { response ->
+      open(manifest.apkUrl, headers).use { response ->
         when {
+          response.status == 416 -> {
+            part.delete()
+            throw OtaException(OtaFailure.DOWNLOAD_INTERRUPTED, "resume range rejected; restarting")
+          }
           response.status >= 500 -> throw OtaException(OtaFailure.SERVER_ERROR, "APK HTTP ${response.status}")
-          response.status != 200 -> throw OtaException(OtaFailure.DOWNLOAD_HTTP, "APK HTTP ${response.status}")
+          response.status != 200 && response.status != 206 ->
+            throw OtaException(OtaFailure.DOWNLOAD_HTTP, "APK HTTP ${response.status}")
         }
         if (response.contentType?.lowercase()?.contains("text/html") == true) {
           throw OtaException(OtaFailure.NOT_AN_APK, "APK URL returned HTML")
         }
-        if (response.contentLength >= 0 && response.contentLength != manifest.apkSize) {
+        val resuming = offset > 0 && response.status == 206
+        if (resuming) {
+          val expected = "bytes $offset-${manifest.apkSize - 1}/${manifest.apkSize}"
+          if (response.contentRange?.trim() != expected) {
+            part.delete()
+            throw OtaException(OtaFailure.DOWNLOAD_INTERRUPTED, "unexpected Content-Range; restarting")
+          }
+        } else if (response.status == 206) {
+          throw OtaException(OtaFailure.DOWNLOAD_HTTP, "unexpected partial response")
+        } else {
+          offset = 0L
+        }
+        val remaining = manifest.apkSize - offset
+        if (response.contentLength >= 0 && response.contentLength != remaining) {
           throw OtaException(OtaFailure.DOWNLOAD_SIZE_MISMATCH, "APK Content-Length differs from manifest")
         }
+
         val digest = MessageDigest.getInstance("SHA-256")
-        var total = 0L
+        if (resuming) digestExisting(part, digest)
+        var total = offset
         val out =
           try {
-            FileOutputStream(part)
+            FileOutputStream(part, resuming)
           } catch (e: IOException) {
             throw OtaException(OtaFailure.STORAGE, "cannot write OTA file", e)
           }
@@ -194,9 +244,29 @@ class OtaDownloader(
         if (!part.renameTo(target)) throw OtaException(OtaFailure.STORAGE, "cannot finalize OTA file")
         return target
       }
+    } catch (e: OtaException) {
+      // Keep the partial file only for transient transport failures so the next attempt resumes.
+      if (!e.failure.retryable) part.delete()
+      throw e
     } catch (e: Throwable) {
       part.delete()
       throw e
+    }
+  }
+
+  private fun digestExisting(part: File, digest: MessageDigest) {
+    try {
+      FileInputStream(part).use { input ->
+        val buffer = ByteArray(64 * 1024)
+        while (true) {
+          val read = input.read(buffer)
+          if (read < 0) break
+          digest.update(buffer, 0, read)
+        }
+      }
+    } catch (e: IOException) {
+      part.delete()
+      throw OtaException(OtaFailure.STORAGE, "cannot read partial OTA file", e)
     }
   }
 
