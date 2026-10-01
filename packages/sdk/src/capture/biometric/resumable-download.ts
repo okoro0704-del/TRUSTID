@@ -5,9 +5,8 @@
  * Small Range responses complete, so the file is assembled from those.
  */
 
-const DEFAULT_CHUNK_BYTES = 1024 * 1024;
+const DEFAULT_CHUNK_BYTES = 256 * 1024;
 const CHUNK_ATTEMPTS = 4;
-const CHUNK_TIMEOUT_MS = 25_000;
 
 type FetchLike = typeof fetch;
 
@@ -32,13 +31,12 @@ async function fetchRange(
 ): Promise<{ bytes: Uint8Array; total: number | null; completeBody: boolean }> {
   let lastError: unknown;
   for (let attempt = 0; attempt < CHUNK_ATTEMPTS; attempt++) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), CHUNK_TIMEOUT_MS);
     try {
+      // Do not abort a slow chunk. controller.abort() surfaces as
+      // "signal is aborted without reason" and was cancelling ArcFace
+      // while bytes were still arriving, so enrollment never finished.
       const res = await fetchImpl(url, {
         credentials: "same-origin",
-        cache: "no-store",
-        signal: controller.signal,
         headers: { Range: `bytes=${start}-${end}` },
       });
       if (res.status !== 206 && res.status !== 200) {
@@ -61,8 +59,6 @@ async function fetchRange(
       };
     } catch (err) {
       lastError = err;
-    } finally {
-      clearTimeout(timer);
     }
   }
   throw lastError instanceof Error
