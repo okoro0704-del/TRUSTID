@@ -177,8 +177,24 @@ function isServiceFailureMessage(msg: string): boolean {
   );
 }
 
-/** Identification scan window. Match signs in; otherwise offer fingerprint or register. */
-const FACE_SCAN_BUDGET_MS = 45_000;
+/** Hard cap for every face scan. Match signs in; otherwise offer fingerprint or register. */
+const FACE_SCAN_BUDGET_MS = 30_000;
+
+function finishWithin<T>(work: Promise<T>, ms: number): Promise<T | undefined> {
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(() => resolve(undefined), ms);
+    work.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        window.clearTimeout(timer);
+        resolve(undefined);
+      },
+    );
+  });
+}
 
 /**
  * Identity-first ambient auth — lookup on boot, enroll only after explicit consent.
@@ -487,7 +503,7 @@ export function useAmbientTrustIdAuth(
           vectorCreated: false,
           modelName: face?.modelName ?? null,
           templateAvailable: false,
-          errorCode: BIOMETRIC_ERROR_CODES.FACE_VECTOR_UNAVAILABLE,
+          errorCode: null,
         });
       }
       setPhaseSafe("NO_MATCH", runId);
@@ -575,21 +591,26 @@ export function useAmbientTrustIdAuth(
     }
 
     if (!isProductionArcFaceFace(payload.face)) {
-      enterServiceError(
-        runId,
-        `${BIOMETRIC_ERROR_CODES.FACE_VECTOR_UNAVAILABLE} — Production ArcFace face vector unavailable. Check models at /models/trustid.`,
+      const legacy = /spatial_fallback|mobile_facenet/i.test(
+        String(payload.face.modelName ?? ""),
       );
-      syncDiagnostics({
-        faceDetected: true,
-        vectorCreated: false,
-        modelName: payload.face.modelName ?? null,
-        vectorDims: payload.face.vector?.length,
-        errorCode: BIOMETRIC_ERROR_CODES.FACE_VECTOR_UNAVAILABLE,
-        onnxActive: false,
-        spatialFallbackActive: /spatial_fallback/i.test(
-          String(payload.face.modelName ?? ""),
-        ),
-      });
+      if (legacy) {
+        enterServiceError(
+          runId,
+          `${BIOMETRIC_ERROR_CODES.FACE_VECTOR_UNAVAILABLE} — Production ArcFace face vector unavailable. Check models at /models/trustid.`,
+        );
+        syncDiagnostics({
+          faceDetected: true,
+          vectorCreated: false,
+          modelName: payload.face.modelName ?? null,
+          vectorDims: payload.face.vector?.length,
+          errorCode: BIOMETRIC_ERROR_CODES.FACE_VECTOR_UNAVAILABLE,
+          onnxActive: false,
+          spatialFallbackActive: true,
+        });
+        return;
+      }
+      enterNoMatch(runId);
       return;
     }
 
@@ -762,13 +783,18 @@ export function useAmbientTrustIdAuth(
         setEnrollmentCandidate(savedFace, "identification");
       }
 
-      // Confirmation scan. If it does not finish, registration still uses
-      // the face saved during the identification scan.
+      // One confirmation scan, never longer than the 30 second cap.
+      // If it does not finish, registration still uses the saved identification face.
       const confirmAc = new AbortController();
-      const confirmTimer = window.setTimeout(() => confirmAc.abort(), FACE_SCAN_BUDGET_MS);
+      const confirmStarted = Date.now();
+      const remainingMs = () =>
+        Math.max(0, FACE_SCAN_BUDGET_MS - (Date.now() - confirmStarted));
       try {
-        if (captureEnrollmentPayload) {
-          const enrolled = await captureEnrollmentPayload({ signal: confirmAc.signal });
+        if (captureEnrollmentPayload && remainingMs() > 0) {
+          const enrolled = await finishWithin(
+            captureEnrollmentPayload({ signal: confirmAc.signal }),
+            remainingMs(),
+          );
           if (isProductionArcFaceFace(enrolled?.face)) {
             enrolledFace = enrolled!.face;
             enrollSource = "enrollment";
@@ -780,8 +806,11 @@ export function useAmbientTrustIdAuth(
             };
           }
         }
-        if (!isProductionArcFaceFace(enrolledFace) && capturePayload) {
-          const fresh = await capturePayload({ signal: confirmAc.signal });
+        if (!captureEnrollmentPayload && capturePayload && remainingMs() > 0) {
+          const fresh = await finishWithin(
+            capturePayload({ signal: confirmAc.signal }),
+            remainingMs(),
+          );
           if (isProductionArcFaceFace(fresh?.face)) {
             enrolledFace = fresh!.face;
             enrollSource = "fresh";
@@ -796,11 +825,20 @@ export function useAmbientTrustIdAuth(
       } catch {
         /* Fall back to the identification face when the confirmation scan stops. */
       } finally {
-        window.clearTimeout(confirmTimer);
         confirmAc.abort();
       }
 
       if (!isProductionArcFaceFace(enrolledFace)) {
+        if (!enrolledFace) {
+          setError("The face scan stopped after 30 seconds. Retry the scan or use fingerprint.");
+          syncDiagnostics({
+            vectorCreated: false,
+            templateAvailable: false,
+            errorCode: null,
+          });
+          setPhaseSafe("NO_MATCH");
+          return;
+        }
         const badModel = enrolledFace?.modelName ?? "missing";
         const legacy = /spatial_fallback|mobile_facenet/i.test(String(badModel));
         const code = legacy

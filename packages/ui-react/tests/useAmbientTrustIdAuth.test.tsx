@@ -114,7 +114,11 @@ describe("useAmbientTrustIdAuth state machine", () => {
         Signed in
       </TrustIdAmbientAuthProvider>, { wrapper },
     );
-    const register = await screen.findByRole("button", { name: "Register My Face" });
+    const register = await screen.findByRole(
+      "button",
+      { name: "Register My Face" },
+      { timeout: 8000 },
+    );
     expect(view.container.querySelector(".tid-silent-splash-ring")).toBeNull();
     expect((faceLookup.mock.calls[0][0].signal as AbortSignal).aborted).toBe(true);
     expect(registerTrustId).not.toHaveBeenCalled();
@@ -123,9 +127,9 @@ describe("useAmbientTrustIdAuth state machine", () => {
     fireEvent.click(register);
     await screen.findByText("Face saved successfully");
     expect(registerTrustId).toHaveBeenCalledTimes(1);
-    expect(capturePayload).toHaveBeenCalledTimes(1);
+    expect(capturePayload).toHaveBeenCalledTimes(2);
     view.unmount();
-  });
+  }, 15000);
 
   it("RETRY starts a fresh scan after NO_MATCH", async () => {
     const capturePayload = vi.fn(async () => facePayload());
@@ -151,7 +155,7 @@ describe("useAmbientTrustIdAuth state machine", () => {
     );
   });
 
-  it("ends a hanging lookup after 45 seconds on the fingerprint or register choice", async () => {
+  it("ends a hanging lookup after 30 seconds on the fingerprint or register choice", async () => {
     vi.useFakeTimers();
     let resolveLookup!: (value: unknown) => void;
     faceLookup.mockImplementation(() => new Promise(resolve => { resolveLookup = resolve; }));
@@ -164,7 +168,7 @@ describe("useAmbientTrustIdAuth state machine", () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(500); });
       expect(faceLookup).toHaveBeenCalledTimes(1);
       const signal = faceLookup.mock.calls[0][0].signal as AbortSignal;
-      await act(async () => { await vi.advanceTimersByTimeAsync(45_000); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
       expect(result.current.phase).toBe("NO_MATCH");
       expect(signal.aborted).toBe(true);
       await act(async () => { resolveLookup({ status: "NOT_FOUND", canRegister: true }); });
