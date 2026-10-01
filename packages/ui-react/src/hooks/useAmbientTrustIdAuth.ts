@@ -180,22 +180,6 @@ function isServiceFailureMessage(msg: string): boolean {
 /** Hard cap for every face scan. Match signs in; otherwise offer fingerprint or register. */
 const FACE_SCAN_BUDGET_MS = 30_000;
 
-function finishWithin<T>(work: Promise<T>, ms: number): Promise<T | undefined> {
-  return new Promise((resolve) => {
-    const timer = window.setTimeout(() => resolve(undefined), ms);
-    work.then(
-      (value) => {
-        window.clearTimeout(timer);
-        resolve(value);
-      },
-      () => {
-        window.clearTimeout(timer);
-        resolve(undefined);
-      },
-    );
-  });
-}
-
 /**
  * Identity-first ambient auth — lookup on boot, enroll only after explicit consent.
  * Create → confirm on-device Master save → fingerprint backup → authenticated.
@@ -216,7 +200,6 @@ export function useAmbientTrustIdAuth(
     captureFingerprint,
     getDeviceFingerprint,
     capturePayload,
-    captureEnrollmentPayload,
     registerFingerprintBackup,
     hasBoundInstall,
     storeSessionToken,
@@ -248,6 +231,13 @@ export function useAmbientTrustIdAuth(
   const pendingEnrollRef = useRef<AmbientSignInResult | null>(null);
   /** User-choice screens must not be overwritten by stale async work. */
   const phaseRef = useRef<AmbientAuthPhase>("CHECKING");
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
 
   const syncDiagnostics = useCallback((partial: FaceLifecycleDiagnostics) => {
     setFaceDiagnostics(patchFaceDiagnostics(partial));
@@ -263,6 +253,7 @@ export function useAmbientTrustIdAuth(
   }, []);
 
   const setPhaseSafe = useCallback((next: AmbientAuthPhase, runId?: number) => {
+    if (!aliveRef.current) return;
     const normalized = normalizePhase(next);
     if (runId != null && runId !== runIdRef.current) return;
     // Never overwrite an active user-choice screen with a searching phase.
@@ -480,7 +471,7 @@ export function useAmbientTrustIdAuth(
   const enterNoMatch = useCallback(
     (runId: number) => {
       // Invalidate any concurrent/stale work; this scan attempt is done.
-      if (runId !== runIdRef.current) return;
+      if (!aliveRef.current || runId !== runIdRef.current) return;
       abortCapture();
       setError(null);
       // Keep ArcFace identification face for Register (module session survives remounts).
@@ -514,7 +505,7 @@ export function useAmbientTrustIdAuth(
 
   const enterServiceError = useCallback(
     (runId: number, message: string) => {
-      if (runId !== runIdRef.current) return;
+      if (!aliveRef.current || runId !== runIdRef.current) return;
       abortCapture();
       setError(message);
       setPhaseSafe("ERROR", runId);
@@ -563,6 +554,15 @@ export function useAmbientTrustIdAuth(
         : undefined;
     } catch {
       payload = undefined;
+    }
+    if (isProductionArcFaceFace(payload?.face)) {
+      const stillCurrent = runId === runIdRef.current;
+      const choiceAfterThisScan =
+        !stillCurrent && phaseRef.current === "NO_MATCH" && !pendingPayloadRef.current;
+      if (stillCurrent || choiceAfterThisScan) {
+        pendingPayloadRef.current = payload;
+        setEnrollmentCandidate(payload!.face!, "identification");
+      }
     }
     if (ac.signal.aborted || runId !== runIdRef.current) return;
 
@@ -769,7 +769,8 @@ export function useAmbientTrustIdAuth(
         message: string;
       } | null = null;
 
-      // Keep the face from the identification scan, then scan once more.
+      // Register uses the face from the identification scan. It does not
+      // open the camera or search again.
       const session = peekEnrollmentCandidate();
       const savedFace =
         session && isProductionArcFaceFace(session.face)
@@ -783,54 +784,9 @@ export function useAmbientTrustIdAuth(
         setEnrollmentCandidate(savedFace, "identification");
       }
 
-      // One confirmation scan, never longer than the 30 second cap.
-      // If it does not finish, registration still uses the saved identification face.
-      const confirmAc = new AbortController();
-      const confirmStarted = Date.now();
-      const remainingMs = () =>
-        Math.max(0, FACE_SCAN_BUDGET_MS - (Date.now() - confirmStarted));
-      try {
-        if (captureEnrollmentPayload && remainingMs() > 0) {
-          const enrolled = await finishWithin(
-            captureEnrollmentPayload({ signal: confirmAc.signal }),
-            remainingMs(),
-          );
-          if (isProductionArcFaceFace(enrolled?.face)) {
-            enrolledFace = enrolled!.face;
-            enrollSource = "enrollment";
-            setEnrollmentCandidate(enrolledFace!, "enrollment");
-          } else if (!savedFace && enrolled?.captureErrorCode) {
-            lastCaptureError = {
-              code: enrolled.captureErrorCode,
-              message: enrolled.captureErrorMessage ?? enrolled.captureErrorCode,
-            };
-          }
-        }
-        if (!captureEnrollmentPayload && capturePayload && remainingMs() > 0) {
-          const fresh = await finishWithin(
-            capturePayload({ signal: confirmAc.signal }),
-            remainingMs(),
-          );
-          if (isProductionArcFaceFace(fresh?.face)) {
-            enrolledFace = fresh!.face;
-            enrollSource = "fresh";
-            setEnrollmentCandidate(enrolledFace!, "fresh");
-          } else if (!savedFace && fresh?.captureErrorCode) {
-            lastCaptureError = {
-              code: fresh.captureErrorCode,
-              message: fresh.captureErrorMessage ?? fresh.captureErrorCode,
-            };
-          }
-        }
-      } catch {
-        /* Fall back to the identification face when the confirmation scan stops. */
-      } finally {
-        confirmAc.abort();
-      }
-
       if (!isProductionArcFaceFace(enrolledFace)) {
         if (!enrolledFace) {
-          setError("The face scan stopped after 30 seconds. Retry the scan or use fingerprint.");
+          setError("No scanned face is ready to save. Retry the face scan, then Register My Face.");
           syncDiagnostics({
             vectorCreated: false,
             templateAvailable: false,
@@ -1042,8 +998,6 @@ export function useAmbientTrustIdAuth(
   }, [
     abortCapture,
     apiBaseUrl,
-    captureEnrollmentPayload,
-    capturePayload,
     getDeviceFingerprint,
     getPushToken,
     persistMasterDeviceState,

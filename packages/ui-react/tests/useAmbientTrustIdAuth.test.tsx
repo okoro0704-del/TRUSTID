@@ -127,7 +127,7 @@ describe("useAmbientTrustIdAuth state machine", () => {
     fireEvent.click(register);
     await screen.findByText("Face saved successfully");
     expect(registerTrustId).toHaveBeenCalledTimes(1);
-    expect(capturePayload).toHaveBeenCalledTimes(2);
+    expect(capturePayload).toHaveBeenCalledTimes(1);
     view.unmount();
   }, 15000);
 
@@ -282,7 +282,7 @@ describe("useAmbientTrustIdAuth state machine", () => {
     expect(submitted.face?.modelName).toBe("insightface_arcface_w600k_mbf_v1");
     expect(submitted.face?.vector).toHaveLength(512);
     expect(submitted.face?.embedding).toBeUndefined();
-    expect(captureEnrollmentPayload).toHaveBeenCalledTimes(1);
+    expect(captureEnrollmentPayload).not.toHaveBeenCalled();
 
     act(() => {
       result.current.continueAfterDeviceSaved();
@@ -348,7 +348,7 @@ describe("useAmbientTrustIdAuth state machine", () => {
       result.current.confirmCreateAccount();
     });
     await waitFor(() => expect(result.current.phase).toBe("FACE_SAVED"));
-    expect(captureEnrollmentPayload).toHaveBeenCalledTimes(1);
+    expect(captureEnrollmentPayload).not.toHaveBeenCalled();
     const submitted = registerTrustId.mock.calls[0]?.[0] as {
       face?: { confidence?: number; modelName?: string };
     };
@@ -357,7 +357,7 @@ describe("useAmbientTrustIdAuth state machine", () => {
     expect(result.current.faceDiagnostics.templateAvailable).toBe(true);
   });
 
-  it("uses the confirmation scan when registration captures a new face", async () => {
+  it("creates the Trust ID from the first scanned face", async () => {
     const idProbe = facePayload({ confidence: 0.5 });
     const enrollFace = facePayload({ confidence: 0.95 });
     const capturePayload = vi.fn(async () => idProbe);
@@ -378,11 +378,11 @@ describe("useAmbientTrustIdAuth state machine", () => {
       result.current.confirmCreateAccount();
     });
     await waitFor(() => expect(result.current.phase).toBe("FACE_SAVED"));
-    expect(captureEnrollmentPayload).toHaveBeenCalledTimes(1);
+    expect(captureEnrollmentPayload).not.toHaveBeenCalled();
     const submitted = registerTrustId.mock.calls[0]?.[0] as {
       face?: { confidence?: number };
     };
-    expect(submitted.face?.confidence).toBe(0.95);
+    expect(submitted.face?.confidence).toBe(0.5);
   });
 
   it("stale scan result cannot overwrite a newer user-choice phase", async () => {
