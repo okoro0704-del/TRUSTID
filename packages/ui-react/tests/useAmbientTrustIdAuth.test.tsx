@@ -151,7 +151,7 @@ describe("useAmbientTrustIdAuth state machine", () => {
     );
   });
 
-  it("aborts a hanging lookup after 30 seconds and ignores its late no-match result", async () => {
+  it("ends a hanging lookup after 45 seconds on the fingerprint or register choice", async () => {
     vi.useFakeTimers();
     let resolveLookup!: (value: unknown) => void;
     faceLookup.mockImplementation(() => new Promise(resolve => { resolveLookup = resolve; }));
@@ -164,12 +164,11 @@ describe("useAmbientTrustIdAuth state machine", () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(500); });
       expect(faceLookup).toHaveBeenCalledTimes(1);
       const signal = faceLookup.mock.calls[0][0].signal as AbortSignal;
-      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
-      expect(result.current.phase).toBe("ERROR");
-      expect(result.current.error).toMatch(/timed out/);
+      await act(async () => { await vi.advanceTimersByTimeAsync(45_000); });
+      expect(result.current.phase).toBe("NO_MATCH");
       expect(signal.aborted).toBe(true);
       await act(async () => { resolveLookup({ status: "NOT_FOUND", canRegister: true }); });
-      expect(result.current.phase).toBe("ERROR");
+      expect(result.current.phase).toBe("NO_MATCH");
       expect(capturePayload).toHaveBeenCalledTimes(1);
       expect(registerTrustId).not.toHaveBeenCalled();
     } finally {
@@ -279,8 +278,7 @@ describe("useAmbientTrustIdAuth state machine", () => {
     expect(submitted.face?.modelName).toBe("insightface_arcface_w600k_mbf_v1");
     expect(submitted.face?.vector).toHaveLength(512);
     expect(submitted.face?.embedding).toBeUndefined();
-    // ArcFace probe from NO_MATCH is enough ? no second capture required.
-    expect(captureEnrollmentPayload).not.toHaveBeenCalled();
+    expect(captureEnrollmentPayload).toHaveBeenCalledTimes(1);
 
     act(() => {
       result.current.continueAfterDeviceSaved();
@@ -346,7 +344,7 @@ describe("useAmbientTrustIdAuth state machine", () => {
       result.current.confirmCreateAccount();
     });
     await waitFor(() => expect(result.current.phase).toBe("FACE_SAVED"));
-    expect(captureEnrollmentPayload).not.toHaveBeenCalled();
+    expect(captureEnrollmentPayload).toHaveBeenCalledTimes(1);
     const submitted = registerTrustId.mock.calls[0]?.[0] as {
       face?: { confidence?: number; modelName?: string };
     };
@@ -355,7 +353,7 @@ describe("useAmbientTrustIdAuth state machine", () => {
     expect(result.current.faceDiagnostics.templateAvailable).toBe(true);
   });
 
-  it("prefers ArcFace NO_MATCH probe over a second enrollment capture", async () => {
+  it("uses the confirmation scan when registration captures a new face", async () => {
     const idProbe = facePayload({ confidence: 0.5 });
     const enrollFace = facePayload({ confidence: 0.95 });
     const capturePayload = vi.fn(async () => idProbe);
@@ -376,11 +374,11 @@ describe("useAmbientTrustIdAuth state machine", () => {
       result.current.confirmCreateAccount();
     });
     await waitFor(() => expect(result.current.phase).toBe("FACE_SAVED"));
-    expect(captureEnrollmentPayload).not.toHaveBeenCalled();
+    expect(captureEnrollmentPayload).toHaveBeenCalledTimes(1);
     const submitted = registerTrustId.mock.calls[0]?.[0] as {
       face?: { confidence?: number };
     };
-    expect(submitted.face?.confidence).toBe(0.5);
+    expect(submitted.face?.confidence).toBe(0.95);
   });
 
   it("stale scan result cannot overwrite a newer user-choice phase", async () => {

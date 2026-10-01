@@ -177,6 +177,9 @@ function isServiceFailureMessage(msg: string): boolean {
   );
 }
 
+/** Identification scan window. Match signs in; otherwise offer fingerprint or register. */
+const FACE_SCAN_BUDGET_MS = 45_000;
+
 /**
  * Identity-first ambient auth — lookup on boot, enroll only after explicit consent.
  * Create → confirm on-device Master save → fingerprint backup → authenticated.
@@ -515,6 +518,15 @@ export function useAmbientTrustIdAuth(
     const ac = new AbortController();
     captureAbortRef.current = ac;
 
+    // The search must end. A match signs in. No match, or no result inside
+    // this window, offers fingerprint or registration. It is not a service outage.
+    const scanTimeout = window.setTimeout(() => {
+      enterNoMatch(runId);
+    }, FACE_SCAN_BUDGET_MS);
+    ac.signal.addEventListener("abort", () => window.clearTimeout(scanTimeout), {
+      once: true,
+    });
+
     setPhaseSafe("PROMPTING", runId);
     setError(null);
     setApprovalPollToken(null);
@@ -594,19 +606,6 @@ export function useAmbientTrustIdAuth(
       modelReady: true,
       stage: "vector_created",
       errorCode: null,
-    });
-
-    // Bound the identification request only. Model download has its own
-    // warm-up budget; a 30s cap here was aborting ArcFace while it was
-    // still pending. A timeout is not evidence of an unknown face.
-    const scanTimeout = window.setTimeout(() => {
-      enterServiceError(
-        runId,
-        "BIOMETRIC_SERVICE_UNAVAILABLE — Face scan timed out before a reusable face template was created. Please try again.",
-      );
-    }, 30_000);
-    ac.signal.addEventListener("abort", () => window.clearTimeout(scanTimeout), {
-      once: true,
     });
 
     let lookup;
@@ -749,78 +748,56 @@ export function useAmbientTrustIdAuth(
         message: string;
       } | null = null;
 
-      // 1) Module-session ArcFace candidate (survives remounts) + pending probe.
+      // Keep the face from the identification scan, then scan once more.
       const session = peekEnrollmentCandidate();
-      if (session && isProductionArcFaceFace(session.face)) {
-        enrolledFace = session.face;
+      const savedFace =
+        session && isProductionArcFaceFace(session.face)
+          ? session.face
+          : isProductionArcFaceFace(pendingPayloadRef.current?.face)
+            ? pendingPayloadRef.current!.face
+            : undefined;
+      if (savedFace) {
+        enrolledFace = savedFace;
         enrollSource = "probe";
-      } else if (isProductionArcFaceFace(pendingPayloadRef.current?.face)) {
-        enrolledFace = pendingPayloadRef.current!.face;
-        enrollSource = "probe";
-        setEnrollmentCandidate(enrolledFace!, "identification");
+        setEnrollmentCandidate(savedFace, "identification");
       }
 
-      // 2) Optional multi-frame enrollment (blink + quality aggregate).
-      if (!enrolledFace && captureEnrollmentPayload) {
-        try {
-          const enrolled = await captureEnrollmentPayload({
-            signal: ac.signal,
-          });
+      // Confirmation scan. If it does not finish, registration still uses
+      // the face saved during the identification scan.
+      const confirmAc = new AbortController();
+      const confirmTimer = window.setTimeout(() => confirmAc.abort(), FACE_SCAN_BUDGET_MS);
+      try {
+        if (captureEnrollmentPayload) {
+          const enrolled = await captureEnrollmentPayload({ signal: confirmAc.signal });
           if (isProductionArcFaceFace(enrolled?.face)) {
-            const faceOk = enrolled!.face!;
-            enrolledFace = faceOk;
+            enrolledFace = enrolled!.face;
             enrollSource = "enrollment";
-            setEnrollmentCandidate(faceOk, "enrollment");
-          } else if (enrolled?.captureErrorCode) {
+            setEnrollmentCandidate(enrolledFace!, "enrollment");
+          } else if (!savedFace && enrolled?.captureErrorCode) {
             lastCaptureError = {
               code: enrolled.captureErrorCode,
-              message:
-                enrolled.captureErrorMessage ?? enrolled.captureErrorCode,
+              message: enrolled.captureErrorMessage ?? enrolled.captureErrorCode,
             };
           }
-        } catch (e) {
-          setError(
-            e instanceof Error
-              ? e.message
-              : `${BIOMETRIC_ERROR_CODES.FACE_VECTOR_UNAVAILABLE} — Enrollment capture failed.`,
-          );
-          syncDiagnostics({
-            errorCode: BIOMETRIC_ERROR_CODES.FACE_VECTOR_UNAVAILABLE,
-          });
-          setPhaseSafe("ERROR");
-          return;
         }
-      }
-
-      // 3) Fresh single-frame capture (same path as identity scan).
-      if (!enrolledFace && capturePayload) {
-        try {
-          const fresh = await capturePayload({ signal: ac.signal });
+        if (!isProductionArcFaceFace(enrolledFace) && capturePayload) {
+          const fresh = await capturePayload({ signal: confirmAc.signal });
           if (isProductionArcFaceFace(fresh?.face)) {
-            const faceOk = fresh!.face!;
-            enrolledFace = faceOk;
+            enrolledFace = fresh!.face;
             enrollSource = "fresh";
-            setEnrollmentCandidate(faceOk, "fresh");
-          } else if (fresh?.captureErrorCode) {
+            setEnrollmentCandidate(enrolledFace!, "fresh");
+          } else if (!savedFace && fresh?.captureErrorCode) {
             lastCaptureError = {
               code: fresh.captureErrorCode,
               message: fresh.captureErrorMessage ?? fresh.captureErrorCode,
             };
-          } else if (fresh?.face) {
-            enrolledFace = fresh.face;
           }
-        } catch (e) {
-          setError(
-            e instanceof Error
-              ? e.message
-              : `${BIOMETRIC_ERROR_CODES.CAMERA_UNAVAILABLE} — Face capture failed.`,
-          );
-          syncDiagnostics({
-            errorCode: BIOMETRIC_ERROR_CODES.CAMERA_UNAVAILABLE,
-          });
-          setPhaseSafe("ERROR");
-          return;
         }
+      } catch {
+        /* Fall back to the identification face when the confirmation scan stops. */
+      } finally {
+        window.clearTimeout(confirmTimer);
+        confirmAc.abort();
       }
 
       if (!isProductionArcFaceFace(enrolledFace)) {
