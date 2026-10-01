@@ -21,11 +21,12 @@ import { faceCaptureDiag } from "./biometric/face-capture-diag.js";
 export type { AIVectorPayload } from "./biometric/types.js";
 export type { FacePipelineOptions };
 
-/** Default cold-start budget for MediaPipe + ArcFace (parallel warm).
- * Measured: Face Landmarker create ~22s cold; WebGPU without adapter hung ~37s.
- * Budget covers MediaPipe + margin after fast WebGPU probe → WASM fallback.
+/** Cold-start budget for MediaPipe plus a resumed ArcFace download.
+ * A single GET of w600k_mbf.onnx is closed early in production, so the
+ * recognizer reassembles it from ranges. 45s expires while that file is
+ * still pending after MediaPipe has already succeeded.
  */
-export const DEFAULT_BIOMETRIC_WARMUP_TIMEOUT_MS = 45_000;
+export const DEFAULT_BIOMETRIC_WARMUP_TIMEOUT_MS = 180_000;
 
 /** Short timeout for unit/jsdom environments that cannot load real models. */
 export const TEST_BIOMETRIC_WARMUP_TIMEOUT_MS = 3_000;

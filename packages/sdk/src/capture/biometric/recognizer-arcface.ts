@@ -17,6 +17,7 @@ import {
 } from "./face-capture-diag.js";
 import { sha256Hex } from "./integrity.js";
 import { ARCFACE_MBF_ARTIFACT } from "./model-manifest.js";
+import { downloadModelBytes } from "./resumable-download.js";
 
 type OrtModule = {
   InferenceSession: {
@@ -251,13 +252,7 @@ export async function getArcFaceSession(
       let buffer: ArrayBuffer;
       try {
         const fetchStarted = performance.now();
-        const res = await fetch(url, { credentials: "same-origin" });
-        if (!res.ok) {
-          throw new Error(
-            `Failed to fetch model artifact (${res.status}): ${url}`,
-          );
-        }
-        buffer = await res.arrayBuffer();
+        buffer = await downloadModelBytes(url);
         faceCaptureDiag({
           stage: "arcface_model_fetch_ok",
           component: "arcface",
