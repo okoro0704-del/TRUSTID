@@ -18,6 +18,12 @@ function totalFromContentRange(header: string | null): number | null {
   return Number.isFinite(total) && total > 0 ? total : null;
 }
 
+function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(copy).set(bytes);
+  return copy;
+}
+
 async function fetchRange(
   fetchImpl: FetchLike,
   url: string,
@@ -71,10 +77,7 @@ export async function downloadModelBytes(
 ): Promise<ArrayBuffer> {
   const first = await fetchRange(fetchImpl, url, 0, chunkBytes - 1);
   if (first.completeBody) {
-    return first.bytes.buffer.slice(
-      first.bytes.byteOffset,
-      first.bytes.byteOffset + first.bytes.byteLength,
-    );
+    return bytesToArrayBuffer(first.bytes);
   }
   const total = first.total;
   if (!total) {
@@ -92,5 +95,5 @@ export async function downloadModelBytes(
     out.set(next.bytes, offset);
     offset += next.bytes.byteLength;
   }
-  return out.buffer;
+  return bytesToArrayBuffer(out);
 }
