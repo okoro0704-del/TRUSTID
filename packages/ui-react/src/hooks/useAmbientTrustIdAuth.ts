@@ -555,13 +555,14 @@ export function useAmbientTrustIdAuth(
     } catch {
       payload = undefined;
     }
-    if (isProductionArcFaceFace(payload?.face)) {
+    const scannedFace = payload?.face;
+    if (payload && scannedFace && isArcFaceEnrollmentFace(scannedFace)) {
       const stillCurrent = runId === runIdRef.current;
       const choiceAfterThisScan =
         !stillCurrent && phaseRef.current === "NO_MATCH" && !pendingPayloadRef.current;
       if (stillCurrent || choiceAfterThisScan) {
         pendingPayloadRef.current = payload;
-        setEnrollmentCandidate(payload!.face!, "identification");
+        setEnrollmentCandidate(scannedFace, "identification");
       }
     }
     if (ac.signal.aborted || runId !== runIdRef.current) return;
@@ -763,11 +764,7 @@ export function useAmbientTrustIdAuth(
       });
 
       let enrolledFace: MultiModalBiometricPayload["face"] | undefined;
-      let enrollSource: "probe" | "enrollment" | "fresh" | "none" = "none";
-      let lastCaptureError: {
-        code: string;
-        message: string;
-      } | null = null;
+      let enrollSource: "probe" | "none" = "none";
 
       // Register uses the face from the identification scan. It does not
       // open the camera or search again.
@@ -785,51 +782,13 @@ export function useAmbientTrustIdAuth(
       }
 
       if (!isProductionArcFaceFace(enrolledFace)) {
-        if (!enrolledFace) {
-          setError("No scanned face is ready to save. Retry the face scan, then Register My Face.");
-          syncDiagnostics({
-            vectorCreated: false,
-            templateAvailable: false,
-            errorCode: null,
-          });
-          setPhaseSafe("NO_MATCH");
-          return;
-        }
-        const badModel = enrolledFace?.modelName ?? "missing";
-        const legacy = /spatial_fallback|mobile_facenet/i.test(String(badModel));
-        const code = legacy
-          ? BIOMETRIC_ERROR_CODES.BIOMETRIC_TEMPLATE_LEGACY
-          : enrolledFace
-            ? BIOMETRIC_ERROR_CODES.FACE_VECTOR_UNAVAILABLE
-            : (lastCaptureError?.code ??
-              BIOMETRIC_ERROR_CODES.FACE_NOT_ENROLLED);
-        const detail = legacy
-          ? "Legacy spatial/non-ArcFace template rejected. Retry face scan, then Register."
-          : lastCaptureError?.message && !enrolledFace
-            ? lastCaptureError.message
-            : enrolledFace
-              ? "No production ArcFace face vector ready to enroll. Retry face scan, then Register."
-              : "No production ArcFace face vector ready to enroll. Retry face scan, then Register.";
-        setError(`${code} — ${detail}`);
-        enrollmentDiag({
-          attemptId,
-          stage: "EMBEDDING_VALIDATION",
-          status: "failed",
-          errorCode: code,
-          errorMessage: detail,
-          modelName: badModel === "missing" ? undefined : String(badModel),
-          enrollSource,
-        });
+        setError("No scanned face is ready to save. Retry the face scan, then Register My Face.");
         syncDiagnostics({
-          faceDetected: Boolean(enrolledFace) ||
-            lastCaptureError?.code === BIOMETRIC_ERROR_CODES.LIVENESS_FAILED ||
-            lastCaptureError?.code === BIOMETRIC_ERROR_CODES.LOW_QUALITY,
           vectorCreated: false,
-          modelName: badModel === "missing" ? null : String(badModel),
           templateAvailable: false,
-          errorCode: code,
+          errorCode: null,
         });
-        setPhaseSafe("ERROR");
+        setPhaseSafe("NO_MATCH");
         return;
       }
 
