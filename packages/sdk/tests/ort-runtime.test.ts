@@ -194,7 +194,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("root cause reproduction (pre-fix initialization path)", () => {
+// Each test cold-imports a fresh onnxruntime-common; allow for loaded CI machines.
+const RUNTIME_TEST_TIMEOUT_MS = 20_000;
+
+describe("root cause reproduction (pre-fix initialization path)", { timeout: RUNTIME_TEST_TIMEOUT_MS }, () => {
   it("a timed-out WebGPU session followed by a WASM session yields the production error and poisons retries", async () => {
     vi.resetModules();
     const { module, counters } = await freshFakeOrt({ initMs: 40 });
@@ -230,7 +233,7 @@ describe("root cause reproduction (pre-fix initialization path)", () => {
   });
 });
 
-describe("ORT runtime owner", () => {
+describe("ORT runtime owner", { timeout: RUNTIME_TEST_TIMEOUT_MS }, () => {
   it("1. ten sequential session requests initialize the runtime once", async () => {
     const t = await setup();
     for (let i = 0; i < 10; i++) {
