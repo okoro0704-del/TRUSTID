@@ -667,3 +667,7 @@ export type { FaceVectorResult } from "./capture/face-vectorizer.js";
 export type { AIVectorPayload, AIVectorExtractorOptions } from "./capture/ai-vector-extractor.js";
 export type { FacePresentationAttackDetector, FacePadResult };
 export type { FacePresenceResult } from "./capture/face-presence.js";
+export { getBiometricRuntimeStatus } from "./capture/biometric/runtime-status.js";
+export type { BiometricRuntimeStatus } from "./capture/biometric/runtime-status.js";
+export { ORT_RUNTIME_ERROR_CODES } from "./capture/biometric/ort-runtime.js";
+export type { OrtRuntimeStatus } from "./capture/biometric/ort-runtime.js";

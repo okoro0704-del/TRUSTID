@@ -17,36 +17,19 @@ import {
 } from "./face-capture-diag.js";
 import { sha256Hex } from "./integrity.js";
 import { ARCFACE_MBF_ARTIFACT } from "./model-manifest.js";
+import {
+  createOrtSession,
+  getOrtModule,
+  ORT_EXECUTION_PROVIDER,
+  type OrtSession,
+} from "./ort-runtime.js";
 import { downloadModelBytes } from "./resumable-download.js";
 
-type OrtModule = {
-  InferenceSession: {
-    create: (
-      uri: string | ArrayBuffer | Uint8Array,
-      options?: Record<string, unknown>,
-    ) => Promise<OrtSession>;
-  };
-  Tensor: new (
-    type: string,
-    data: Float32Array,
-    dims: number[],
-  ) => { data: Float32Array; dims: number[] };
-  env?: {
-    wasm?: { wasmPaths?: string; numThreads?: number };
-    webgpu?: { powerPreference?: string };
-  };
-};
-
-type OrtSession = {
-  inputNames: string[];
-  outputNames: string[];
-  run: (
-    feeds: Record<string, unknown>,
-  ) => Promise<Record<string, { data: Float32Array }>>;
-};
+export type EmbedderState = "IDLE" | "LOADING" | "READY" | "FAILED";
 
 let sessionPromise: Promise<OrtSession> | null = null;
-let ortModule: OrtModule | null = null;
+let modelBytesPromise: Promise<Uint8Array> | null = null;
+let embedderState: EmbedderState = "IDLE";
 let lastArcFaceInitError: string | null = null;
 let lastExecutionProvider: string | null = null;
 
@@ -58,178 +41,14 @@ export function getLastArcFaceExecutionProvider(): string | null {
   return lastExecutionProvider;
 }
 
-async function resolveOrtWasmPaths(): Promise<string> {
-  const local = "/ort/";
-  try {
-    if (typeof fetch === "function") {
-      const res = await fetch(`${local}ort-wasm-simd-threaded.mjs`, {
-        method: "HEAD",
-        credentials: "same-origin",
-      });
-      if (res.ok) {
-        faceCaptureDiag({
-          stage: "onnx_wasm_paths_local",
-          component: "arcface",
-          success: true,
-          modelUrl: local,
-        });
-        return local;
-      }
-    }
-  } catch (err) {
-    faceCaptureDiag({
-      stage: "onnx_wasm_paths_local_miss",
-      component: "arcface",
-      success: false,
-      modelUrl: local,
-      errorMessage: sanitizeInitError(err),
-    });
-  }
-  const cdn = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/";
-  faceCaptureDiag({
-    stage: "onnx_wasm_paths_cdn_fallback",
-    component: "arcface",
-    success: true,
-    modelUrl: cdn,
-  });
-  return cdn;
-}
-
-async function loadOrt(): Promise<OrtModule> {
-  if (ortModule) return ortModule;
-  const started = performance.now();
-  faceCaptureDiag({
-    stage: "onnx_runtime_import_start",
-    component: "arcface",
-    success: true,
-  });
-  try {
-    // Types for onnxruntime-web package exports are incomplete under NodeNext.
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore
-    const mod = await import("onnxruntime-web");
-    ortModule = mod as unknown as OrtModule;
-    if (ortModule.env?.wasm) {
-      // Single-thread avoids Cross-Origin-Isolation requirements for threaded WASM.
-      ortModule.env.wasm.numThreads = 1;
-      ortModule.env.wasm.wasmPaths = await resolveOrtWasmPaths();
-    }
-    faceCaptureDiag({
-      stage: "onnx_runtime_import_ok",
-      component: "arcface",
-      success: true,
-      ms: Math.round(performance.now() - started),
-      modelUrl: ortModule.env?.wasm?.wasmPaths,
-    });
-    return ortModule;
-  } catch (err) {
-    const msg = sanitizeInitError(err);
-    lastArcFaceInitError = msg;
-    faceCaptureDiag({
-      stage: "onnx_runtime_import_failed",
-      component: "arcface",
-      success: false,
-      ms: Math.round(performance.now() - started),
-      errorMessage: msg,
-    });
-    throw biometricUnavailable(`onnxruntime-web unavailable: ${msg}`);
-  }
-}
-
-async function createSessionWithProvider(
-  ort: OrtModule,
-  modelBytes: Uint8Array,
-  providers: string[],
-): Promise<OrtSession> {
-  const started = performance.now();
-  const label = providers.join("+");
-  faceCaptureDiag({
-    stage: "onnx_session_create_start",
-    component: "arcface",
-    success: true,
-    executionProvider: label,
-  });
-  try {
-    const session = await ort.InferenceSession.create(modelBytes, {
-      executionProviders: providers,
-    });
-    lastExecutionProvider = label;
-    faceCaptureDiag({
-      stage: "onnx_session_create_ok",
-      component: "arcface",
-      success: true,
-      ms: Math.round(performance.now() - started),
-      executionProvider: label,
-    });
-    return session;
-  } catch (err) {
-    faceCaptureDiag({
-      stage: "onnx_session_create_failed",
-      component: "arcface",
-      success: false,
-      ms: Math.round(performance.now() - started),
-      executionProvider: label,
-      errorMessage: sanitizeInitError(err),
-    });
-    throw err;
-  }
-}
-
-/** Cap hung WebGPU adapter / session attempts so WASM can still win within warm-up. */
-const WEBGPU_ADAPTER_PROBE_MS = 2_000;
-const WEBGPU_SESSION_CREATE_MS = 8_000;
-
-type WebGpuProbeResult =
-  | { ok: true }
-  | { ok: false; reason: "api_missing" | "no_adapter" | "adapter_timeout" | "adapter_error"; detail?: string };
-
-async function probeWebGpuAdapter(): Promise<WebGpuProbeResult> {
-  const nav = typeof navigator !== "undefined" ? navigator : undefined;
-  const gpu = nav && "gpu" in nav
-    ? (nav as Navigator & {
-        gpu?: { requestAdapter: () => Promise<unknown> };
-      }).gpu
-    : undefined;
-  if (!gpu?.requestAdapter) {
-    return { ok: false, reason: "api_missing" };
-  }
-
-  let timedOut = false;
-  try {
-    const adapter = await Promise.race([
-      gpu.requestAdapter(),
-      new Promise<null>((resolve) => {
-        setTimeout(() => {
-          timedOut = true;
-          resolve(null);
-        }, WEBGPU_ADAPTER_PROBE_MS);
-      }),
-    ]);
-    if (timedOut) {
-      return { ok: false, reason: "adapter_timeout" };
-    }
-    if (!adapter) {
-      return { ok: false, reason: "no_adapter" };
-    }
-    return { ok: true };
-  } catch (err) {
-    return {
-      ok: false,
-      reason: "adapter_error",
-      detail: sanitizeInitError(err),
-    };
-  }
-}
-
-function rejectAfter(ms: number, message: string): Promise<never> {
-  return new Promise((_, reject) => {
-    setTimeout(() => reject(new Error(message)), ms);
-  });
+export function getArcFaceEmbedderState(): EmbedderState {
+  return embedderState;
 }
 
 // Range downloads are not reused by the HTTP cache, so a reload would fetch
 // the model again. Keep the verified bytes in Cache Storage instead.
-const MODEL_CACHE_NAME = `trustid-models-${ARCFACE_MBF_ARTIFACT.sha256.slice(0, 16)}`;
+const MODEL_CACHE_PREFIX = "trustid-models-";
+const MODEL_CACHE_NAME = `${MODEL_CACHE_PREFIX}${ARCFACE_MBF_ARTIFACT.sha256.slice(0, 16)}`;
 
 async function readCachedModel(url: string): Promise<ArrayBuffer | null> {
   try {
@@ -245,6 +64,12 @@ async function readCachedModel(url: string): Promise<ArrayBuffer | null> {
 async function storeCachedModel(url: string, buffer: ArrayBuffer): Promise<void> {
   try {
     if (typeof caches === "undefined") return;
+    const keys = await caches.keys();
+    await Promise.all(
+      keys
+        .filter((k) => k.startsWith(MODEL_CACHE_PREFIX) && k !== MODEL_CACHE_NAME)
+        .map((k) => caches.delete(k)),
+    );
     const cache = await caches.open(MODEL_CACHE_NAME);
     await cache.put(
       url,
@@ -267,167 +92,139 @@ async function dropCachedModel(url: string): Promise<void> {
   }
 }
 
+async function loadVerifiedModelBytes(url: string): Promise<Uint8Array> {
+  faceCaptureDiag({
+    stage: "arcface_model_fetch_start",
+    component: "arcface",
+    success: true,
+    modelUrl: url,
+  });
+
+  let buffer: ArrayBuffer;
+  let fromCache = false;
+  try {
+    const fetchStarted = performance.now();
+    const cached = await readCachedModel(url);
+    if (cached) {
+      buffer = cached;
+      fromCache = true;
+    } else {
+      buffer = await downloadModelBytes(url);
+    }
+    faceCaptureDiag({
+      stage: "arcface_model_fetch_ok",
+      component: "arcface",
+      success: true,
+      ms: Math.round(performance.now() - fetchStarted),
+      modelUrl: url,
+      imageWidth: buffer.byteLength,
+    });
+
+    faceCaptureDiag({
+      stage: "arcface_integrity_start",
+      component: "arcface",
+      success: true,
+      expectedHashPrefix: hashPrefix(ARCFACE_MBF_ARTIFACT.sha256),
+    });
+    let actual = await sha256Hex(buffer);
+    if (
+      fromCache &&
+      actual.toLowerCase() !== ARCFACE_MBF_ARTIFACT.sha256.toLowerCase()
+    ) {
+      await dropCachedModel(url);
+      buffer = await downloadModelBytes(url);
+      fromCache = false;
+      actual = await sha256Hex(buffer);
+    }
+    if (actual.toLowerCase() !== ARCFACE_MBF_ARTIFACT.sha256.toLowerCase()) {
+      faceCaptureDiag({
+        stage: "arcface_integrity_failed",
+        component: "arcface",
+        success: false,
+        expectedHashPrefix: hashPrefix(ARCFACE_MBF_ARTIFACT.sha256),
+        actualHashPrefix: hashPrefix(actual),
+        errorCode: "INTEGRITY_MISMATCH",
+      });
+      throw biometricUnavailable(
+        `ArcFace integrity failed (${url}): expected ${hashPrefix(ARCFACE_MBF_ARTIFACT.sha256)}? got ${hashPrefix(actual)}?`,
+      );
+    }
+    faceCaptureDiag({
+      stage: "arcface_integrity_ok",
+      component: "arcface",
+      success: true,
+      expectedHashPrefix: hashPrefix(ARCFACE_MBF_ARTIFACT.sha256),
+      actualHashPrefix: hashPrefix(actual),
+    });
+    if (!fromCache) await storeCachedModel(url, buffer);
+    return new Uint8Array(buffer);
+  } catch (err) {
+    const msg = sanitizeInitError(err);
+    lastArcFaceInitError = msg;
+    faceCaptureDiag({
+      stage: "arcface_model_fetch_or_integrity_failed",
+      component: "arcface",
+      success: false,
+      modelUrl: url,
+      errorMessage: msg,
+    });
+    throw biometricUnavailable(
+      `ArcFace model missing or integrity failed (${url}). ${msg}`,
+    );
+  }
+}
+
+function getModelBytes(url: string): Promise<Uint8Array> {
+  if (!modelBytesPromise) {
+    modelBytesPromise = loadVerifiedModelBytes(url).catch((err) => {
+      modelBytesPromise = null;
+      throw err;
+    });
+  }
+  return modelBytesPromise;
+}
+
+/**
+ * Shared ArcFace session. Concurrent callers share one in-flight load. A
+ * failed load clears only this session promise; the ORT runtime underneath is
+ * owned by ort-runtime and is never re-initialized from here.
+ */
 export async function getArcFaceSession(
   modelBaseUrl = "/models/trustid",
 ): Promise<OrtSession> {
   if (!sessionPromise) {
+    embedderState = "LOADING";
     sessionPromise = (async () => {
       const t0 = performance.now();
       faceCaptureDiag({
         stage: "arcface_session_start",
         component: "arcface",
         success: true,
+        executionProvider: ORT_EXECUTION_PROVIDER,
       });
-
-      const ort = await loadOrt();
       const url = `${modelBaseUrl.replace(/\/$/, "")}/${ARCFACE_MBF_ARTIFACT.relativePath}`;
-
-      faceCaptureDiag({
-        stage: "arcface_model_fetch_start",
-        component: "arcface",
-        success: true,
-        modelUrl: url,
-      });
-
-      let buffer: ArrayBuffer;
-      let fromCache = false;
+      const bytes = await getModelBytes(url);
       try {
-        const fetchStarted = performance.now();
-        const cached = await readCachedModel(url);
-        if (cached) {
-          buffer = cached;
-          fromCache = true;
-        } else {
-          buffer = await downloadModelBytes(url);
-        }
-        faceCaptureDiag({
-          stage: "arcface_model_fetch_ok",
-          component: "arcface",
-          success: true,
-          ms: Math.round(performance.now() - fetchStarted),
-          modelUrl: url,
-          imageWidth: buffer.byteLength,
-        });
-
-        faceCaptureDiag({
-          stage: "arcface_integrity_start",
-          component: "arcface",
-          success: true,
-          expectedHashPrefix: hashPrefix(ARCFACE_MBF_ARTIFACT.sha256),
-        });
-        let actual = await sha256Hex(buffer);
-        if (
-          fromCache &&
-          actual.toLowerCase() !== ARCFACE_MBF_ARTIFACT.sha256.toLowerCase()
-        ) {
-          await dropCachedModel(url);
-          buffer = await downloadModelBytes(url);
-          fromCache = false;
-          actual = await sha256Hex(buffer);
-        }
-        if (actual.toLowerCase() !== ARCFACE_MBF_ARTIFACT.sha256.toLowerCase()) {
-          faceCaptureDiag({
-            stage: "arcface_integrity_failed",
-            component: "arcface",
-            success: false,
-            expectedHashPrefix: hashPrefix(ARCFACE_MBF_ARTIFACT.sha256),
-            actualHashPrefix: hashPrefix(actual),
-            errorCode: "INTEGRITY_MISMATCH",
-          });
-          throw biometricUnavailable(
-            `ArcFace integrity failed (${url}): expected ${hashPrefix(ARCFACE_MBF_ARTIFACT.sha256)}? got ${hashPrefix(actual)}?`,
-          );
-        }
-        faceCaptureDiag({
-          stage: "arcface_integrity_ok",
-          component: "arcface",
-          success: true,
-          expectedHashPrefix: hashPrefix(ARCFACE_MBF_ARTIFACT.sha256),
-          actualHashPrefix: hashPrefix(actual),
-        });
-        if (!fromCache) await storeCachedModel(url, buffer);
-      } catch (err) {
-        const msg = sanitizeInitError(err);
-        lastArcFaceInitError = msg;
-        faceCaptureDiag({
-          stage: "arcface_model_fetch_or_integrity_failed",
-          component: "arcface",
-          success: false,
-          modelUrl: url,
-          errorMessage: msg,
-        });
-        throw biometricUnavailable(
-          `ArcFace model missing or integrity failed (${url}). ${msg}`,
-        );
-      }
-
-      const bytes = new Uint8Array(buffer);
-      const probe = await probeWebGpuAdapter();
-
-      if (probe.ok) {
-        try {
-          const session = await Promise.race([
-            createSessionWithProvider(ort, bytes, ["webgpu"]),
-            rejectAfter(
-              WEBGPU_SESSION_CREATE_MS,
-              `WebGPU InferenceSession.create timed out after ${WEBGPU_SESSION_CREATE_MS}ms`,
-            ),
-          ]);
-          faceCaptureDiag({
-            stage: "arcface_session_ok",
-            component: "arcface",
-            success: true,
-            ms: Math.round(performance.now() - t0),
-            executionProvider: "webgpu",
-          });
-          lastArcFaceInitError = null;
-          return session;
-        } catch (err) {
-          faceCaptureDiag({
-            stage: "gpu_session_failed_trying_wasm",
-            component: "arcface",
-            success: false,
-            executionProvider: "webgpu",
-            errorMessage: sanitizeInitError(err),
-          });
-        }
-      } else {
-        faceCaptureDiag({
-          stage: "webgpu_unavailable_using_wasm",
-          component: "arcface",
-          success: true,
-          executionProvider: "wasm",
-          errorMessage: probe.detail
-            ? `${probe.reason}: ${probe.detail}`
-            : probe.reason,
-        });
-      }
-
-      try {
-        const session = await createSessionWithProvider(ort, bytes, ["wasm"]);
+        const session = await createOrtSession(bytes);
+        modelBytesPromise = null;
+        lastExecutionProvider = ORT_EXECUTION_PROVIDER;
+        lastArcFaceInitError = null;
+        embedderState = "READY";
         faceCaptureDiag({
           stage: "arcface_session_ok",
           component: "arcface",
           success: true,
           ms: Math.round(performance.now() - t0),
-          executionProvider: "wasm",
+          executionProvider: ORT_EXECUTION_PROVIDER,
         });
-        lastArcFaceInitError = null;
         return session;
       } catch (err) {
-        const msg = sanitizeInitError(err);
-        lastArcFaceInitError = msg;
-        faceCaptureDiag({
-          stage: "wasm_session_failed",
-          component: "arcface",
-          success: false,
-          executionProvider: "wasm",
-          errorMessage: msg,
-        });
-        throw biometricUnavailable(`ArcFace ONNX session failed: ${msg}`);
+        lastArcFaceInitError = sanitizeInitError(err);
+        throw err;
       }
     })().catch((err) => {
       sessionPromise = null;
+      embedderState = "FAILED";
       throw err;
     });
   }
@@ -451,8 +248,8 @@ export async function embedAlignedFace112(
     );
   }
 
-  const ort = await loadOrt();
   const session = await getArcFaceSession(modelBaseUrl);
+  const ort = await getOrtModule();
   const inputName = session.inputNames[0] ?? "input.1";
   const tensor = new ort.Tensor("float32", nchw112, [1, 3, 112, 112]);
   const outputs = await session.run({ [inputName]: tensor });
@@ -483,12 +280,14 @@ export async function embedAlignedFace112(
 }
 
 export function isArcFaceReady(): boolean {
-  return sessionPromise !== null;
+  return embedderState === "READY";
 }
 
 /** Test helper ? clear cached session so the next call reloads. */
 export function resetArcFaceSessionForTests(): void {
   sessionPromise = null;
+  modelBytesPromise = null;
+  embedderState = "IDLE";
   lastArcFaceInitError = null;
   lastExecutionProvider = null;
 }

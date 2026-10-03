@@ -1,8 +1,20 @@
 import type { ReactNode } from "react";
 import {
+  BIOMETRIC_RELOAD_REQUIRED_ERROR,
+  BIOMETRIC_UNAVAILABLE_ERROR,
   useAmbientTrustIdAuth,
   type UseAmbientTrustIdAuthOptions,
 } from "../hooks/useAmbientTrustIdAuth.js";
+
+const SERVICE_DOWN = /BIOMETRIC_SERVICE_UNAVAILABLE|BIOMETRIC_MODEL_UNAVAILABLE|timed out/i;
+
+/** Service failures show fixed copy; internal error detail stays in diagnostics. */
+function presentServiceError(error: string): string {
+  if (error === BIOMETRIC_UNAVAILABLE_ERROR || error === BIOMETRIC_RELOAD_REQUIRED_ERROR) {
+    return error.replace("BIOMETRIC_SERVICE_UNAVAILABLE", "BIOMETRIC SERVICE UNAVAILABLE");
+  }
+  return "BIOMETRIC SERVICE UNAVAILABLE — TrustID's identification service is temporarily unavailable. Retry or use another available verification method.";
+}
 
 export type TrustIdAmbientAuthProviderProps = UseAmbientTrustIdAuthOptions & {
   children: ReactNode;
@@ -68,10 +80,17 @@ export function TrustIdAmbientAuthProvider({
   }
 
   if (phase === "NO_MATCH" || phase === "OFFER_CREATE") {
+    // "Not found" is only claimed after a face was actually read and searched.
+    const faceWasRead = Boolean(faceDiagnostics?.vectorCreated);
     return (
-      <AmbientSplash brand={brand} msg="No Trust ID found">
+      <AmbientSplash
+        brand={brand}
+        msg={faceWasRead ? "No Trust ID found" : "Face scan didn't finish"}
+      >
         <p className="tid-ambient-splash-msg" style={{ marginTop: "0.65rem" }}>
-          Scan complete. No TrustID matches this face. Press Create TrustID to make one.
+          {faceWasRead
+            ? "Scan complete. No TrustID matches this face. Press Create TrustID to make one."
+            : "Your face wasn't read in time. Retry the scan, use fingerprint, or press Create TrustID to scan your face now."}
         </p>
         {error ? (
           <p
@@ -284,11 +303,13 @@ export function TrustIdAmbientAuthProvider({
   }
 
   if (phase === "ERROR") {
-    const serviceDown = /BIOMETRIC_SERVICE_UNAVAILABLE|BIOMETRIC_MODEL_UNAVAILABLE|timed out/i.test(
-      error ?? "",
-    );
+    const serviceDown = SERVICE_DOWN.test(error ?? "");
+    const reloadRequired = error === BIOMETRIC_RELOAD_REQUIRED_ERROR;
+    const msg = serviceDown && error
+      ? presentServiceError(error)
+      : error ?? "Verification paused";
     return (
-      <AmbientSplash brand={brand} msg={error ?? "Verification paused"}>
+      <AmbientSplash brand={brand} msg={msg}>
         <div
           className="tid-ambient-choice-row"
           role="group"
@@ -296,9 +317,19 @@ export function TrustIdAmbientAuthProvider({
         >
           <div className="tid-ambient-choice-card">
             <p className="tid-ambient-choice-label">Try again</p>
-            <button type="button" className="tid-btn" onClick={retry}>
-              Retry Face Scan
-            </button>
+            {reloadRequired ? (
+              <button
+                type="button"
+                className="tid-btn"
+                onClick={() => window.location.reload()}
+              >
+                Reload Page
+              </button>
+            ) : (
+              <button type="button" className="tid-btn" onClick={retry}>
+                Retry Face Scan
+              </button>
+            )}
             <button
               type="button"
               className="tid-btn tid-btn-ghost"

@@ -1,11 +1,11 @@
 /**
- * MediaPipe Face Landmarker detector ù real DNN face detection + landmarks.
+ * MediaPipe Face Landmarker detector ? real DNN face detection + landmarks.
  * Maps 478 landmarks to ArcFace 5-point set.
  *
  * Robustness notes:
  * - Prefer a renderable off-screen video (not display:none) at the capture layer.
  * - Detect on a square letterboxed canvas so NORM_RECT projection is well-defined
- *   for non-square camera frames (640ù480), then map landmarks back to source size.
+ *   for non-square camera frames (640?480), then map landmarks back to source size.
  * - GPU first, CPU fallback if GPU init fails or yields persistent empty detections.
  */
 import { BIOMETRIC_ERROR_CODES } from "@trustid/shared";
@@ -45,7 +45,7 @@ function canUseMediapipeGpu(): boolean {
   if (typeof document === "undefined") return false;
   try {
     const canvas = document.createElement("canvas");
-    // Do not use failIfMajorPerformanceCaveat here ó we still need the context
+    // Do not use failIfMajorPerformanceCaveat here ? we still need the context
     // to read the renderer string, then decide.
     const gl =
       (canvas.getContext("webgl2") as WebGLRenderingContext | null) ||
@@ -83,6 +83,33 @@ function canUseMediapipeGpu(): boolean {
 let landmarkerPromise: Promise<FaceLandmarkerLike> | null = null;
 let activeDelegate: DelegateKind = "GPU";
 let emptyDetectStreak = 0;
+
+export type DetectorState = "IDLE" | "LOADING" | "READY" | "FAILED";
+let detectorState: DetectorState = "IDLE";
+
+export function getFaceDetectorStatus(): {
+  state: DetectorState;
+  delegate: DelegateKind;
+} {
+  return { state: detectorState, delegate: activeDelegate };
+}
+
+function trackDetector(
+  load: Promise<FaceLandmarkerLike>,
+): Promise<FaceLandmarkerLike> {
+  detectorState = "LOADING";
+  return load.then(
+    (landmarker) => {
+      detectorState = "READY";
+      return landmarker;
+    },
+    (err: unknown) => {
+      landmarkerPromise = null;
+      detectorState = "FAILED";
+      throw err;
+    },
+  );
+}
 
 /** MediaPipe Face Mesh indices approximating ArcFace 5-point set */
 const IDX = {
@@ -160,7 +187,7 @@ export function squareLetterboxGeometry(
 
 /**
  * Letterbox source ImageData onto a square ImageData (black bars).
- * Pure pixel copy ù jsdom-safe (no Canvas 2D).
+ * Pure pixel copy ? jsdom-safe (no Canvas 2D).
  */
 export function letterboxImageDataToSquareData(imageData: ImageData): {
   square: ImageData;
@@ -347,7 +374,7 @@ export async function getSharedFaceLandmarker(
   modelBaseUrl = "/models/trustid",
 ): Promise<FaceLandmarkerLike> {
   if (!landmarkerPromise) {
-    landmarkerPromise = (async () => {
+    landmarkerPromise = trackDetector((async () => {
       if (!canUseMediapipeGpu()) {
         faceCaptureDiag({
           stage: "mediapipe_gpu_skipped_no_webgl",
@@ -385,19 +412,17 @@ export async function getSharedFaceLandmarker(
         activeDelegate = "CPU";
         return loadFaceLandmarker(modelBaseUrl, "CPU");
       }
-    })().catch((err) => {
-      landmarkerPromise = null;
-      throw err;
-    });
+    })());
   }
   return landmarkerPromise;
 }
 
-/** Test/dev helper ù drop cached landmarker so the next call reloads. */
+/** Test/dev helper ? drop cached landmarker so the next call reloads. */
 export function resetSharedFaceLandmarkerForTests(): void {
   landmarkerPromise = null;
   emptyDetectStreak = 0;
   activeDelegate = "GPU";
+  detectorState = "IDLE";
 }
 
 async function forceCpuLandmarker(
@@ -406,10 +431,7 @@ async function forceCpuLandmarker(
   landmarkerPromise = null;
   emptyDetectStreak = 0;
   activeDelegate = "CPU";
-  landmarkerPromise = loadFaceLandmarker(modelBaseUrl, "CPU").catch((err) => {
-    landmarkerPromise = null;
-    throw err;
-  });
+  landmarkerPromise = trackDetector(loadFaceLandmarker(modelBaseUrl, "CPU"));
   return landmarkerPromise;
 }
 

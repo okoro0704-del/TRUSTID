@@ -1,11 +1,14 @@
 /**
  * Ambient auth state machine: NO_MATCH terminates scan; service errors ? no-match.
  */
-import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { TrustIdAuthProvider } from "../src/context/TrustIdAuthProvider.js";
-import { useAmbientTrustIdAuth } from "../src/hooks/useAmbientTrustIdAuth.js";
+import {
+  BIOMETRIC_UNAVAILABLE_ERROR,
+  useAmbientTrustIdAuth,
+} from "../src/hooks/useAmbientTrustIdAuth.js";
 import type { TrustIdApiClient } from "../src/api/client.js";
 import { resetEnrollmentCandidateForDev } from "../src/hooks/enrollmentCandidateSession.js";
 import { TrustIdAmbientAuthProvider } from "../src/components/TrustIdAmbientAuthProvider.js";
@@ -307,7 +310,7 @@ describe("useAmbientTrustIdAuth state machine", () => {
     await waitFor(() => expect(result.current.phase).toBe("ERROR"));
     expect(faceLookup).not.toHaveBeenCalled();
     expect(registerTrustId).not.toHaveBeenCalled();
-    expect(result.current.error).toMatch(/FACE_VECTOR_UNAVAILABLE|ArcFace/i);
+    expect(result.current.error).toBe(BIOMETRIC_UNAVAILABLE_ERROR);
     expect(result.current.faceDiagnostics.errorCode).toBe(
       "FACE_VECTOR_UNAVAILABLE",
     );
@@ -436,5 +439,111 @@ describe("useAmbientTrustIdAuth state machine", () => {
         result.current.phase,
       );
     });
+  });
+});
+
+const RAW_WASM_ERROR =
+  "Biometric model init failed (MediaPipe=SUCCESS, ArcFace=FAILURE): no available backend found. ERR: [wasm] Error: multiple calls to 'initWasm()' detected.";
+
+describe("biometric runtime unavailable", () => {
+  beforeEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    resetEnrollmentCandidateForDev();
+    faceLookup.mockResolvedValue({ status: "NOT_FOUND", canRegister: true });
+  });
+
+  it("a runtime init failure is a service error, never a not-found, and hides the internal error", async () => {
+    const capturePayload = vi.fn(async () => ({
+      captureErrorCode: "BIOMETRIC_MODEL_UNAVAILABLE",
+      captureErrorMessage: RAW_WASM_ERROR,
+    }));
+    const view = render(
+      <TrustIdAmbientAuthProvider capturePayload={capturePayload}>
+        Signed in
+      </TrustIdAmbientAuthProvider>,
+      { wrapper },
+    );
+    await screen.findByText(/BIOMETRIC SERVICE UNAVAILABLE/, undefined, { timeout: 8000 });
+    expect(
+      screen.getByText(
+        "BIOMETRIC SERVICE UNAVAILABLE — TrustID couldn't start biometric verification on this device. Retry or use another available verification method.",
+      ),
+    ).toBeTruthy();
+    expect(view.container.textContent).not.toMatch(/initWasm|no available backend|ArcFace|wasm/i);
+    expect(view.container.textContent).not.toMatch(/No Trust ID found/);
+    expect(screen.queryByRole("button", { name: "Create TrustID" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry Face Scan" })).toBeTruthy();
+    expect(faceLookup).not.toHaveBeenCalled();
+    expect(registerTrustId).not.toHaveBeenCalled();
+    view.unmount();
+  }, 15000);
+
+  it("a page-level runtime failure offers reload instead of a retry that cannot work", async () => {
+    const capturePayload = vi.fn(async () => ({
+      captureErrorCode: "BIOMETRIC_MODEL_UNAVAILABLE",
+      captureErrorMessage:
+        "Biometric model init failed (MediaPipe=SUCCESS, ArcFace=FAILURE): BIOMETRIC_RUNTIME_FAILED: biometric runtime unavailable (init)",
+    }));
+    const view = render(
+      <TrustIdAmbientAuthProvider capturePayload={capturePayload}>
+        Signed in
+      </TrustIdAmbientAuthProvider>,
+      { wrapper },
+    );
+    await screen.findByRole("button", { name: "Reload Page" }, { timeout: 8000 });
+    expect(screen.queryByRole("button", { name: "Retry Face Scan" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Create TrustID" })).toBeNull();
+    expect(view.container.textContent).not.toMatch(/BIOMETRIC_RUNTIME_FAILED/);
+    view.unmount();
+  }, 15000);
+
+  it("Create TrustID never registers when biometrics cannot start", async () => {
+    const capturePayload = vi
+      .fn()
+      .mockResolvedValueOnce({
+        captureErrorCode: "NO_FACE",
+        captureErrorMessage: "Capture aborted",
+      })
+      .mockResolvedValueOnce({
+        captureErrorCode: "BIOMETRIC_MODEL_UNAVAILABLE",
+        captureErrorMessage: RAW_WASM_ERROR,
+      });
+    const { result } = renderHook(
+      () => useAmbientTrustIdAuth({ capturePayload }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.phase).toBe("ERROR"));
+    act(() => {
+      result.current.confirmCreateAccount();
+    });
+    await waitFor(() => expect(capturePayload).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.phase).toBe("ERROR"));
+    expect(result.current.error).toBe(BIOMETRIC_UNAVAILABLE_ERROR);
+    expect(registerTrustId).not.toHaveBeenCalled();
+    expect(faceLookup).not.toHaveBeenCalled();
+    expect(result.current.faceDiagnostics.errorCode).toBe("BIOMETRIC_MODEL_UNAVAILABLE");
+  });
+
+  it("a scan that ends without reading a face does not claim no Trust ID exists", async () => {
+    vi.useFakeTimers();
+    const capturePayload = vi.fn(() => new Promise(() => {}));
+    const view = render(
+      <TrustIdAmbientAuthProvider capturePayload={capturePayload as never}>
+        Signed in
+      </TrustIdAmbientAuthProvider>,
+      { wrapper },
+    );
+    try {
+      await act(async () => {});
+      await act(async () => { await vi.advanceTimersByTimeAsync(31_000); });
+      expect(view.container.textContent).toMatch(/Face scan didn't finish/);
+      expect(view.container.textContent).not.toMatch(/No Trust ID found|No TrustID matches/);
+      expect(faceLookup).not.toHaveBeenCalled();
+      expect(registerTrustId).not.toHaveBeenCalled();
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
   });
 });

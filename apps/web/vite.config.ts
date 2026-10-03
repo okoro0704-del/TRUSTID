@@ -51,8 +51,16 @@ export default defineConfig(({ mode }) => ({
       registerType: "autoUpdate",
       includeAssets: ["favicon.svg"],
       workbox: {
-        // onnxruntime-web WASM is large — served from /ort (copied at build); do not precache
-        globIgnores: ["**/*.wasm", "**/ort*.mjs", "**/ort*.js", "**/ort/**", "releases/**"],
+        // Biometric runtimes are never precached: a runtime's JS loader and its
+        // .wasm must come from the same release, and the .wasm is not precached.
+        globIgnores: [
+          "**/*.wasm",
+          "**/ort*.mjs",
+          "**/ort*.js",
+          "**/ort/**",
+          "**/mediapipe/**",
+          "releases/**",
+        ],
         maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
       },
       manifest: {
@@ -82,11 +90,11 @@ export default defineConfig(({ mode }) => ({
     }),
   ],
   optimizeDeps: {
-    exclude: ["onnxruntime-web"],
+    exclude: ["onnxruntime-web", "onnxruntime-web/wasm"],
   },
   build: {
     rollupOptions: {
-      // ORT wasm is served from /public/ort via copy-ort-wasm.mjs
+      // ORT wasm is served from /public/ort/<version> via copy-ort-wasm.mjs
       external: [],
     },
   },

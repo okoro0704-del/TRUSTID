@@ -179,6 +179,31 @@ function isServiceFailureMessage(msg: string): boolean {
   );
 }
 
+/** Shown when the on-device biometric runtime or models cannot start. */
+export const BIOMETRIC_UNAVAILABLE_ERROR =
+  "BIOMETRIC_SERVICE_UNAVAILABLE — TrustID couldn't start biometric verification on this device. Retry or use another available verification method.";
+/** The runtime failed in a way only a page reload can clear. */
+export const BIOMETRIC_RELOAD_REQUIRED_ERROR =
+  "BIOMETRIC_SERVICE_UNAVAILABLE — TrustID couldn't start biometric verification on this device. Reload the page or use another available verification method.";
+
+const ON_DEVICE_BIOMETRIC_FAILURE =
+  /BIOMETRIC_MODEL_UNAVAILABLE|FACE_VECTOR_UNAVAILABLE|BIOMETRIC_RUNTIME_|BIOMETRIC_SESSION_FAILED|initWasm|wasm|onnx|backend found|warm-up|model init/i;
+
+function isOnDeviceBiometricFailure(code: string | undefined, detail: string): boolean {
+  return (
+    code === BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_UNAVAILABLE ||
+    code === BIOMETRIC_ERROR_CODES.FACE_VECTOR_UNAVAILABLE ||
+    ON_DEVICE_BIOMETRIC_FAILURE.test(detail)
+  );
+}
+
+/** Internal runtime/model detail never reaches the screen. */
+function safeOnDeviceBiometricError(detail: string): string {
+  return /BIOMETRIC_RUNTIME_FAILED/.test(detail)
+    ? BIOMETRIC_RELOAD_REQUIRED_ERROR
+    : BIOMETRIC_UNAVAILABLE_ERROR;
+}
+
 /** Hard cap for every face scan. Match signs in; otherwise offer fingerprint or register. */
 const FACE_SCAN_BUDGET_MS = 30_000;
 /** A face already scanned must not keep "Saving" open while the camera is still closing. */
@@ -601,7 +626,12 @@ export function useAmbientTrustIdAuth(
       const detail =
         payload?.captureErrorMessage ??
         "No face detected. Retry the camera, use fingerprint if you already have a Trust ID, or register.";
-      enterServiceError(runId, `${code} — ${detail}`);
+      enterServiceError(
+        runId,
+        isOnDeviceBiometricFailure(code, detail)
+          ? safeOnDeviceBiometricError(detail)
+          : `${code} — ${detail}`,
+      );
       syncDiagnostics({
         cameraReady: true,
         faceDetected: code !== BIOMETRIC_ERROR_CODES.FACE_NOT_DETECTED &&
@@ -624,10 +654,7 @@ export function useAmbientTrustIdAuth(
         String(payload.face.modelName ?? ""),
       );
       if (legacy) {
-        enterServiceError(
-          runId,
-          `${BIOMETRIC_ERROR_CODES.FACE_VECTOR_UNAVAILABLE} — Production ArcFace face vector unavailable. Check models at /models/trustid.`,
-        );
+        enterServiceError(runId, BIOMETRIC_UNAVAILABLE_ERROR);
         syncDiagnostics({
           faceDetected: true,
           vectorCreated: false,
@@ -829,6 +856,20 @@ export function useAmbientTrustIdAuth(
           setEnrollmentCandidate(lateFace, "identification");
         } else if (late?.captureErrorMessage) {
           captureFailure = late.captureErrorMessage;
+          if (isOnDeviceBiometricFailure(late.captureErrorCode, captureFailure)) {
+            // Biometrics cannot start here, so no face can be enrolled. Fail
+            // closed: service error, and registration is not offered.
+            if (ac.signal.aborted) return;
+            setError(safeOnDeviceBiometricError(captureFailure));
+            syncDiagnostics({
+              vectorCreated: false,
+              templateAvailable: false,
+              errorCode: BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_UNAVAILABLE,
+              stage: "model_unavailable",
+            });
+            setPhaseSafe("ERROR");
+            return;
+          }
         }
       }
       if (ac.signal.aborted) return;
@@ -1131,9 +1172,11 @@ export function useAmbientTrustIdAuth(
         const msg = e instanceof Error ? e.message : "Ambient auth failed";
         enterServiceError(
           scheduledRunId,
-          isServiceFailureMessage(msg)
-            ? `BIOMETRIC_SERVICE_UNAVAILABLE — ${msg}`
-            : msg,
+          isOnDeviceBiometricFailure(undefined, msg)
+            ? safeOnDeviceBiometricError(msg)
+            : isServiceFailureMessage(msg)
+              ? `BIOMETRIC_SERVICE_UNAVAILABLE — ${msg}`
+              : msg,
         );
       });
     }, 400);

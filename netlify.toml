@@ -14,10 +14,13 @@
 
 # Biometric runtimes are pinned by package/model version and integrity checked.
 # Cache them across visits so mobile Safari does not repeat a 25+ MB cold load.
+# ORT lives under /ort/<onnxruntime-web version>/, so a version bump changes the URL.
+# /mediapipe/wasm is not versioned in its path, so revalidate (cheap 304s)
+# instead of pinning a loader/binary pair for a year.
 [[headers]]
   for = "/mediapipe/*"
   [headers.values]
-    Cache-Control = "public, max-age=31536000, immutable"
+    Cache-Control = "public, max-age=0, must-revalidate"
 
 [[headers]]
   for = "/models/trustid/*"
@@ -58,6 +61,23 @@
   to = "https://lucid-integrity-production.up.railway.app/"
   status = 200
   force = true
+
+# Missing biometric assets must fail as 404. Without these the SPA fallback
+# answers with index.html (HTTP 200) under the immutable headers above.
+[[redirects]]
+  from = "/ort/*"
+  to = "/404.html"
+  status = 404
+
+[[redirects]]
+  from = "/models/trustid/*"
+  to = "/404.html"
+  status = 404
+
+[[redirects]]
+  from = "/mediapipe/*"
+  to = "/404.html"
+  status = 404
 
 # SPA fallback
 [[redirects]]
