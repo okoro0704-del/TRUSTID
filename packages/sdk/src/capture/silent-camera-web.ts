@@ -251,8 +251,18 @@ export async function captureSilentFaceFromWebCamera(
     let framesWithSignal = 0;
     let framesWithFaces = 0;
 
+    const keepScannedFace = (
+      scanned: SilentWebCaptureResult | null,
+    ): SilentWebCaptureResult | null => {
+      const vector = scanned?.payload?.vector;
+      if (!scanned || !vector || vector.length !== 512) return null;
+      return scanned;
+    };
+
     for (let i = 0; i < 48; i++) {
       if (aborted()) {
+        const kept = keepScannedFace(lastEmbed);
+        if (kept) return kept;
         return {
           confidence: 0,
           payload: {
@@ -336,20 +346,14 @@ export async function captureSilentFaceFromWebCamera(
               confidence: extracted.payload.confidence,
             },
           };
-          const padCheck = await pad.evaluate();
-          if (padCheck.decision === "accept") {
-            faceCaptureDiag({
-              stage: "capture_accept",
-              faceLandmarksCount: det.faces.length,
-              modelReady: true,
-            });
-            return {
-              ...lastEmbed,
-              payload: {
-                ...lastEmbed.payload,
-              },
-            };
-          }
+          // The first real ArcFace frame is the scanned face. Register uses it.
+          // A blink can still accept, but a missing blink must not discard it.
+          faceCaptureDiag({
+            stage: "capture_accept",
+            faceLandmarksCount: det.faces.length,
+            modelReady: true,
+          });
+          return lastEmbed;
         } else if (
           extracted.code === BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_UNAVAILABLE
         ) {
@@ -380,25 +384,15 @@ export async function captureSilentFaceFromWebCamera(
 
     faceCaptureDiag({
       stage: "capture_exhausted",
-      errorCode: lastEmbed
-        ? BIOMETRIC_ERROR_CODES.LIVENESS_FAILED
-        : BIOMETRIC_ERROR_CODES.NO_FACE,
+      errorCode: BIOMETRIC_ERROR_CODES.NO_FACE,
       faceLandmarksCount: framesWithFaces,
       // Reuse fields for aggregate counters (safe metadata only).
       imageWidth: framesGrabbed,
       imageHeight: framesWithSignal,
     });
 
-    if (lastEmbed) {
-      // Had face embeds but blink PAD never passed
-      return {
-        ...lastEmbed,
-        payload: { ...lastEmbed.payload, vector: [] },
-        confidence: 0,
-        errorCode: BIOMETRIC_ERROR_CODES.LIVENESS_FAILED,
-        errorMessage: "Blink to confirm liveness, then try again",
-      };
-    }
+    const kept = keepScannedFace(lastEmbed);
+    if (kept) return kept;
 
     return {
       confidence: 0,

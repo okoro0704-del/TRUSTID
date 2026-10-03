@@ -227,6 +227,9 @@ export function useAmbientTrustIdAuth(
   const captureAbortRef = useRef<AbortController | null>(null);
   const pendingResultRef = useRef<AmbientSignInResult | null>(null);
   const pendingPayloadRef = useRef<MultiModalBiometricPayload | null>(null);
+  const captureInflightRef = useRef<Promise<MultiModalBiometricPayload | undefined> | null>(
+    null,
+  );
   const pendingInstallRef = useRef<string | undefined>(undefined);
   const pendingEnrollRef = useRef<AmbientSignInResult | null>(null);
   /** User-choice screens must not be overwritten by stale async work. */
@@ -548,10 +551,12 @@ export function useAmbientTrustIdAuth(
     pendingInstallRef.current = installId;
 
     let payload: MultiModalBiometricPayload | undefined;
+    const captureWork = capturePayload
+      ? capturePayload({ signal: ac.signal })
+      : Promise.resolve(undefined);
+    captureInflightRef.current = captureWork;
     try {
-      payload = capturePayload
-        ? await capturePayload({ signal: ac.signal })
-        : undefined;
+      payload = await captureWork;
     } catch {
       payload = undefined;
     }
@@ -779,6 +784,17 @@ export function useAmbientTrustIdAuth(
         enrolledFace = savedFace;
         enrollSource = "probe";
         setEnrollmentCandidate(savedFace, "identification");
+      } else if (captureInflightRef.current) {
+        // The 30s screen can appear while the camera is still finishing the
+        // frame it already scanned. Wait for that face. Do not open a new scan.
+        const late = await captureInflightRef.current.catch(() => undefined);
+        const lateFace = late?.face;
+        if (late && lateFace && isArcFaceEnrollmentFace(lateFace)) {
+          enrolledFace = lateFace;
+          enrollSource = "probe";
+          pendingPayloadRef.current = late;
+          setEnrollmentCandidate(lateFace, "identification");
+        }
       }
 
       if (!isProductionArcFaceFace(enrolledFace)) {

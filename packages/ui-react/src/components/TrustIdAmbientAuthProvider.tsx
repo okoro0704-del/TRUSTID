@@ -341,9 +341,7 @@ export function TrustIdAmbientAuthProvider({
 
   const msg =
     phase === "ENROLLING"
-      ? faceDiagnostics?.vectorCreated
-        ? "Saving your scanned face…"
-        : "Register your face — capturing enrollment samples…"
+      ? "Saving your scanned face…"
       : phase === "SAVING_FINGERPRINT"
         ? "Register fingerprint backup…"
         : "Looking for your Trust ID…";
