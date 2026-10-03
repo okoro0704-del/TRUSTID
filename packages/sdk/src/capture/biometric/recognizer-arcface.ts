@@ -227,6 +227,46 @@ function rejectAfter(ms: number, message: string): Promise<never> {
   });
 }
 
+// Range downloads are not reused by the HTTP cache, so a reload would fetch
+// the model again. Keep the verified bytes in Cache Storage instead.
+const MODEL_CACHE_NAME = `trustid-models-${ARCFACE_MBF_ARTIFACT.sha256.slice(0, 16)}`;
+
+async function readCachedModel(url: string): Promise<ArrayBuffer | null> {
+  try {
+    if (typeof caches === "undefined") return null;
+    const cache = await caches.open(MODEL_CACHE_NAME);
+    const hit = await cache.match(url);
+    return hit ? await hit.arrayBuffer() : null;
+  } catch {
+    return null;
+  }
+}
+
+async function storeCachedModel(url: string, buffer: ArrayBuffer): Promise<void> {
+  try {
+    if (typeof caches === "undefined") return;
+    const cache = await caches.open(MODEL_CACHE_NAME);
+    await cache.put(
+      url,
+      new Response(buffer.slice(0), {
+        headers: { "Content-Type": "application/octet-stream" },
+      }),
+    );
+  } catch {
+    /* storage full or blocked: the next load downloads again */
+  }
+}
+
+async function dropCachedModel(url: string): Promise<void> {
+  try {
+    if (typeof caches === "undefined") return;
+    const cache = await caches.open(MODEL_CACHE_NAME);
+    await cache.delete(url);
+  } catch {
+    /* ignore */
+  }
+}
+
 export async function getArcFaceSession(
   modelBaseUrl = "/models/trustid",
 ): Promise<OrtSession> {
@@ -250,9 +290,16 @@ export async function getArcFaceSession(
       });
 
       let buffer: ArrayBuffer;
+      let fromCache = false;
       try {
         const fetchStarted = performance.now();
-        buffer = await downloadModelBytes(url);
+        const cached = await readCachedModel(url);
+        if (cached) {
+          buffer = cached;
+          fromCache = true;
+        } else {
+          buffer = await downloadModelBytes(url);
+        }
         faceCaptureDiag({
           stage: "arcface_model_fetch_ok",
           component: "arcface",
@@ -268,7 +315,16 @@ export async function getArcFaceSession(
           success: true,
           expectedHashPrefix: hashPrefix(ARCFACE_MBF_ARTIFACT.sha256),
         });
-        const actual = await sha256Hex(buffer);
+        let actual = await sha256Hex(buffer);
+        if (
+          fromCache &&
+          actual.toLowerCase() !== ARCFACE_MBF_ARTIFACT.sha256.toLowerCase()
+        ) {
+          await dropCachedModel(url);
+          buffer = await downloadModelBytes(url);
+          fromCache = false;
+          actual = await sha256Hex(buffer);
+        }
         if (actual.toLowerCase() !== ARCFACE_MBF_ARTIFACT.sha256.toLowerCase()) {
           faceCaptureDiag({
             stage: "arcface_integrity_failed",
@@ -289,6 +345,7 @@ export async function getArcFaceSession(
           expectedHashPrefix: hashPrefix(ARCFACE_MBF_ARTIFACT.sha256),
           actualHashPrefix: hashPrefix(actual),
         });
+        if (!fromCache) await storeCachedModel(url, buffer);
       } catch (err) {
         const msg = sanitizeInitError(err);
         lastArcFaceInitError = msg;

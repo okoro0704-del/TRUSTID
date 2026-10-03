@@ -122,6 +122,8 @@ export type UseAmbientTrustIdAuthResult = {
   error: string | null;
   /** Safe face-lifecycle diagnostics (no vectors/images) */
   faceDiagnostics: FaceLifecycleDiagnostics;
+  /** While creating: saving the scanned face, or capturing one because the scan had none */
+  createStage: "saving" | "capturing";
   lastResult: AmbientSignInResult | null;
   previousTrustId: string | null;
   approvalPollToken: string | null;
@@ -234,6 +236,7 @@ export function useAmbientTrustIdAuth(
   const [approvalPollToken, setApprovalPollToken] = useState<string | null>(null);
   const [fingerprintBusy, setFingerprintBusy] = useState(false);
   const [nonce, setNonce] = useState(0);
+  const [createStage, setCreateStage] = useState<"saving" | "capturing">("saving");
   const [faceDiagnostics, setFaceDiagnostics] = useState<FaceLifecycleDiagnostics>(
     () => getFaceDiagnostics(),
   );
@@ -790,6 +793,8 @@ export function useAmbientTrustIdAuth(
 
       let enrolledFace: MultiModalBiometricPayload["face"] | undefined;
       let enrollSource: "probe" | "none" = "none";
+      let captureFailure: string | null = null;
+      setCreateStage("saving");
 
       // Register uses the face from the identification scan. It does not
       // open the camera or search again.
@@ -804,21 +809,36 @@ export function useAmbientTrustIdAuth(
         enrolledFace = savedFace;
         enrollSource = "probe";
         setEnrollmentCandidate(savedFace, "identification");
-      } else if (captureInflightRef.current) {
-        // The choice screen can appear while the last frame is still finishing.
-        // Wait briefly for that face. Do not open a new scan, and do not wait forever.
-        const late = await settleWithin(captureInflightRef.current, SAVED_FACE_WAIT_MS);
+      } else {
+        let late: MultiModalBiometricPayload | undefined;
+        if (captureInflightRef.current) {
+          late = await settleWithin(captureInflightRef.current, SAVED_FACE_WAIT_MS);
+        }
+        // The search ended before a face was ready (usually the face model was
+        // still loading). Capture the face for this Trust ID now. No search runs.
+        if (!(late?.face && isArcFaceEnrollmentFace(late.face)) && capturePayload) {
+          setCreateStage("capturing");
+          late = await capturePayload({ signal: ac.signal }).catch(() => undefined);
+          setCreateStage("saving");
+        }
         const lateFace = late?.face;
         if (late && lateFace && isArcFaceEnrollmentFace(lateFace)) {
           enrolledFace = lateFace;
           enrollSource = "probe";
           pendingPayloadRef.current = late;
           setEnrollmentCandidate(lateFace, "identification");
+        } else if (late?.captureErrorMessage) {
+          captureFailure = late.captureErrorMessage;
         }
       }
+      if (ac.signal.aborted) return;
 
       if (!isProductionArcFaceFace(enrolledFace)) {
-        setError("No scanned face is ready to save. Retry the face scan, then Register My Face.");
+        setError(
+          captureFailure
+            ? `Could not get a usable face: ${captureFailure}. Look straight at the camera in good light, then press Create TrustID.`
+            : "Could not get a usable face. Look straight at the camera in good light, then press Create TrustID.",
+        );
         syncDiagnostics({
           vectorCreated: false,
           templateAvailable: false,
@@ -978,6 +998,7 @@ export function useAmbientTrustIdAuth(
   }, [
     abortCapture,
     apiBaseUrl,
+    capturePayload,
     finishAuthenticated,
     getDeviceFingerprint,
     persistMasterDeviceState,
@@ -1254,6 +1275,7 @@ export function useAmbientTrustIdAuth(
     identity,
     error,
     faceDiagnostics,
+    createStage,
     lastResult,
     previousTrustId,
     approvalPollToken,

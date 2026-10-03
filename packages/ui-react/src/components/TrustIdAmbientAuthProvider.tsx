@@ -49,6 +49,7 @@ export function TrustIdAmbientAuthProvider({
     phase,
     error,
     faceDiagnostics,
+    createStage,
     fingerprintBusy,
     retry,
     confirmSwitchAccount,
@@ -70,7 +71,7 @@ export function TrustIdAmbientAuthProvider({
     return (
       <AmbientSplash brand={brand} msg="No Trust ID found">
         <p className="tid-ambient-splash-msg" style={{ marginTop: "0.65rem" }}>
-          Scan complete. No Trust ID matches this face. Register your face to create one.
+          Scan complete. No TrustID matches this face. Press Create TrustID to make one.
         </p>
         {error ? (
           <p
@@ -129,7 +130,7 @@ export function TrustIdAmbientAuthProvider({
               onClick={confirmCreateAccount}
               disabled={fingerprintBusy}
             >
-              Register My Face
+              Create TrustID
             </button>
           </div>
         </div>
@@ -315,7 +316,7 @@ export function TrustIdAmbientAuthProvider({
                 className="tid-btn tid-btn-primary"
                 onClick={confirmCreateAccount}
               >
-                Register Trust ID
+                Create TrustID
               </button>
             </div>
           ) : (
@@ -341,7 +342,9 @@ export function TrustIdAmbientAuthProvider({
 
   const msg =
     phase === "ENROLLING"
-      ? "Saving your scanned face…"
+      ? createStage === "capturing"
+        ? "Getting your face ready — look at the camera…"
+        : "Creating your TrustID…"
       : phase === "SAVING_FINGERPRINT"
         ? "Register fingerprint backup…"
         : "Looking for your Trust ID…";

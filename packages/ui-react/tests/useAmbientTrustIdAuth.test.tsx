@@ -116,7 +116,7 @@ describe("useAmbientTrustIdAuth state machine", () => {
     );
     const register = await screen.findByRole(
       "button",
-      { name: "Register My Face" },
+      { name: "Create TrustID" },
       { timeout: 8000 },
     );
     expect(view.container.querySelector(".tid-silent-splash-ring")).toBeNull();
@@ -370,6 +370,32 @@ describe("useAmbientTrustIdAuth state machine", () => {
       face?: { confidence?: number };
     };
     expect(submitted.face?.confidence).toBe(0.5);
+  });
+
+  it("Create TrustID captures a face when the scan ended without one, then signs in", async () => {
+    const capturePayload = vi
+      .fn()
+      .mockResolvedValueOnce({
+        captureErrorCode: "NO_FACE",
+        captureErrorMessage: "Capture aborted",
+      })
+      .mockResolvedValueOnce(facePayload({ confidence: 0.81 }));
+    const { result } = renderHook(
+      () => useAmbientTrustIdAuth({ capturePayload }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.phase).toBe("ERROR"));
+    expect(faceLookup).not.toHaveBeenCalled();
+    act(() => {
+      result.current.confirmCreateAccount();
+    });
+    await waitFor(() => expect(result.current.phase).toBe("AUTHENTICATED"));
+    expect(capturePayload).toHaveBeenCalledTimes(2);
+    expect(faceLookup).not.toHaveBeenCalled();
+    const submitted = registerTrustId.mock.calls[0]?.[0] as {
+      face?: { confidence?: number };
+    };
+    expect(submitted.face?.confidence).toBe(0.81);
   });
 
   it("stale scan result cannot overwrite a newer user-choice phase", async () => {
