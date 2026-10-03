@@ -125,7 +125,7 @@ describe("useAmbientTrustIdAuth state machine", () => {
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 700)); });
     expect(capturePayload).toHaveBeenCalledTimes(1);
     fireEvent.click(register);
-    await screen.findByText("Face saved successfully");
+    await screen.findByText("Signed in");
     expect(registerTrustId).toHaveBeenCalledTimes(1);
     expect(capturePayload).toHaveBeenCalledTimes(1);
     view.unmount();
@@ -252,7 +252,7 @@ describe("useAmbientTrustIdAuth state machine", () => {
     expect(onAuthenticated).toHaveBeenCalled();
   });
 
-  it("registration reaches FACE_SAVED; fingerprint failure does not auto-login", async () => {
+  it("registration creates the Trust ID and signs in", async () => {
     const capturePayload = vi.fn(async () => facePayload());
     const captureEnrollmentPayload = vi.fn(async () => facePayload());
     const registerFingerprintBackup = vi.fn(async () => false);
@@ -274,7 +274,7 @@ describe("useAmbientTrustIdAuth state machine", () => {
       result.current.confirmCreateAccount();
     });
 
-    await waitFor(() => expect(result.current.phase).toBe("FACE_SAVED"));
+    await waitFor(() => expect(result.current.phase).toBe("AUTHENTICATED"));
     expect(registerTrustId).toHaveBeenCalled();
     const submitted = registerTrustId.mock.calls[0]?.[0] as {
       face?: { modelName?: string; vector?: number[]; embedding?: number[] };
@@ -283,20 +283,7 @@ describe("useAmbientTrustIdAuth state machine", () => {
     expect(submitted.face?.vector).toHaveLength(512);
     expect(submitted.face?.embedding).toBeUndefined();
     expect(captureEnrollmentPayload).not.toHaveBeenCalled();
-
-    act(() => {
-      result.current.continueAfterDeviceSaved();
-    });
-    expect(result.current.phase).toBe("OFFER_FINGERPRINT");
-
-    act(() => {
-      result.current.confirmFingerprintBackup();
-    });
-
-    await waitFor(() =>
-      expect(result.current.phase).toBe("FINGERPRINT_FAILED"),
-    );
-    expect(result.current.phase).not.toBe("AUTHENTICATED");
+    expect(registerFingerprintBackup).not.toHaveBeenCalled();
   });
 
   it("rejects legacy spatial identification probe and does not submit it", async () => {
@@ -347,7 +334,7 @@ describe("useAmbientTrustIdAuth state machine", () => {
     act(() => {
       result.current.confirmCreateAccount();
     });
-    await waitFor(() => expect(result.current.phase).toBe("FACE_SAVED"));
+    await waitFor(() => expect(result.current.phase).toBe("AUTHENTICATED"));
     expect(captureEnrollmentPayload).not.toHaveBeenCalled();
     const submitted = registerTrustId.mock.calls[0]?.[0] as {
       face?: { confidence?: number; modelName?: string };
@@ -377,7 +364,7 @@ describe("useAmbientTrustIdAuth state machine", () => {
     act(() => {
       result.current.confirmCreateAccount();
     });
-    await waitFor(() => expect(result.current.phase).toBe("FACE_SAVED"));
+    await waitFor(() => expect(result.current.phase).toBe("AUTHENTICATED"));
     expect(captureEnrollmentPayload).not.toHaveBeenCalled();
     const submitted = registerTrustId.mock.calls[0]?.[0] as {
       face?: { confidence?: number };

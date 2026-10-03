@@ -179,6 +179,24 @@ function isServiceFailureMessage(msg: string): boolean {
 
 /** Hard cap for every face scan. Match signs in; otherwise offer fingerprint or register. */
 const FACE_SCAN_BUDGET_MS = 30_000;
+/** A face already scanned must not keep "Saving" open while the camera is still closing. */
+const SAVED_FACE_WAIT_MS = 4_000;
+
+function settleWithin<T>(work: Promise<T>, ms: number): Promise<T | undefined> {
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(() => resolve(undefined), ms);
+    work.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        window.clearTimeout(timer);
+        resolve(undefined);
+      },
+    );
+  });
+}
 
 /**
  * Identity-first ambient auth — lookup on boot, enroll only after explicit consent.
@@ -203,7 +221,6 @@ export function useAmbientTrustIdAuth(
     registerFingerprintBackup,
     hasBoundInstall,
     storeSessionToken,
-    getPushToken,
     persistMasterDeviceState,
     cryptographicInstallUnlock,
     unlockWithDeviceCredential,
@@ -295,6 +312,9 @@ export function useAmbientTrustIdAuth(
         onAuthenticated?.(id);
       }
       await refresh();
+      // Session refresh can miss the cookie that was just set. Keep the
+      // identity this sign-in already established.
+      if (id) setIdentity(id);
       setPhaseSafe("AUTHENTICATED");
     },
     [onAuthenticated, refresh, setIdentity, setPhaseSafe, storeSessionToken],
@@ -785,9 +805,9 @@ export function useAmbientTrustIdAuth(
         enrollSource = "probe";
         setEnrollmentCandidate(savedFace, "identification");
       } else if (captureInflightRef.current) {
-        // The 30s screen can appear while the camera is still finishing the
-        // frame it already scanned. Wait for that face. Do not open a new scan.
-        const late = await captureInflightRef.current.catch(() => undefined);
+        // The choice screen can appear while the last frame is still finishing.
+        // Wait briefly for that face. Do not open a new scan, and do not wait forever.
+        const late = await settleWithin(captureInflightRef.current, SAVED_FACE_WAIT_MS);
         const lateFace = late?.face;
         if (late && lateFace && isArcFaceEnrollmentFace(lateFace)) {
           enrolledFace = lateFace;
@@ -847,8 +867,12 @@ export function useAmbientTrustIdAuth(
         }),
       );
 
-      const pushToken = getPushToken ? await getPushToken() : null;
       const installId = pendingInstallRef.current;
+      const fingerprint = face.deviceFingerprint
+        || (getDeviceFingerprint
+          ? await settleWithin(getDeviceFingerprint(), 1_500)
+          : undefined)
+        || installId;
       enrollmentDiag({
         attemptId,
         stage: "ENROLLMENT_REQUEST",
@@ -861,12 +885,7 @@ export function useAmbientTrustIdAuth(
         face,
         installId,
         deviceName: "Master Phone",
-        deviceFingerprint:
-          face.deviceFingerprint ||
-          (await getDeviceFingerprint?.()) ||
-          installId,
-        pushToken: pushToken ?? undefined,
-        pushPlatform: pushToken ? "android" : undefined,
+        deviceFingerprint: fingerprint,
       });
       enrollmentDiag({
         attemptId,
@@ -891,34 +910,17 @@ export function useAmbientTrustIdAuth(
       }
 
       if (result.trustId && persistMasterDeviceState) {
-        await persistMasterDeviceState({
-          trustId: result.trustId,
-          isMasterDevice: true,
-          deviceId: result.device?.id ?? null,
-        });
-      }
-
-      if (result.trustId) {
         try {
-          const fp =
-            face.deviceFingerprint ||
-            (await getDeviceFingerprint?.()) ||
-            installId;
-          if (fp) {
-            await sdk.bindMasterDevice({
-              deviceFingerprint: fp,
-              deviceId: result.device?.id,
-              deviceName: "Master Phone",
-              pushToken: pushToken ?? undefined,
-              pushPlatform: pushToken ? "android" : undefined,
-            });
-          }
+          await persistMasterDeviceState({
+            trustId: result.trustId,
+            isMasterDevice: true,
+            deviceId: result.device?.id ?? null,
+          });
         } catch {
-          /* optional second bind */
+          /* local device note must not block sign-in */
         }
       }
 
-      // Only confirm FACE_SAVED when persistence succeeded.
       if (!result.trustId) {
         setError(
           `${BIOMETRIC_ERROR_CODES.FACE_TEMPLATE_UNAVAILABLE} — Face was not persisted.`,
@@ -962,7 +964,10 @@ export function useAmbientTrustIdAuth(
       setLastResult({ ...result, enrolled: true, matched: true });
       pendingEnrollRef.current = { ...result, enrolled: true, matched: true };
       abortCapture();
-      setPhaseSafe("FACE_SAVED");
+      await finishAuthenticated(
+        (result.identity as TrustIdIdentity | undefined) ?? undefined,
+        result.sessionToken ?? result.token,
+      );
     })().catch((e) => {
       setError(e instanceof Error ? e.message : "Could not create Trust ID");
       syncDiagnostics({
@@ -973,8 +978,8 @@ export function useAmbientTrustIdAuth(
   }, [
     abortCapture,
     apiBaseUrl,
+    finishAuthenticated,
     getDeviceFingerprint,
-    getPushToken,
     persistMasterDeviceState,
     setPhaseSafe,
     syncDiagnostics,
