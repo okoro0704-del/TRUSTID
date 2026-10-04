@@ -81,6 +81,17 @@
   to = "/404.html"
   status = 404
 
+[[redirects]]
+  from = "/wasm/*"
+  to = "/404.html"
+  status = 404
+
+# A missing hashed chunk must fail loudly instead of evaluating index.html as JS.
+[[redirects]]
+  from = "/assets/*"
+  to = "/404.html"
+  status = 404
+
 # SPA fallback
 [[redirects]]
   from = "/*"
