@@ -20,9 +20,15 @@
  *
  * Diagnostics are metadata only. Nothing here sees frames or embeddings.
  */
+import { reportAssetProgress } from "./asset-progress.js";
+import {
+  BIOMETRIC_ASSET_KEYS,
+  readBiometricAsset,
+  storeBiometricAsset,
+} from "./biometric-asset-cache.js";
 import { biometricUnavailable } from "./errors.js";
 import { faceCaptureDiag, sanitizeInitError } from "./face-capture-diag.js";
-import { downloadModelBytes } from "./resumable-download.js";
+import { BiometricAssetError, downloadModelBytes } from "./resumable-download.js";
 
 export type OrtTensor = { data: Float32Array; dims: number[] };
 
@@ -32,6 +38,7 @@ export type OrtSession = {
   run: (
     feeds: Record<string, unknown>,
   ) => Promise<Record<string, { data: Float32Array }>>;
+  release?: () => Promise<void>;
 };
 
 export type OrtModule = {
@@ -62,6 +69,7 @@ export const ORT_RUNTIME_ERROR_CODES = {
   ASSETS_UNAVAILABLE: "BIOMETRIC_RUNTIME_ASSETS_UNAVAILABLE",
   INIT_FAILED: "BIOMETRIC_RUNTIME_FAILED",
   SESSION_FAILED: "BIOMETRIC_SESSION_FAILED",
+  PROBE_FAILED: "BIOMETRIC_RUNTIME_PROBE_FAILED",
 } as const;
 
 export type OrtRuntimeErrorCode =
@@ -98,7 +106,11 @@ const defaultHooks: RuntimeHooks = {
     const mod = await import("onnxruntime-web/wasm");
     return mod as unknown as OrtModule;
   },
-  fetchBinary: (url) => downloadModelBytes(url),
+  fetchBinary: (url) =>
+    downloadModelBytes(url, fetch, undefined, {
+      onProgress: (loaded, total) =>
+        reportAssetProgress("ort-wasm", { url, loaded, total, fromCache: false }),
+    }),
   preloadModule: (url) => import(/* @vite-ignore */ url),
   origin: () =>
     typeof location !== "undefined" && location.origin
@@ -138,7 +150,8 @@ function runtimeError(code: OrtRuntimeErrorCode, stage: string, err?: unknown) {
     errorMessage: err === undefined ? undefined : sanitizeInitError(err),
     executionProvider: ORT_EXECUTION_PROVIDER,
   });
-  return biometricUnavailable(`${code}: biometric runtime unavailable (${stage})`);
+  const category = err instanceof BiometricAssetError ? ` [${err.category}]` : "";
+  return biometricUnavailable(`${code}: biometric runtime unavailable (${stage})${category}`);
 }
 
 function readCrossOriginIsolated(): boolean {
@@ -188,56 +201,40 @@ function isWasmBinary(bytes: Uint8Array): boolean {
   );
 }
 
-const ORT_CACHE_PREFIX = "trustid-ort-";
-
-async function readCachedBinary(cacheName: string, url: string): Promise<Uint8Array | null> {
-  try {
-    if (typeof caches === "undefined") return null;
-    const hit = await (await caches.open(cacheName)).match(url);
-    if (!hit) return null;
-    const bytes = new Uint8Array(await hit.arrayBuffer());
-    return isWasmBinary(bytes) ? bytes : null;
-  } catch {
-    return null;
-  }
-}
-
-async function storeCachedBinary(cacheName: string, url: string, bytes: Uint8Array): Promise<void> {
-  try {
-    if (typeof caches === "undefined") return;
-    const keys = await caches.keys();
-    await Promise.all(
-      keys
-        .filter((k) => k.startsWith(ORT_CACHE_PREFIX) && k !== cacheName)
-        .map((k) => caches.delete(k)),
-    );
-    await (await caches.open(cacheName)).put(
-      url,
-      new Response(bytes.slice(0), {
-        headers: { "Content-Type": "application/wasm" },
-      }),
-    );
-  } catch {
-    /* storage blocked or full: the next load downloads again */
-  }
-}
-
 async function loadWasmBinary(url: string, version: string): Promise<Uint8Array> {
-  const cacheName = `${ORT_CACHE_PREFIX}${version}`;
-  const cached = await readCachedBinary(cacheName, url);
-  if (cached) return cached;
+  const cacheKey = BIOMETRIC_ASSET_KEYS.ortWasm(version);
+  const cached = await readBiometricAsset(cacheKey);
+  if (cached && isWasmBinary(cached)) {
+    reportAssetProgress("ort-wasm", {
+      url,
+      loaded: cached.byteLength,
+      total: cached.byteLength,
+      fromCache: true,
+    });
+    return cached;
+  }
   let lastError: unknown;
   for (let attempt = 0; attempt < ASSET_ATTEMPTS; attempt++) {
     try {
       const bytes = new Uint8Array(await hooks.fetchBinary(url));
       if (!isWasmBinary(bytes)) {
         // The SPA fallback answers missing files with index.html (HTTP 200).
-        throw new Error(`not a WebAssembly binary (${bytes.byteLength} bytes)`);
+        throw new BiometricAssetError(
+          "ASSET_NOT_BINARY",
+          url,
+          `not a WebAssembly binary (${bytes.byteLength} bytes)`,
+        );
       }
-      await storeCachedBinary(cacheName, url, bytes);
+      await storeBiometricAsset(cacheKey, bytes, "application/wasm");
       return bytes;
     } catch (err) {
       lastError = err;
+      if (
+        err instanceof BiometricAssetError &&
+        (err.category === "ASSET_MISSING" || err.category === "ASSET_NOT_BINARY")
+      ) {
+        break;
+      }
     }
   }
   throw lastError;
@@ -374,6 +371,51 @@ export async function createOrtSession(model: Uint8Array): Promise<OrtSession> {
   }
 }
 
+/**
+ * 63-byte ONNX graph `y = Identity(x)`, x: float32[1], opset 13. Lets the
+ * runtime initialize and prove one inference before any model download ends.
+ */
+export const ORT_RUNTIME_PROBE_MODEL = Uint8Array.from([
+  8, 7, 58, 55, 10, 16, 10, 1, 120, 18, 1, 121, 34, 8, 73, 100, 101, 110, 116, 105,
+  116, 121, 18, 1, 112, 90, 15, 10, 1, 120, 18, 10, 10, 8, 8, 1, 18, 4, 10, 2, 8, 1,
+  98, 15, 10, 1, 121, 18, 10, 10, 8, 8, 1, 18, 4, 10, 2, 8, 1, 66, 2, 16, 13,
+]);
+
+let runtimeProbePromise: Promise<void> | null = null;
+
+/**
+ * Initialize the page's ORT runtime and run one probe inference. Idempotent:
+ * concurrent and repeated callers share one probe, and ORT's own init still
+ * happens at most once (inside createOrtSession).
+ */
+export function initOrtRuntime(): Promise<void> {
+  if (!runtimeProbePromise) {
+    runtimeProbePromise = (async () => {
+      const session = await createOrtSession(ORT_RUNTIME_PROBE_MODEL);
+      try {
+        const ort = await getOrtModule();
+        const input = session.inputNames[0] ?? "x";
+        const output = session.outputNames[0] ?? "y";
+        const out = await session.run({
+          [input]: new ort.Tensor("float32", Float32Array.from([0.5]), [1]),
+        });
+        const y = out[output]?.data;
+        if (!y || y.length !== 1 || y[0] !== 0.5) {
+          throw new Error("probe inference returned an unexpected result");
+        }
+      } catch (err) {
+        throw runtimeError(ORT_RUNTIME_ERROR_CODES.PROBE_FAILED, "probe", err);
+      } finally {
+        await session.release?.().catch(() => undefined);
+      }
+    })().catch((err) => {
+      runtimeProbePromise = null;
+      throw err;
+    });
+  }
+  return runtimeProbePromise;
+}
+
 export function getOrtRuntimeStatus(): OrtRuntimeStatus {
   return {
     state,
@@ -400,6 +442,7 @@ export function resetOrtRuntimeForTests(overrides: Partial<RuntimeHooks> = {}): 
   assetsPromise = null;
   assetsReady = false;
   runtimeInitPromise = null;
+  runtimeProbePromise = null;
   runtimeReady = false;
   runtimeFailed = false;
   runtimeInitAttempts = 0;

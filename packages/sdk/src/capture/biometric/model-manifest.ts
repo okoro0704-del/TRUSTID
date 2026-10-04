@@ -41,6 +41,15 @@ export const MEDIAPIPE_FACE_LANDMARKER_ARTIFACT: ModelArtifact = {
     "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
 };
 
+/**
+ * Runtime builds the web app serves under versioned paths
+ * (/ort/<version>/, /mediapipe/<version>/). Must equal the installed
+ * onnxruntime-web and @mediapipe/tasks-vision versions (checked by tests).
+ */
+export const ORT_WEB_VERSION = "1.21.0";
+export const MEDIAPIPE_TASKS_VISION_VERSION = "0.10.18";
+export const MEDIAPIPE_WASM_BASE = `/mediapipe/${MEDIAPIPE_TASKS_VISION_VERSION}`;
+
 export const TRUSTID_MODEL_MANIFEST = {
   recognition: ARCFACE_MBF_ARTIFACT,
   detectorTask: MEDIAPIPE_FACE_LANDMARKER_ARTIFACT,

@@ -692,3 +692,22 @@ export { getBiometricRuntimeStatus } from "./capture/biometric/runtime-status.js
 export type { BiometricRuntimeStatus } from "./capture/biometric/runtime-status.js";
 export { ORT_RUNTIME_ERROR_CODES } from "./capture/biometric/ort-runtime.js";
 export type { OrtRuntimeStatus } from "./capture/biometric/ort-runtime.js";
+export {
+  BIOMETRIC_READINESS,
+  BIOMETRIC_FAILURE_CATEGORY,
+  biometricReadiness,
+  ensureBiometricReady,
+  retryBiometricInit,
+  getBiometricReadiness,
+  isBiometricReady,
+  subscribeBiometricReadiness,
+} from "./capture/biometric/biometric-readiness.js";
+export type {
+  BiometricReadinessStage,
+  BiometricReadinessSnapshot,
+  BiometricReadinessController,
+  BiometricComponent,
+  BiometricComponentReport,
+  BiometricComponentState,
+  BiometricFailureCategory,
+} from "./capture/biometric/biometric-readiness.js";

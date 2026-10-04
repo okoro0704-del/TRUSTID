@@ -9,12 +9,25 @@
  * - GPU first, CPU fallback if GPU init fails or yields persistent empty detections.
  */
 import { BIOMETRIC_ERROR_CODES } from "@trustid/shared";
+import { reportAssetProgress, type BiometricAssetId } from "./asset-progress.js";
+import {
+  BIOMETRIC_ASSET_KEYS,
+  dropBiometricAsset,
+  readBiometricAsset,
+  storeBiometricAsset,
+} from "./biometric-asset-cache.js";
 import { biometricFail, biometricUnavailable } from "./errors.js";
 import {
   faceCaptureDiag,
+  hashPrefix,
   summarizeImageDataSignal,
 } from "./face-capture-diag.js";
-import { MEDIAPIPE_FACE_LANDMARKER_ARTIFACT } from "./model-manifest.js";
+import { sha256Hex } from "./integrity.js";
+import {
+  MEDIAPIPE_FACE_LANDMARKER_ARTIFACT,
+  MEDIAPIPE_WASM_BASE,
+} from "./model-manifest.js";
+import { downloadModelBytes } from "./resumable-download.js";
 import type { DetectedFace, FaceLandmarks5, Point2D } from "./types.js";
 
 type FaceLandmarkerLike = {
@@ -282,70 +295,155 @@ export function mapSquareNormToSourcePixels(
   });
 }
 
+type VisionModule = {
+  FaceLandmarker: {
+    createFromOptions: (
+      fileset: unknown,
+      opts: Record<string, unknown>,
+    ) => Promise<FaceLandmarkerLike>;
+  };
+  FilesetResolver: {
+    forVisionTasks: (path: string) => Promise<unknown>;
+  };
+};
+
+type DetectorAssets = {
+  vision: VisionModule;
+  fileset: Record<string, unknown>;
+  model: Uint8Array;
+  modelUrl: string;
+};
+
+const MIN_WASM_BYTES = 1024 * 1024;
+let detectorAssetsPromise: Promise<DetectorAssets> | null = null;
+
+function isWasmBinary(bytes: Uint8Array): boolean {
+  return (
+    bytes.byteLength >= MIN_WASM_BYTES &&
+    bytes[0] === 0x00 &&
+    bytes[1] === 0x61 &&
+    bytes[2] === 0x73 &&
+    bytes[3] === 0x6d
+  );
+}
+
+async function loadCachedOrDownload(
+  id: BiometricAssetId,
+  url: string,
+  cacheKey: string,
+  validate: (bytes: Uint8Array) => Promise<string | null>,
+  contentType: string,
+): Promise<Uint8Array> {
+  const cached = await readBiometricAsset(cacheKey);
+  if (cached) {
+    if ((await validate(cached)) === null) {
+      reportAssetProgress(id, { url, loaded: cached.byteLength, total: cached.byteLength, fromCache: true });
+      return cached;
+    }
+    await dropBiometricAsset(cacheKey);
+  }
+  const bytes = new Uint8Array(
+    await downloadModelBytes(url, fetch, undefined, {
+      onProgress: (loaded, total) => reportAssetProgress(id, { url, loaded, total, fromCache: false }),
+    }),
+  );
+  const problem = await validate(bytes);
+  if (problem) throw new Error(problem);
+  await storeBiometricAsset(cacheKey, bytes, contentType);
+  return bytes;
+}
+
+/**
+ * Fetch the MediaPipe WASM binary and the face_landmarker task once, verify
+ * them, and keep them for every create attempt. The GPU create timeout then
+ * covers initialization only, and a CPU fallback never downloads again.
+ */
+function prepareDetectorAssets(modelBaseUrl: string): Promise<DetectorAssets> {
+  if (!detectorAssetsPromise) {
+    detectorAssetsPromise = (async () => {
+      const started = performance.now();
+      const vision = (await import("@mediapipe/tasks-vision")) as unknown as VisionModule;
+      // Same-origin, version-scoped assets: a new MediaPipe build never pairs
+      // with an old loader or binary, and iOS Safari avoids opaque loads.
+      const resolved = (await vision.FilesetResolver.forVisionTasks(MEDIAPIPE_WASM_BASE)) as Record<string, unknown>;
+      const fileset: Record<string, unknown> = { ...resolved };
+      const modelUrl = `${modelBaseUrl.replace(/\/$/, "")}/${MEDIAPIPE_FACE_LANDMARKER_ARTIFACT.relativePath}`;
+
+      const wasmUrl = typeof resolved.wasmBinaryPath === "string" ? resolved.wasmBinaryPath : null;
+      const wasmWork = wasmUrl
+        ? loadCachedOrDownload(
+            "mediapipe-wasm",
+            wasmUrl,
+            BIOMETRIC_ASSET_KEYS.mediapipeWasm(/nosimd/.test(wasmUrl) ? "nosimd" : "simd"),
+            async (b) =>
+              isWasmBinary(b)
+                ? null
+                : `ASSET_NOT_BINARY: MediaPipe WASM is not a WebAssembly binary (${b.byteLength} bytes)`,
+            "application/wasm",
+          ).then((bytes) => {
+            if (typeof URL !== "undefined" && typeof URL.createObjectURL === "function" && typeof Blob !== "undefined") {
+              fileset.wasmBinaryPath = URL.createObjectURL(
+                new Blob([bytes as BlobPart], { type: "application/wasm" }),
+              );
+            }
+          })
+        : Promise.resolve();
+      const modelWork = loadCachedOrDownload(
+        "face-landmarker",
+        modelUrl,
+        BIOMETRIC_ASSET_KEYS.faceLandmarker(),
+        async (b) => {
+          const actual = await sha256Hex(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer);
+          return actual.toLowerCase() === MEDIAPIPE_FACE_LANDMARKER_ARTIFACT.sha256.toLowerCase()
+            ? null
+            : `ASSET_INTEGRITY_MISMATCH: face_landmarker.task expected ${hashPrefix(MEDIAPIPE_FACE_LANDMARKER_ARTIFACT.sha256)} got ${hashPrefix(actual)}`;
+        },
+        "application/octet-stream",
+      );
+      const [model] = await Promise.all([modelWork, wasmWork]);
+      faceCaptureDiag({
+        stage: "mediapipe_assets_ok",
+        component: "mediapipe",
+        success: true,
+        ms: Math.round(performance.now() - started),
+        modelUrl,
+        imageWidth: model.byteLength,
+      });
+      return { vision, fileset, model, modelUrl };
+    })().catch((err: unknown) => {
+      detectorAssetsPromise = null;
+      const msg = err instanceof Error ? err.message : String(err);
+      faceCaptureDiag({
+        stage: "mediapipe_assets_failed",
+        component: "mediapipe",
+        success: false,
+        errorMessage: msg,
+      });
+      throw biometricUnavailable(`MediaPipe assets unavailable: ${msg}`);
+    });
+  }
+  return detectorAssetsPromise;
+}
+
 async function loadFaceLandmarker(
-  modelBaseUrl: string,
+  assets: DetectorAssets,
   delegate: DelegateKind,
 ): Promise<FaceLandmarkerLike> {
   const started = performance.now();
-  faceCaptureDiag({
-    stage: "mediapipe_import_start",
-    component: "mediapipe",
-    success: true,
-    delegate,
-  });
   try {
-    const vision = await import("@mediapipe/tasks-vision");
-    faceCaptureDiag({
-      stage: "mediapipe_import_ok",
-      component: "mediapipe",
-      success: true,
-      ms: Math.round(performance.now() - started),
-      delegate,
-    });
-
-    const { FaceLandmarker, FilesetResolver } = vision as {
-      FaceLandmarker: {
-        createFromOptions: (
-          fileset: unknown,
-          opts: Record<string, unknown>,
-        ) => Promise<FaceLandmarkerLike>;
-      };
-      FilesetResolver: {
-        forVisionTasks: (path: string) => Promise<unknown>;
-      };
-    };
-    // Same-origin assets avoid opaque cross-origin loader failures on iOS Safari.
-    const wasmPath = "/mediapipe/wasm";
-    faceCaptureDiag({
-      stage: "mediapipe_fileset_start",
-      component: "mediapipe",
-      success: true,
-      modelUrl: wasmPath,
-      delegate,
-    });
-    const filesetStarted = performance.now();
-    const fileset = await FilesetResolver.forVisionTasks(wasmPath);
-    faceCaptureDiag({
-      stage: "mediapipe_fileset_ok",
-      component: "mediapipe",
-      success: true,
-      ms: Math.round(performance.now() - filesetStarted),
-      delegate,
-    });
-
-    const modelAssetPath = `${modelBaseUrl.replace(/\/$/, "")}/${MEDIAPIPE_FACE_LANDMARKER_ARTIFACT.relativePath}`;
+    const { FaceLandmarker } = assets.vision;
     faceCaptureDiag({
       stage: "face_landmarker_create_start",
       component: "mediapipe",
       success: true,
-      modelUrl: modelAssetPath,
+      modelUrl: assets.modelUrl,
       delegate,
       runningMode: "IMAGE",
     });
     const createStarted = performance.now();
-    const landmarker = await FaceLandmarker.createFromOptions(fileset, {
+    const landmarker = await FaceLandmarker.createFromOptions(assets.fileset, {
       baseOptions: {
-        modelAssetPath,
+        modelAssetBuffer: assets.model.slice(),
         delegate,
       },
       runningMode: "IMAGE",
@@ -395,6 +493,7 @@ export async function getSharedFaceLandmarker(
 ): Promise<FaceLandmarkerLike> {
   if (!landmarkerPromise) {
     landmarkerPromise = trackDetector((async () => {
+      const assets = await prepareDetectorAssets(modelBaseUrl);
       if (!canUseMediapipeGpu()) {
         faceCaptureDiag({
           stage: "mediapipe_gpu_skipped_no_webgl",
@@ -403,14 +502,14 @@ export async function getSharedFaceLandmarker(
           delegate: "CPU",
         });
         activeDelegate = "CPU";
-        return loadFaceLandmarker(modelBaseUrl, "CPU");
+        return loadFaceLandmarker(assets, "CPU");
       }
 
-      const gpuAttempt = loadFaceLandmarker(modelBaseUrl, "GPU");
+      const gpuAttempt = loadFaceLandmarker(assets, "GPU");
       try {
         activeDelegate = "GPU";
-        // GPU create can hang indefinitely on broken WebGL. Race so CPU
-        // fallback stays inside warm-up budget.
+        // GPU create can hang indefinitely on broken WebGL. Assets are already
+        // local, so this bounds initialization only, never a download.
         return await Promise.race([
           gpuAttempt,
           rejectAfter(
@@ -419,8 +518,11 @@ export async function getSharedFaceLandmarker(
           ),
         ]);
       } catch (gpuErr) {
-        // Prevent late GPU rejection from becoming an unhandled rejection.
-        void gpuAttempt.catch(() => undefined);
+        // A GPU landmarker that finishes after the timeout is never used.
+        void gpuAttempt.then(
+          (late) => late.close?.(),
+          () => undefined,
+        );
         faceCaptureDiag({
           stage: "mediapipe_gpu_failed_trying_cpu",
           component: "mediapipe",
@@ -430,16 +532,48 @@ export async function getSharedFaceLandmarker(
             gpuErr instanceof Error ? gpuErr.message : String(gpuErr),
         });
         activeDelegate = "CPU";
-        return loadFaceLandmarker(modelBaseUrl, "CPU");
+        return loadFaceLandmarker(assets, "CPU");
       }
     })());
   }
   return landmarkerPromise;
 }
 
+/**
+ * Run one detection on a blank frame to prove the graph executes. The result
+ * is checked for shape only; no camera frame is involved.
+ */
+export async function warmUpFaceLandmarker(
+  modelBaseUrl = "/models/trustid",
+): Promise<{ faces: number }> {
+  const landmarker = await getSharedFaceLandmarker(modelBaseUrl);
+  if (typeof document === "undefined") {
+    throw biometricUnavailable("WARMUP_INVALID_OUTPUT: no document for detector warm-up");
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, 64, 64);
+  }
+  try {
+    const result = landmarker.detect(canvas);
+    if (!result || !Array.isArray(result.faceLandmarks)) {
+      throw biometricUnavailable("WARMUP_INVALID_OUTPUT: detector returned no result");
+    }
+    return { faces: result.faceLandmarks.length };
+  } finally {
+    canvas.width = 0;
+    canvas.height = 0;
+  }
+}
+
 /** Test/dev helper ? drop cached landmarker so the next call reloads. */
 export function resetSharedFaceLandmarkerForTests(): void {
   landmarkerPromise = null;
+  detectorAssetsPromise = null;
   emptyDetectStreak = 0;
   activeDelegate = "GPU";
   detectorState = "IDLE";
@@ -448,11 +582,20 @@ export function resetSharedFaceLandmarkerForTests(): void {
 async function forceCpuLandmarker(
   modelBaseUrl: string,
 ): Promise<FaceLandmarkerLike> {
-  landmarkerPromise = null;
+  const previous = landmarkerPromise;
   emptyDetectStreak = 0;
   activeDelegate = "CPU";
-  landmarkerPromise = trackDetector(loadFaceLandmarker(modelBaseUrl, "CPU"));
-  return landmarkerPromise;
+  landmarkerPromise = trackDetector(
+    prepareDetectorAssets(modelBaseUrl).then((assets) => loadFaceLandmarker(assets, "CPU")),
+  );
+  const cpu = await landmarkerPromise;
+  void previous?.then(
+    (old) => {
+      if (old !== cpu) old.close?.();
+    },
+    () => undefined,
+  );
+  return cpu;
 }
 
 export type DetectionResult = {

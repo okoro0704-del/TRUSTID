@@ -12,20 +12,22 @@
 [functions]
   directory = "netlify/functions-disabled"
 
-# Biometric runtimes are pinned by package/model version and integrity checked.
-# Cache them across visits so mobile Safari does not repeat a 25+ MB cold load.
-# ORT lives under /ort/<onnxruntime-web version>/, so a version bump changes the URL.
-# /mediapipe/wasm is not versioned in its path, so revalidate (cheap 304s)
-# instead of pinning a loader/binary pair for a year.
+# Biometric runtimes live under version-scoped paths
+# (/ort/<onnxruntime-web version>/, /mediapipe/<tasks-vision version>/), so a
+# version bump changes the URL and they can be cached immutably.
+# The SDK keeps verified copies of every biometric asset in Cache Storage and
+# fetches with cache: "no-store", so a cached error page is never replayed.
 [[headers]]
   for = "/mediapipe/*"
   [headers.values]
-    Cache-Control = "public, max-age=0, must-revalidate"
+    Cache-Control = "public, max-age=31536000, immutable"
 
+# Model paths are not versioned (manifest.json lives here too) and Netlify
+# applies these headers to 404s as well, so revalidate instead of pinning.
 [[headers]]
   for = "/models/trustid/*"
   [headers.values]
-    Cache-Control = "public, max-age=31536000, immutable"
+    Cache-Control = "public, max-age=0, must-revalidate"
 
 [[headers]]
   for = "/ort/*"

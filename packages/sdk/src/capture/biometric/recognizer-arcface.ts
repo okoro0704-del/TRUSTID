@@ -23,6 +23,13 @@ import {
   ORT_EXECUTION_PROVIDER,
   type OrtSession,
 } from "./ort-runtime.js";
+import { reportAssetProgress } from "./asset-progress.js";
+import {
+  BIOMETRIC_ASSET_KEYS,
+  dropBiometricAsset,
+  readBiometricAsset,
+  storeBiometricAsset,
+} from "./biometric-asset-cache.js";
 import { downloadModelBytes } from "./resumable-download.js";
 
 export type EmbedderState = "IDLE" | "LOADING" | "READY" | "FAILED";
@@ -45,54 +52,15 @@ export function getArcFaceEmbedderState(): EmbedderState {
   return embedderState;
 }
 
-// Range downloads are not reused by the HTTP cache, so a reload would fetch
-// the model again. Keep the verified bytes in Cache Storage instead.
-const MODEL_CACHE_PREFIX = "trustid-models-";
-const MODEL_CACHE_NAME = `${MODEL_CACHE_PREFIX}${ARCFACE_MBF_ARTIFACT.sha256.slice(0, 16)}`;
-
-async function readCachedModel(url: string): Promise<ArrayBuffer | null> {
-  try {
-    if (typeof caches === "undefined") return null;
-    const cache = await caches.open(MODEL_CACHE_NAME);
-    const hit = await cache.match(url);
-    return hit ? await hit.arrayBuffer() : null;
-  } catch {
-    return null;
-  }
-}
-
-async function storeCachedModel(url: string, buffer: ArrayBuffer): Promise<void> {
-  try {
-    if (typeof caches === "undefined") return;
-    const keys = await caches.keys();
-    await Promise.all(
-      keys
-        .filter((k) => k.startsWith(MODEL_CACHE_PREFIX) && k !== MODEL_CACHE_NAME)
-        .map((k) => caches.delete(k)),
-    );
-    const cache = await caches.open(MODEL_CACHE_NAME);
-    await cache.put(
-      url,
-      new Response(buffer.slice(0), {
-        headers: { "Content-Type": "application/octet-stream" },
-      }),
-    );
-  } catch {
-    /* storage full or blocked: the next load downloads again */
-  }
-}
-
-async function dropCachedModel(url: string): Promise<void> {
-  try {
-    if (typeof caches === "undefined") return;
-    const cache = await caches.open(MODEL_CACHE_NAME);
-    await cache.delete(url);
-  } catch {
-    /* ignore */
-  }
+function downloadArcFace(url: string): Promise<ArrayBuffer> {
+  return downloadModelBytes(url, fetch, undefined, {
+    onProgress: (loaded, total) =>
+      reportAssetProgress("arcface", { url, loaded, total, fromCache: false }),
+  });
 }
 
 async function loadVerifiedModelBytes(url: string): Promise<Uint8Array> {
+  const cacheKey = BIOMETRIC_ASSET_KEYS.arcface();
   faceCaptureDiag({
     stage: "arcface_model_fetch_start",
     component: "arcface",
@@ -104,12 +72,18 @@ async function loadVerifiedModelBytes(url: string): Promise<Uint8Array> {
   let fromCache = false;
   try {
     const fetchStarted = performance.now();
-    const cached = await readCachedModel(url);
+    const cached = await readBiometricAsset(cacheKey);
     if (cached) {
-      buffer = cached;
+      buffer = cached.buffer as ArrayBuffer;
       fromCache = true;
+      reportAssetProgress("arcface", {
+        url,
+        loaded: cached.byteLength,
+        total: cached.byteLength,
+        fromCache: true,
+      });
     } else {
-      buffer = await downloadModelBytes(url);
+      buffer = await downloadArcFace(url);
     }
     faceCaptureDiag({
       stage: "arcface_model_fetch_ok",
@@ -131,8 +105,8 @@ async function loadVerifiedModelBytes(url: string): Promise<Uint8Array> {
       fromCache &&
       actual.toLowerCase() !== ARCFACE_MBF_ARTIFACT.sha256.toLowerCase()
     ) {
-      await dropCachedModel(url);
-      buffer = await downloadModelBytes(url);
+      await dropBiometricAsset(cacheKey);
+      buffer = await downloadArcFace(url);
       fromCache = false;
       actual = await sha256Hex(buffer);
     }
@@ -146,7 +120,7 @@ async function loadVerifiedModelBytes(url: string): Promise<Uint8Array> {
         errorCode: "INTEGRITY_MISMATCH",
       });
       throw biometricUnavailable(
-        `ArcFace integrity failed (${url}): expected ${hashPrefix(ARCFACE_MBF_ARTIFACT.sha256)}? got ${hashPrefix(actual)}?`,
+        `ASSET_INTEGRITY_MISMATCH: ArcFace integrity failed (${url}): expected ${hashPrefix(ARCFACE_MBF_ARTIFACT.sha256)}? got ${hashPrefix(actual)}?`,
       );
     }
     faceCaptureDiag({
@@ -156,7 +130,7 @@ async function loadVerifiedModelBytes(url: string): Promise<Uint8Array> {
       expectedHashPrefix: hashPrefix(ARCFACE_MBF_ARTIFACT.sha256),
       actualHashPrefix: hashPrefix(actual),
     });
-    if (!fromCache) await storeCachedModel(url, buffer);
+    if (!fromCache) await storeBiometricAsset(cacheKey, new Uint8Array(buffer));
     return new Uint8Array(buffer);
   } catch (err) {
     const msg = sanitizeInitError(err);
@@ -168,9 +142,7 @@ async function loadVerifiedModelBytes(url: string): Promise<Uint8Array> {
       modelUrl: url,
       errorMessage: msg,
     });
-    throw biometricUnavailable(
-      `ArcFace model missing or integrity failed (${url}). ${msg}`,
-    );
+    throw biometricUnavailable(`ArcFace model unavailable (${url}). ${msg}`);
   }
 }
 
@@ -289,6 +261,40 @@ async function embedAlignedFace112Now(
     modelName: BIOMETRIC_AI_MODEL_NAME,
     modelVersion: BIOMETRIC_AI_MODEL_VERSION,
   };
+}
+
+/**
+ * Run the loaded session once on a constant tensor and check the output shape.
+ * Only the check result leaves this function; the output is discarded.
+ */
+export function warmUpArcFace(modelBaseUrl?: string): Promise<{ dims: number }> {
+  const run = embedQueue.then(async () => {
+    const session = await getArcFaceSession(modelBaseUrl);
+    const ort = await getOrtModule();
+    const inputName = session.inputNames[0] ?? "input.1";
+    const tensor = new ort.Tensor(
+      "float32",
+      new Float32Array(1 * 3 * 112 * 112),
+      [1, 3, 112, 112],
+    );
+    const outputs = await session.run({ [inputName]: tensor });
+    const firstKey = session.outputNames[0] ?? Object.keys(outputs)[0];
+    const data = firstKey ? outputs[firstKey]?.data : undefined;
+    const dims = data?.length ?? 0;
+    let finite = dims > 0;
+    for (let i = 0; finite && i < dims; i++) {
+      if (!Number.isFinite(data![i])) finite = false;
+    }
+    data?.fill?.(0);
+    if (dims !== BIOMETRIC_AI_EMBEDDING_DIMS || !finite) {
+      throw biometricUnavailable(
+        `WARMUP_INVALID_OUTPUT: ArcFace warm-up returned ${dims} values${finite ? "" : " (non-finite)"}; expected ${BIOMETRIC_AI_EMBEDDING_DIMS}`,
+      );
+    }
+    return { dims };
+  });
+  embedQueue = run.catch(() => undefined);
+  return run;
 }
 
 export function isArcFaceReady(): boolean {

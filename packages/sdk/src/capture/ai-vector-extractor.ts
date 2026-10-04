@@ -166,66 +166,21 @@ export class AIVectorExtractor {
       let mediapipeError: string | null = null;
       let arcfaceError: string | null = null;
 
+      // One page-level owner initializes runtime, detector and embedder in
+      // parallel and validates them with a warm-up before reporting ready.
       const warm = (async () => {
-        const { getSharedFaceLandmarker } = await import(
-          "./biometric/detector-mediapipe.js"
+        const { ensureBiometricReady } = await import(
+          "./biometric/biometric-readiness.js"
         );
-        const {
-          getArcFaceSession,
-          getLastArcFaceInitError,
-        } = await import("./biometric/recognizer-arcface.js");
-
-        // Initialize independently (sequential) so diagnostics attribute each
-        // stage and WASM runtimes do not contend on cold start.
-        const mediapipeResult = await getSharedFaceLandmarker(base)
-          .then(() => {
-            mediapipeOk = true;
-            faceCaptureDiag({
-              stage: "mediapipe_warmup_ok",
-              component: "mediapipe",
-              success: true,
-              ms: Math.round(performance.now() - started),
-            });
-            return true as const;
-          })
-          .catch((err: unknown) => {
-            mediapipeError =
-              err instanceof Error ? err.message : String(err);
-            faceCaptureDiag({
-              stage: "mediapipe_warmup_failed",
-              component: "mediapipe",
-              success: false,
-              errorMessage: mediapipeError,
-            });
-            return false as const;
-          });
-
-        const arcfaceResult = await getArcFaceSession(base)
-          .then(() => {
-            arcfaceOk = true;
-            faceCaptureDiag({
-              stage: "arcface_warmup_ok",
-              component: "arcface",
-              success: true,
-              ms: Math.round(performance.now() - started),
-            });
-            return true as const;
-          })
-          .catch((err: unknown) => {
-            arcfaceError =
-              getLastArcFaceInitError() ??
-              (err instanceof Error ? err.message : String(err));
-            faceCaptureDiag({
-              stage: "arcface_warmup_failed",
-              component: "arcface",
-              success: false,
-              errorMessage: arcfaceError,
-            });
-            return false as const;
-          });
-
-        if (!mediapipeResult || !arcfaceResult) {
+        const snap = await ensureBiometricReady({ modelBaseUrl: base });
+        mediapipeOk = snap.detector.state === "READY";
+        arcfaceOk = snap.embedder.state === "READY";
+        if (!snap.ready) {
+          mediapipeError = snap.detector.error;
+          arcfaceError =
+            snap.embedder.error ?? snap.runtime.error ?? snap.warmup.error;
           const parts = [
+            `stage=${snap.stage}`,
             `MediaPipe=${mediapipeOk ? "SUCCESS" : "FAILURE"}`,
             `ArcFace=${arcfaceOk ? "SUCCESS" : "FAILURE"}`,
           ];

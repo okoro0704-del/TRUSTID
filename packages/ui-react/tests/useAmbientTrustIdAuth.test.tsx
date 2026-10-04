@@ -4,8 +4,14 @@
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { StrictMode, type ReactNode } from "react";
+import type {
+  BiometricComponentReport,
+  BiometricReadinessController,
+  BiometricReadinessSnapshot,
+} from "@trustid/sdk";
 import { TrustIdAuthProvider } from "../src/context/TrustIdAuthProvider.js";
 import {
+  BIOMETRIC_RELOAD_REQUIRED_ERROR,
   BIOMETRIC_UNAVAILABLE_ERROR,
   useAmbientTrustIdAuth,
 } from "../src/hooks/useAmbientTrustIdAuth.js";
@@ -723,4 +729,249 @@ describe("face not read", () => {
     expect(signals.filter((s) => !s.aborted)).toHaveLength(1);
     second.unmount();
   }, 15000);
+});
+
+type ReadinessKind = "loading" | "ready" | "failed" | "reload";
+
+function componentReport(state: BiometricComponentReport["state"], bytesLoaded = 0): BiometricComponentReport {
+  return {
+    state,
+    attempts: state === "IDLE" ? 0 : 1,
+    durationMs: null,
+    assetUrl: null,
+    bytesLoaded,
+    bytesTotal: null,
+    fromCache: null,
+    failureCategory: state === "FAILED" ? "NETWORK" : null,
+    error: state === "FAILED" ? "ASSET_NETWORK_ERROR: offline" : null,
+  };
+}
+
+function readinessSnapshot(kind: ReadinessKind, bytesLoaded = 0): BiometricReadinessSnapshot {
+  const ready = kind === "ready";
+  const failed = kind === "failed" || kind === "reload";
+  return {
+    stage: ready ? "BIOMETRIC_READY" : kind === "reload" ? "RUNTIME_FAILED" : failed ? "EMBEDDER_FAILED" : "EMBEDDER_LOADING",
+    ready,
+    failed,
+    loading: kind === "loading",
+    requiresReload: kind === "reload",
+    runtime: componentReport(kind === "reload" ? "FAILED" : "READY"),
+    detector: componentReport(ready ? "READY" : kind === "loading" ? "LOADING" : "READY"),
+    embedder: componentReport(ready ? "READY" : kind === "loading" ? "LOADING" : "FAILED", bytesLoaded),
+    warmup: componentReport(ready ? "READY" : "IDLE"),
+    transitions: [],
+    passes: 1,
+  };
+}
+
+/** A readiness owner the test drives: ensureReady stays pending until settle(). */
+function fakeReadiness(initial: ReadinessKind = "loading") {
+  let current = readinessSnapshot(initial);
+  const listeners = new Set<(s: BiometricReadinessSnapshot) => void>();
+  let waiters: Array<(s: BiometricReadinessSnapshot) => void> = [];
+  let answer: ReadinessKind | null = null;
+  const emit = (s: BiometricReadinessSnapshot) => {
+    current = s;
+    for (const fn of [...listeners]) fn(s);
+  };
+  const ensureReady = vi.fn(() => {
+    if (answer) {
+      emit(readinessSnapshot(answer));
+      return Promise.resolve(current);
+    }
+    return new Promise<BiometricReadinessSnapshot>((resolve) => waiters.push(resolve));
+  });
+  const controller: BiometricReadinessController = {
+    ensureReady,
+    snapshot: () => current,
+    subscribe: (fn) => {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+  };
+  return {
+    controller,
+    ensureReady,
+    progress: (bytes: number) => emit(readinessSnapshot("loading", bytes)),
+    settle(kind: ReadinessKind) {
+      emit(readinessSnapshot(kind));
+      const pending = waiters;
+      waiters = [];
+      for (const resolve of pending) resolve(current);
+    },
+    /** Every later ensureReady answers immediately with this state. */
+    answerWith(kind: ReadinessKind | null) {
+      answer = kind;
+    },
+  };
+}
+
+describe("biometric readiness gate", () => {
+  beforeEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    resetEnrollmentCandidateForDev();
+    faceLookup.mockResolvedValue({ status: "NOT_FOUND", canRegister: true });
+  });
+
+  it("does not open the camera until the biometric stack is ready", async () => {
+    const readiness = fakeReadiness();
+    const capturePayload = vi.fn(async () => facePayload());
+    const { result } = renderHook(
+      () => useAmbientTrustIdAuth({ capturePayload, biometricReadiness: readiness.controller }),
+      { wrapper },
+    );
+    await waitFor(() => expect(readiness.ensureReady).toHaveBeenCalledTimes(1));
+    expect(result.current.scanStage).toBe("models");
+    expect(result.current.biometricReady).toBe(false);
+    await act(async () => { await new Promise((r) => setTimeout(r, 300)); });
+    expect(capturePayload).not.toHaveBeenCalled();
+    expect(faceLookup).not.toHaveBeenCalled();
+
+    act(() => readiness.settle("ready"));
+    await waitFor(() => expect(capturePayload).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(faceLookup).toHaveBeenCalledTimes(1));
+    expect(result.current.biometricReady).toBe(true);
+  });
+
+  it("a stack that cannot start is a service error with an init retry, never 'no TrustID'", async () => {
+    const readiness = fakeReadiness();
+    readiness.answerWith("failed");
+    const capturePayload = vi.fn(async () => facePayload());
+    const view = render(
+      <TrustIdAmbientAuthProvider capturePayload={capturePayload} biometricReadiness={readiness.controller}>
+        Signed in
+      </TrustIdAmbientAuthProvider>,
+      { wrapper },
+    );
+    await screen.findByRole("button", { name: "Retry biometric initialization" }, { timeout: 8000 });
+    expect(screen.queryByRole("button", { name: "Retry Face Scan" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Create TrustID" })).toBeNull();
+    expect(screen.getByTestId("biometric-readiness-diagnostics").textContent).toMatch(/EMBEDDER_FAILED/);
+    expect(view.container.textContent).not.toMatch(/No Trust ID found|No TrustID matches|New here/);
+    expect(capturePayload).not.toHaveBeenCalled();
+    expect(faceLookup).not.toHaveBeenCalled();
+    expect(registerTrustId).not.toHaveBeenCalled();
+    expect(ambientSignIn).not.toHaveBeenCalled();
+    view.unmount();
+  }, 15000);
+
+  it("a runtime that needs a reload offers Reload Page, not a retry", async () => {
+    const readiness = fakeReadiness();
+    readiness.answerWith("reload");
+    const capturePayload = vi.fn(async () => facePayload());
+    const { result } = renderHook(
+      () => useAmbientTrustIdAuth({ capturePayload, biometricReadiness: readiness.controller }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.phase).toBe("ERROR"));
+    expect(result.current.error).toBe(BIOMETRIC_RELOAD_REQUIRED_ERROR);
+    expect(capturePayload).not.toHaveBeenCalled();
+    expect(faceLookup).not.toHaveBeenCalled();
+  });
+
+  it("initialization that stops progressing ends as MODELS_NOT_READY without scanning", async () => {
+    vi.useFakeTimers();
+    const readiness = fakeReadiness();
+    const capturePayload = vi.fn(async () => facePayload());
+    const view = render(
+      <TrustIdAmbientAuthProvider capturePayload={capturePayload} biometricReadiness={readiness.controller}>
+        Signed in
+      </TrustIdAmbientAuthProvider>,
+      { wrapper },
+    );
+    try {
+      await act(async () => {});
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      // Download progress re-arms the stall window: a slow download is not a stall.
+      act(() => readiness.progress(4_000_000));
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(view.container.textContent).not.toMatch(/We couldn't read your face/);
+      await act(async () => { await vi.advanceTimersByTimeAsync(31_000); });
+      expect(view.container.textContent).toMatch(/We couldn't read your face/);
+      expect(view.container.textContent).toMatch(/still loading/);
+      expect(screen.getByRole("button", { name: "Retry biometric initialization" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Create TrustID" })).toBeNull();
+      expect(view.container.textContent).not.toMatch(/No Trust ID found|New here/);
+      expect(capturePayload).not.toHaveBeenCalled();
+      expect(faceLookup).not.toHaveBeenCalled();
+      expect(registerTrustId).not.toHaveBeenCalled();
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it("rapid init retries never open the camera, and readiness starts exactly one scan", async () => {
+    const readiness = fakeReadiness();
+    readiness.answerWith("failed");
+    const capturePayload = vi.fn(async () => facePayload());
+    const view = render(
+      <TrustIdAmbientAuthProvider capturePayload={capturePayload} biometricReadiness={readiness.controller}>
+        Signed in
+      </TrustIdAmbientAuthProvider>,
+      { wrapper },
+    );
+    await screen.findByRole("button", { name: "Retry biometric initialization" }, { timeout: 8000 });
+    const callsBefore = readiness.ensureReady.mock.calls.length;
+    readiness.answerWith(null);
+    for (let i = 0; i < 5; i += 1) {
+      const retry = screen.queryByRole("button", { name: "Retry biometric initialization" });
+      if (retry) fireEvent.click(retry);
+    }
+    await waitFor(() => expect(readiness.ensureReady.mock.calls.length).toBeGreaterThan(callsBefore));
+    await act(async () => { await new Promise((r) => setTimeout(r, 300)); });
+    expect(capturePayload).not.toHaveBeenCalled();
+    expect(readiness.ensureReady.mock.calls.length).toBeLessThanOrEqual(6);
+
+    act(() => readiness.settle("ready"));
+    await waitFor(() => expect(capturePayload).toHaveBeenCalledTimes(1), { timeout: 5000 });
+    await act(async () => { await new Promise((r) => setTimeout(r, 700)); });
+    expect(capturePayload).toHaveBeenCalledTimes(1);
+    view.unmount();
+  }, 15000);
+
+  it("retry after a failed init reaches ready, then scans and searches", async () => {
+    const readiness = fakeReadiness();
+    readiness.answerWith("failed");
+    const capturePayload = vi.fn(async () => facePayload());
+    const { result } = renderHook(
+      () => useAmbientTrustIdAuth({ capturePayload, biometricReadiness: readiness.controller }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.phase).toBe("ERROR"));
+    expect(result.current.error).toBe(BIOMETRIC_UNAVAILABLE_ERROR);
+    expect(capturePayload).not.toHaveBeenCalled();
+
+    readiness.answerWith("ready");
+    act(() => result.current.retry());
+    await waitFor(() => expect(capturePayload).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(result.current.phase).toBe("NO_MATCH"));
+    expect(faceLookup).toHaveBeenCalledTimes(1);
+    expect(registerTrustId).not.toHaveBeenCalled();
+  });
+
+  it("Create TrustID never captures or registers while the stack is down", async () => {
+    const readiness = fakeReadiness();
+    readiness.answerWith("ready");
+    const capturePayload = vi.fn(async () => ({
+      captureErrorCode: "NO_FACE",
+      captureErrorMessage: "No face found in the camera view",
+      captureReasonCode: "NO_FACE_DETECTED",
+    }));
+    const { result } = renderHook(
+      () => useAmbientTrustIdAuth({ capturePayload: capturePayload as never, biometricReadiness: readiness.controller }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.phase).toBe("FACE_NOT_READ"));
+    expect(capturePayload).toHaveBeenCalledTimes(1);
+
+    readiness.answerWith("failed");
+    act(() => result.current.confirmCreateAccount());
+    await waitFor(() => expect(result.current.phase).toBe("ERROR"));
+    expect(capturePayload).toHaveBeenCalledTimes(1);
+    expect(registerTrustId).not.toHaveBeenCalled();
+    expect(faceLookup).not.toHaveBeenCalled();
+  });
 });

@@ -33,3 +33,5 @@ TrustID-debug.apk
 artifacts/apk/
 # Copied from node_modules by scripts/copy-ort-wasm.mjs at build/dev time
 apps/web/public/ort/
+# Copied from node_modules by scripts/copy-mediapipe-wasm.mjs at build/dev time
+apps/web/public/mediapipe/

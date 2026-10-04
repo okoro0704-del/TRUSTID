@@ -15,6 +15,8 @@ import {
   newBiometricEnrollmentAttemptId,
   summarizeEmbeddingMeta,
   type AmbientSignInResult,
+  type BiometricReadinessController,
+  type BiometricReadinessSnapshot,
   type CaptureHandlers,
   type FaceScanState,
   type MultiModalBiometricPayload,
@@ -81,6 +83,11 @@ export type UseAmbientTrustIdAuthOptions = CaptureHandlers & {
     signal?: AbortSignal;
     onState?: (state: FaceScanState) => void;
   }) => Promise<MultiModalBiometricPayload>;
+  /**
+   * On-device biometric stack owner. When set, every face scan first brings
+   * the stack to BIOMETRIC_READY and opens the camera only after that.
+   */
+  biometricReadiness?: BiometricReadinessController;
   /** Multi-frame enrollment capture for Register Trust ID */
   captureEnrollmentPayload?: (opts?: {
     signal?: AbortSignal;
@@ -139,6 +146,10 @@ export type UseAmbientTrustIdAuthResult = {
   scanStage: FaceScanStage | null;
   /** Why the last scan produced no usable face (FACE_NOT_READ). */
   faceScanReason: FaceScanReason | null;
+  /** Latest biometric readiness (states, timings, byte counts only). */
+  biometricStatus: BiometricReadinessSnapshot | null;
+  /** True when face scanning can start without loading anything. */
+  biometricReady: boolean;
   lastResult: AmbientSignInResult | null;
   previousTrustId: string | null;
   approvalPollToken: string | null;
@@ -273,8 +284,8 @@ function safeOnDeviceBiometricError(detail: string): string {
 }
 
 /**
- * Camera start + model warm-up cap. Slow mobile networks can need most of it
- * for the first model download; cached loads take a second or two.
+ * Camera start (plus model warm-up when no readiness owner gated the scan)
+ * until frames reach the detector.
  */
 const FACE_WARMUP_BUDGET_MS = 45_000;
 /** Once frames reach the detector: the SDK sampling window plus embedding grace. */
@@ -283,6 +294,71 @@ const FACE_SCAN_BUDGET_MS = DEFAULT_FACE_SCAN_BUDGET_MS + 8_000;
 const FACE_LOOKUP_BUDGET_MS = 25_000;
 /** A face already scanned must not keep "Saving" open while the camera is still closing. */
 const SAVED_FACE_WAIT_MS = 4_000;
+/**
+ * Biometric initialization has no fixed deadline (a cold mobile download can
+ * take minutes), but if nothing changes at all for this long the screen stops
+ * waiting. Initialization keeps running in the background.
+ */
+const BIOMETRIC_INIT_STALL_MS = 90_000;
+
+type ReadinessWait =
+  | { kind: "snapshot"; snapshot: BiometricReadinessSnapshot }
+  | { kind: "stalled" }
+  | { kind: "aborted" }
+  | { kind: "error"; message: string };
+
+function readinessProgressKey(s: BiometricReadinessSnapshot): string {
+  return [s.runtime, s.detector, s.embedder, s.warmup]
+    .map((c) => `${c.state}:${c.bytesLoaded ?? 0}`)
+    .join("|");
+}
+
+/**
+ * Wait for the biometric stack. Resolves on a final snapshot, on abort, or
+ * when no state or byte count has changed for BIOMETRIC_INIT_STALL_MS.
+ */
+function waitForBiometricReadiness(
+  controller: BiometricReadinessController,
+  signal: AbortSignal,
+  onUpdate: (s: BiometricReadinessSnapshot) => void,
+): Promise<ReadinessWait> {
+  if (signal.aborted) return Promise.resolve({ kind: "aborted" });
+  return new Promise<ReadinessWait>((resolve) => {
+    let settled = false;
+    let lastKey = "";
+    let stallTimer = 0;
+    const armStall = () => {
+      window.clearTimeout(stallTimer);
+      stallTimer = window.setTimeout(() => finish({ kind: "stalled" }), BIOMETRIC_INIT_STALL_MS);
+    };
+    const onSnapshot = (s: BiometricReadinessSnapshot) => {
+      if (settled) return;
+      onUpdate(s);
+      const key = readinessProgressKey(s);
+      if (key !== lastKey) {
+        lastKey = key;
+        armStall();
+      }
+    };
+    const unsubscribe = controller.subscribe(onSnapshot);
+    const onAbort = () => finish({ kind: "aborted" });
+    function finish(result: ReadinessWait) {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(stallTimer);
+      unsubscribe();
+      signal.removeEventListener("abort", onAbort);
+      resolve(result);
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+    onSnapshot(controller.snapshot());
+    controller.ensureReady().then(
+      (snapshot) => finish({ kind: "snapshot", snapshot }),
+      (err: unknown) =>
+        finish({ kind: "error", message: err instanceof Error ? err.message : String(err) }),
+    );
+  });
+}
 
 function settleWithin<T>(work: Promise<T>, ms: number): Promise<T | undefined> {
   return new Promise((resolve) => {
@@ -326,6 +402,7 @@ export function useAmbientTrustIdAuth(
     persistMasterDeviceState,
     cryptographicInstallUnlock,
     unlockWithDeviceCredential,
+    biometricReadiness,
   } = options;
 
   const { loading, identity, setIdentity, refresh } = useTrustIdSession();
@@ -339,6 +416,9 @@ export function useAmbientTrustIdAuth(
   const [createStage, setCreateStage] = useState<"saving" | "capturing">("saving");
   const [scanStage, setScanStage] = useState<FaceScanStage | null>(null);
   const [faceScanReason, setFaceScanReason] = useState<FaceScanReason | null>(null);
+  const [biometricStatus, setBiometricStatus] = useState<BiometricReadinessSnapshot | null>(
+    () => biometricReadiness?.snapshot() ?? null,
+  );
   const [faceDiagnostics, setFaceDiagnostics] = useState<FaceLifecycleDiagnostics>(
     () => getFaceDiagnostics(),
   );
@@ -363,6 +443,16 @@ export function useAmbientTrustIdAuth(
       aliveRef.current = false;
     };
   }, []);
+
+  // Initialization keeps running behind choice screens; track it so Retry
+  // knows whether it starts a scan or retries initialization.
+  useEffect(() => {
+    if (!biometricReadiness) return;
+    setBiometricStatus(biometricReadiness.snapshot());
+    return biometricReadiness.subscribe((s) => {
+      if (aliveRef.current) setBiometricStatus(s);
+    });
+  }, [biometricReadiness]);
 
   const syncDiagnostics = useCallback((partial: FaceLifecycleDiagnostics) => {
     setFaceDiagnostics(patchFaceDiagnostics(partial));
@@ -697,10 +787,7 @@ export function useAmbientTrustIdAuth(
     // detector the scan window starts. Running out means the face was not
     // read, never that no TrustID exists.
     let scanStarted = false;
-    let scanTimer = window.setTimeout(
-      () => enterScanTimeout(runId, scanStarted),
-      FACE_WARMUP_BUDGET_MS,
-    );
+    let scanTimer = 0;
     const clearScanTimer = () => window.clearTimeout(scanTimer);
     ac.signal.addEventListener("abort", clearScanTimer, { once: true });
     const onScanState = (state: FaceScanState) => {
@@ -731,6 +818,43 @@ export function useAmbientTrustIdAuth(
     if (runId !== runIdRef.current) return;
     pendingInstallRef.current = installId;
 
+    // Models first: the camera opens only once the whole stack is ready, and
+    // a stack that cannot start is a service problem, never "no TrustID".
+    if (biometricReadiness && capturePayload) {
+      setScanStage("models");
+      const wait = await waitForBiometricReadiness(biometricReadiness, ac.signal, (s) => {
+        if (runId === runIdRef.current) setBiometricStatus(s);
+      });
+      if (wait.kind === "aborted" || ac.signal.aborted || runId !== runIdRef.current) return;
+      if (wait.kind === "stalled") {
+        syncDiagnostics({ modelReady: false, scanReason: FACE_SCAN_REASON.MODELS_NOT_READY });
+        enterFaceNotRead(runId, FACE_SCAN_REASON.MODELS_NOT_READY);
+        return;
+      }
+      if (wait.kind === "error" || !wait.snapshot.ready) {
+        const snap = wait.kind === "snapshot" ? wait.snapshot : null;
+        if (snap) setBiometricStatus(snap);
+        syncDiagnostics({
+          modelReady: false,
+          vectorCreated: false,
+          stage: "model_unavailable",
+          errorCode: BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_UNAVAILABLE,
+        });
+        enterServiceError(
+          runId,
+          snap?.requiresReload ? BIOMETRIC_RELOAD_REQUIRED_ERROR : BIOMETRIC_UNAVAILABLE_ERROR,
+        );
+        return;
+      }
+      setBiometricStatus(wait.snapshot);
+      syncDiagnostics({ modelReady: true });
+      setScanStage("camera");
+    }
+
+    scanTimer = window.setTimeout(
+      () => enterScanTimeout(runId, scanStarted),
+      FACE_WARMUP_BUDGET_MS,
+    );
     let payload: MultiModalBiometricPayload | undefined;
     const captureWork = capturePayload
       ? capturePayload({ signal: ac.signal, onState: onScanState })
@@ -1005,6 +1129,33 @@ export function useAmbientTrustIdAuth(
         // still loading). Capture the face for this Trust ID now. No search runs.
         if (!(late?.face && isArcFaceEnrollmentFace(late.face)) && capturePayload) {
           setCreateStage("capturing");
+          if (biometricReadiness) {
+            setScanStage("models");
+            const wait = await waitForBiometricReadiness(
+              biometricReadiness,
+              ac.signal,
+              setBiometricStatus,
+            );
+            if (ac.signal.aborted || wait.kind === "aborted") return;
+            if (wait.kind !== "snapshot" || !wait.snapshot.ready) {
+              // Nothing can be enrolled without the biometric stack.
+              setScanStage(null);
+              setError(
+                wait.kind === "snapshot" && wait.snapshot.requiresReload
+                  ? BIOMETRIC_RELOAD_REQUIRED_ERROR
+                  : BIOMETRIC_UNAVAILABLE_ERROR,
+              );
+              syncDiagnostics({
+                vectorCreated: false,
+                templateAvailable: false,
+                errorCode: BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_UNAVAILABLE,
+                stage: "model_unavailable",
+              });
+              setPhaseSafe("ERROR");
+              return;
+            }
+            setBiometricStatus(wait.snapshot);
+          }
           late = await capturePayload({
             signal: ac.signal,
             onState: (s) => {
@@ -1490,6 +1641,8 @@ export function useAmbientTrustIdAuth(
     createStage,
     scanStage,
     faceScanReason,
+    biometricStatus,
+    biometricReady: biometricReadiness ? Boolean(biometricStatus?.ready) : true,
     lastResult,
     previousTrustId,
     approvalPollToken,

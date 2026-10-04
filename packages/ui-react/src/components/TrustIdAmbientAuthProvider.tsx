@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { FaceLifecycleDiagnostics, FaceScanReason } from "@trustid/shared";
+import type { BiometricReadinessSnapshot, BiometricReadinessStage } from "@trustid/sdk";
 import {
   BIOMETRIC_RELOAD_REQUIRED_ERROR,
   BIOMETRIC_UNAVAILABLE_ERROR,
@@ -11,7 +12,7 @@ import {
 const FACE_NOT_READ_HINTS: Partial<Record<FaceScanReason, string>> = {
   CAMERA_UNAVAILABLE: "Allow camera access for TrustID, then retry.",
   NO_VIDEO_FRAME: "The camera didn't send a picture. Close other apps using the camera, then retry.",
-  MODELS_NOT_READY: "Face recognition is still loading. Retry in a moment.",
+  MODELS_NOT_READY: "Face recognition is still loading on this device. It keeps loading in the background.",
   NO_FACE_DETECTED: "Hold the phone at eye level with your whole face in view.",
   MULTIPLE_FACES: "Make sure only your face is in view.",
   FACE_TOO_SMALL: "Move the phone closer to your face.",
@@ -30,6 +31,62 @@ const SCAN_STAGE_MESSAGES: Record<FaceScanStage, string> = {
   models: "Preparing face recognition…",
   scanning: "Looking for your Trust ID…",
 };
+
+const READINESS_MESSAGES: Partial<Record<BiometricReadinessStage, string>> = {
+  RUNTIME_LOADING: "Loading face recognition…",
+  DETECTOR_LOADING: "Loading face recognition…",
+  EMBEDDER_LOADING: "Loading face recognition…",
+  WARMUP_RUNNING: "Checking face recognition…",
+  BIOMETRIC_READY: "Starting camera…",
+};
+
+function megabytes(bytes: number): string {
+  return (bytes / (1024 * 1024)).toFixed(1);
+}
+
+/** Download progress across the biometric assets, e.g. "12.4 of 39.7 MB". */
+function readinessProgressLine(s: BiometricReadinessSnapshot | null): string | null {
+  if (!s || s.ready) return null;
+  let loaded = 0;
+  let total = 0;
+  let totalKnown = true;
+  let seen = false;
+  for (const c of [s.runtime, s.detector, s.embedder]) {
+    if (c.bytesLoaded == null) continue;
+    seen = true;
+    loaded += c.bytesLoaded;
+    if (c.bytesTotal == null) totalKnown = false;
+    else total += c.bytesTotal;
+  }
+  if (!seen) return null;
+  return totalKnown && total > 0
+    ? `Downloaded ${megabytes(loaded)} of ${megabytes(total)} MB`
+    : `Downloaded ${megabytes(loaded)} MB`;
+}
+
+/** Component states and failure categories only. */
+function readinessDiagnosticsLine(s: BiometricReadinessSnapshot | null): string | null {
+  if (!s || s.ready) return null;
+  const parts = (["runtime", "detector", "embedder", "warmup"] as const).map((name) => {
+    const c = s[name];
+    return `${name} ${c.state}${c.failureCategory ? ` (${c.failureCategory})` : ""}`;
+  });
+  return [s.stage, ...parts].join(" · ");
+}
+
+function ReadinessDiagnostics({ status }: { status: BiometricReadinessSnapshot | null }) {
+  const line = readinessDiagnosticsLine(status);
+  if (!line) return null;
+  return (
+    <p
+      className="tid-ambient-splash-msg"
+      style={{ marginTop: "0.35rem", fontSize: "0.75rem", opacity: 0.75 }}
+      data-testid="biometric-readiness-diagnostics"
+    >
+      {line}
+    </p>
+  );
+}
 
 /** Reason code and counters only. Never frames, landmarks or vectors. */
 function scanDiagnosticsLine(d: FaceLifecycleDiagnostics | undefined): string | null {
@@ -103,6 +160,8 @@ export function TrustIdAmbientAuthProvider({
     createStage,
     scanStage,
     faceScanReason,
+    biometricStatus,
+    biometricReady,
     fingerprintBusy,
     retry,
     confirmSwitchAccount,
@@ -129,6 +188,8 @@ export function TrustIdAmbientAuthProvider({
     const reason = faceScanReason ?? faceDiagnostics?.scanReason ?? null;
     const hint = (reason && FACE_NOT_READ_HINTS[reason]) ?? DEFAULT_FACE_NOT_READ_HINT;
     const diagLine = scanDiagnosticsLine(faceDiagnostics);
+    // Without the face models nothing can be scanned or enrolled yet.
+    const modelsPending = !biometricReady;
     return (
       <AmbientSplash brand={brand} msg="We couldn't read your face">
         <p className="tid-ambient-splash-msg" style={{ marginTop: "0.65rem" }}>
@@ -157,6 +218,16 @@ export function TrustIdAmbientAuthProvider({
             {diagLine}
           </p>
         ) : null}
+        {modelsPending ? (
+          <>
+            {readinessProgressLine(biometricStatus) ? (
+              <p className="tid-ambient-splash-msg" style={{ marginTop: "0.35rem", fontSize: "0.85rem" }}>
+                {readinessProgressLine(biometricStatus)}
+              </p>
+            ) : null}
+            <ReadinessDiagnostics status={biometricStatus} />
+          </>
+        ) : null}
         <div
           className="tid-ambient-choice-row"
           role="group"
@@ -170,7 +241,7 @@ export function TrustIdAmbientAuthProvider({
               onClick={retry}
               disabled={fingerprintBusy}
             >
-              Retry Face Scan
+              {modelsPending ? "Retry biometric initialization" : "Retry Face Scan"}
             </button>
             <button
               type="button"
@@ -181,17 +252,19 @@ export function TrustIdAmbientAuthProvider({
               {fingerprintBusy ? "Verifying…" : "Use Fingerprint"}
             </button>
           </div>
-          <div className="tid-ambient-choice-card">
-            <p className="tid-ambient-choice-label">Never made a TrustID?</p>
-            <button
-              type="button"
-              className="tid-btn"
-              onClick={confirmCreateAccount}
-              disabled={fingerprintBusy}
-            >
-              Create TrustID
-            </button>
-          </div>
+          {modelsPending ? null : (
+            <div className="tid-ambient-choice-card">
+              <p className="tid-ambient-choice-label">Never made a TrustID?</p>
+              <button
+                type="button"
+                className="tid-btn"
+                onClick={confirmCreateAccount}
+                disabled={fingerprintBusy}
+              >
+                Create TrustID
+              </button>
+            </div>
+          )}
         </div>
       </AmbientSplash>
     );
@@ -421,6 +494,7 @@ export function TrustIdAmbientAuthProvider({
       : error ?? "Verification paused";
     return (
       <AmbientSplash brand={brand} msg={msg}>
+        {serviceDown && !biometricReady ? <ReadinessDiagnostics status={biometricStatus} /> : null}
         <div
           className="tid-ambient-choice-row"
           role="group"
@@ -438,7 +512,7 @@ export function TrustIdAmbientAuthProvider({
               </button>
             ) : (
               <button type="button" className="tid-btn" onClick={retry}>
-                Retry Face Scan
+                {biometricReady ? "Retry Face Scan" : "Retry biometric initialization"}
               </button>
             )}
             <button
@@ -491,9 +565,23 @@ export function TrustIdAmbientAuthProvider({
         : "Creating your TrustID…"
       : phase === "SAVING_FINGERPRINT"
         ? "Register fingerprint backup…"
-        : scanStage
-          ? SCAN_STAGE_MESSAGES[scanStage]
-          : "Looking for your Trust ID…";
+        : scanStage === "models" && biometricStatus
+          ? READINESS_MESSAGES[biometricStatus.stage] ?? SCAN_STAGE_MESSAGES.models
+          : scanStage
+            ? SCAN_STAGE_MESSAGES[scanStage]
+            : "Looking for your Trust ID…";
+  const progress = scanStage === "models" ? readinessProgressLine(biometricStatus) : null;
 
-  return <AmbientSplash brand={brand} msg={msg} spinning={spinning} />;
+  return (
+    <AmbientSplash brand={brand} msg={msg} spinning={spinning}>
+      {progress ? (
+        <>
+          <p className="tid-ambient-splash-msg" style={{ marginTop: "0.5rem", fontSize: "0.85rem" }}>
+            {progress}
+          </p>
+          <div className="tid-silent-splash-ring" aria-hidden="true" />
+        </>
+      ) : null}
+    </AmbientSplash>
+  );
 }

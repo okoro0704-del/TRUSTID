@@ -27,7 +27,7 @@ import {
   getNativePushToken,
 } from "./lib/headsUpNotifications";
 import { initElfComPushRegistration } from "./lib/notification_registration";
-import { createTrustIdSdk } from "@trustid/sdk";
+import { biometricReadiness, createTrustIdSdk } from "@trustid/sdk";
 import "./styles.css";
 
 // APK / Capacitor: wire App Lock + biometric + media vault + heads-up plugins
@@ -69,6 +69,7 @@ function AmbientShell({ children }: { children: React.ReactNode }) {
         getLocalOccupancy()?.trustId ??
         null
       }
+      biometricReadiness={biometricReadiness}
       capturePayload={(opts) => capture.payload(opts)}
       captureEnrollmentPayload={(opts) => capture.enrollmentPayload(opts)}
       captureFingerprint={async () => {

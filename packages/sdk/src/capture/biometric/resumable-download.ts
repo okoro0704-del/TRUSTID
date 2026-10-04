@@ -1,14 +1,68 @@
 /**
- * Download a model artifact in ranges.
+ * Download a biometric asset in ranges.
  * A single GET of w600k_mbf.onnx is closed early in production
  * (net::ERR_CONNECTION_CLOSED, HTTP 200) before Content-Length is satisfied.
  * Small Range responses complete, so the file is assembled from those.
+ *
+ * Failures carry an explicit category so a missing file, an HTML page in
+ * place of a binary, and a stalled connection are told apart. Bytes already
+ * received survive a failed attempt, so a retry resumes instead of restarting.
  */
 
 const DEFAULT_CHUNK_BYTES = 256 * 1024;
 const CHUNK_ATTEMPTS = 4;
+/** No bytes for this long means the connection is dead, not slow. */
+export const DEFAULT_STALL_MS = 30_000;
+
+export const BIOMETRIC_ASSET_ERROR = {
+  MISSING: "ASSET_MISSING",
+  NOT_BINARY: "ASSET_NOT_BINARY",
+  HTTP: "ASSET_HTTP_ERROR",
+  STALLED: "ASSET_STALLED",
+  NETWORK: "ASSET_NETWORK_ERROR",
+  INCOMPLETE: "ASSET_INCOMPLETE",
+} as const;
+
+export type BiometricAssetErrorCategory =
+  (typeof BIOMETRIC_ASSET_ERROR)[keyof typeof BIOMETRIC_ASSET_ERROR];
+
+export class BiometricAssetError extends Error {
+  readonly category: BiometricAssetErrorCategory;
+  readonly url: string;
+  readonly status?: number;
+
+  constructor(
+    category: BiometricAssetErrorCategory,
+    url: string,
+    detail: string,
+    status?: number,
+  ) {
+    super(`${category}: ${detail} (${url})`);
+    this.name = "BiometricAssetError";
+    this.category = category;
+    this.url = url;
+    this.status = status;
+  }
+}
+
+/** A missing file or an HTML page will not change on retry. */
+function isPermanent(err: unknown): boolean {
+  return (
+    err instanceof BiometricAssetError &&
+    (err.category === BIOMETRIC_ASSET_ERROR.MISSING ||
+      err.category === BIOMETRIC_ASSET_ERROR.NOT_BINARY)
+  );
+}
 
 type FetchLike = typeof fetch;
+
+export type DownloadOptions = {
+  stallMs?: number;
+  onProgress?: (loaded: number, total: number | null) => void;
+};
+
+type PartialDownload = { total: number; out: Uint8Array; offset: number };
+const partialDownloads = new Map<string, PartialDownload>();
 
 function totalFromContentRange(header: string | null): number | null {
   const match = header?.match(/\/(\d+)\s*$/);
@@ -23,73 +77,217 @@ function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return copy;
 }
 
+function looksLikeHtml(bytes: Uint8Array): boolean {
+  let i = 0;
+  while (i < bytes.length && i < 64 && (bytes[i] === 0x20 || bytes[i] === 0x0a || bytes[i] === 0x0d || bytes[i] === 0x09 || bytes[i] === 0xef || bytes[i] === 0xbb || bytes[i] === 0xbf)) {
+    i += 1;
+  }
+  if (bytes[i] !== 0x3c) return false;
+  const head = new TextDecoder().decode(bytes.subarray(i, i + 32)).toLowerCase();
+  return head.startsWith("<!doctype") || head.startsWith("<html") || head.startsWith("<head") || head.startsWith("<body");
+}
+
+function rejectAfter(ms: number, onTimeout: () => Error): {
+  promise: Promise<never>;
+  clear: () => void;
+} {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const promise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(onTimeout()), ms);
+  });
+  promise.catch(() => undefined);
+  return { promise, clear: () => clearTimeout(timer) };
+}
+
+/**
+ * Read a body, failing only when no bytes arrive for `stallMs`. A slow chunk
+ * that keeps delivering is never cut off.
+ */
+async function readBody(
+  res: Response,
+  url: string,
+  stallMs: number,
+  abort: () => void,
+): Promise<Uint8Array> {
+  const body = res.body as ReadableStream<Uint8Array> | null;
+  if (!body || typeof body.getReader !== "function") {
+    return new Uint8Array(await res.arrayBuffer());
+  }
+  const reader = body.getReader();
+  const parts: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const stall = rejectAfter(
+      stallMs,
+      () => new BiometricAssetError(BIOMETRIC_ASSET_ERROR.STALLED, url, `no bytes for ${stallMs}ms`),
+    );
+    try {
+      const { done, value } = await Promise.race([reader.read(), stall.promise]);
+      if (done) break;
+      if (value) {
+        parts.push(value);
+        size += value.byteLength;
+      }
+    } catch (err) {
+      abort();
+      void reader.cancel().catch(() => undefined);
+      throw err;
+    } finally {
+      stall.clear();
+    }
+  }
+  const out = new Uint8Array(size);
+  let at = 0;
+  for (const p of parts) {
+    out.set(p, at);
+    at += p.byteLength;
+  }
+  return out;
+}
+
+async function fetchRangeOnce(
+  fetchImpl: FetchLike,
+  url: string,
+  start: number,
+  end: number,
+  stallMs: number,
+): Promise<{ bytes: Uint8Array; total: number | null; completeBody: boolean }> {
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const abort = () => controller?.abort();
+  const headersStall = rejectAfter(stallMs, () => {
+    abort();
+    return new BiometricAssetError(BIOMETRIC_ASSET_ERROR.STALLED, url, `no response for ${stallMs}ms`);
+  });
+  let res: Response;
+  try {
+    res = await Promise.race([
+      fetchImpl(url, {
+        credentials: "same-origin",
+        // Verified bytes are kept in Cache Storage. The HTTP cache must never
+        // replay a stale or error response for a biometric asset.
+        cache: "no-store",
+        headers: { Range: `bytes=${start}-${end}` },
+        signal: controller?.signal,
+      }),
+      headersStall.promise,
+    ]);
+  } catch (err) {
+    if (err instanceof BiometricAssetError) throw err;
+    throw new BiometricAssetError(
+      BIOMETRIC_ASSET_ERROR.NETWORK,
+      url,
+      err instanceof Error ? err.message : String(err),
+    );
+  } finally {
+    headersStall.clear();
+  }
+
+  if (res.status === 404 || res.status === 410) {
+    throw new BiometricAssetError(BIOMETRIC_ASSET_ERROR.MISSING, url, `HTTP ${res.status}`, res.status);
+  }
+  if (res.status !== 206 && res.status !== 200) {
+    throw new BiometricAssetError(
+      BIOMETRIC_ASSET_ERROR.HTTP,
+      url,
+      `HTTP ${res.status} at ${start}-${end}`,
+      res.status,
+    );
+  }
+  const contentType = res.headers.get("content-type") ?? "";
+  if (/text\/html/i.test(contentType)) {
+    throw new BiometricAssetError(
+      BIOMETRIC_ASSET_ERROR.NOT_BINARY,
+      url,
+      `served as ${contentType.split(";")[0]}`,
+      res.status,
+    );
+  }
+  const bytes = await readBody(res, url, stallMs, abort);
+  if (start === 0 && looksLikeHtml(bytes)) {
+    throw new BiometricAssetError(BIOMETRIC_ASSET_ERROR.NOT_BINARY, url, "body is an HTML page", res.status);
+  }
+  if (res.status === 200 && start === 0) {
+    return { bytes, total: bytes.byteLength, completeBody: true };
+  }
+  const total = totalFromContentRange(res.headers.get("content-range"));
+  // Servers clamp a range that runs past the end of the file.
+  const lastByte = total != null ? Math.min(end, total - 1) : end;
+  const expected = lastByte - start + 1;
+  if (bytes.byteLength !== expected) {
+    throw new BiometricAssetError(
+      BIOMETRIC_ASSET_ERROR.INCOMPLETE,
+      url,
+      `range ${start}-${end} returned ${bytes.byteLength}/${expected}`,
+    );
+  }
+  return { bytes, total, completeBody: false };
+}
+
 async function fetchRange(
   fetchImpl: FetchLike,
   url: string,
   start: number,
   end: number,
+  stallMs: number,
 ): Promise<{ bytes: Uint8Array; total: number | null; completeBody: boolean }> {
   let lastError: unknown;
   for (let attempt = 0; attempt < CHUNK_ATTEMPTS; attempt++) {
     try {
-      // Do not abort a slow chunk. controller.abort() surfaces as
-      // "signal is aborted without reason" and was cancelling ArcFace
-      // while bytes were still arriving, so enrollment never finished.
-      const res = await fetchImpl(url, {
-        credentials: "same-origin",
-        headers: { Range: `bytes=${start}-${end}` },
-      });
-      if (res.status !== 206 && res.status !== 200) {
-        throw new Error(`Model range failed (${res.status}) at ${start}-${end}`);
-      }
-      const bytes = new Uint8Array(await res.arrayBuffer());
-      if (res.status === 200 && start === 0) {
-        return { bytes, total: bytes.byteLength, completeBody: true };
-      }
-      const expected = end - start + 1;
-      if (bytes.byteLength !== expected) {
-        throw new Error(
-          `Model range short at ${start}-${end}: ${bytes.byteLength}/${expected}`,
-        );
-      }
-      return {
-        bytes,
-        total: totalFromContentRange(res.headers.get("content-range")),
-        completeBody: false,
-      };
+      return await fetchRangeOnce(fetchImpl, url, start, end, stallMs);
     } catch (err) {
       lastError = err;
+      if (isPermanent(err)) break;
     }
   }
   throw lastError instanceof Error
     ? lastError
-    : new Error(`Model range failed at ${start}-${end}`);
+    : new BiometricAssetError(BIOMETRIC_ASSET_ERROR.NETWORK, url, `range ${start}-${end} failed`);
 }
 
 export async function downloadModelBytes(
   url: string,
   fetchImpl: FetchLike = fetch,
   chunkBytes = DEFAULT_CHUNK_BYTES,
+  options: DownloadOptions = {},
 ): Promise<ArrayBuffer> {
-  const first = await fetchRange(fetchImpl, url, 0, chunkBytes - 1);
-  if (first.completeBody) {
-    return bytesToArrayBuffer(first.bytes);
-  }
-  const total = first.total;
-  if (!total) {
-    throw new Error(`Model download missing total size for ${url}`);
-  }
-  const out = new Uint8Array(total);
-  out.set(first.bytes, 0);
-  let offset = first.bytes.byteLength;
-  while (offset < total) {
-    const end = Math.min(total - 1, offset + chunkBytes - 1);
-    const next = await fetchRange(fetchImpl, url, offset, end);
-    if (next.completeBody) {
-      throw new Error(`Unexpected full body while resuming ${url} at ${offset}`);
+  const stallMs = options.stallMs ?? DEFAULT_STALL_MS;
+  let partial = partialDownloads.get(url);
+  if (!partial) {
+    const first = await fetchRange(fetchImpl, url, 0, chunkBytes - 1, stallMs);
+    if (first.completeBody) {
+      options.onProgress?.(first.bytes.byteLength, first.bytes.byteLength);
+      return bytesToArrayBuffer(first.bytes);
     }
-    out.set(next.bytes, offset);
-    offset += next.bytes.byteLength;
+    const total = first.total;
+    if (!total) {
+      throw new BiometricAssetError(BIOMETRIC_ASSET_ERROR.INCOMPLETE, url, "missing total size");
+    }
+    partial = { total, out: new Uint8Array(total), offset: 0 };
+    partial.out.set(first.bytes, 0);
+    partial.offset = first.bytes.byteLength;
+    partialDownloads.set(url, partial);
   }
-  return bytesToArrayBuffer(out);
+  options.onProgress?.(partial.offset, partial.total);
+  while (partial.offset < partial.total) {
+    const end = Math.min(partial.total - 1, partial.offset + chunkBytes - 1);
+    const next = await fetchRange(fetchImpl, url, partial.offset, end, stallMs);
+    if (next.completeBody) {
+      partialDownloads.delete(url);
+      throw new BiometricAssetError(
+        BIOMETRIC_ASSET_ERROR.INCOMPLETE,
+        url,
+        `server ignored Range while resuming at ${partial.offset}`,
+      );
+    }
+    partial.out.set(next.bytes, partial.offset);
+    partial.offset += next.bytes.byteLength;
+    options.onProgress?.(partial.offset, partial.total);
+  }
+  partialDownloads.delete(url);
+  return partial.out.buffer as ArrayBuffer;
+}
+
+/** Test helper: forget bytes kept from failed downloads. */
+export function resetPartialDownloadsForTests(): void {
+  partialDownloads.clear();
 }
