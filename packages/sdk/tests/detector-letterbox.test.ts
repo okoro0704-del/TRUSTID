@@ -1,11 +1,13 @@
 /**
  * Unit tests for MediaPipe square letterbox mapping (no MediaPipe runtime).
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  letterboxImageDataToSquare,
   letterboxImageDataToSquareData,
   mapSquareNormToSourcePixels,
   squareLetterboxGeometry,
+  toCanvasImageData,
 } from "../src/capture/biometric/detector-mediapipe.js";
 import { summarizeImageDataSignal } from "../src/capture/biometric/face-capture-diag.js";
 
@@ -55,6 +57,50 @@ describe("MediaPipe square letterbox helpers", () => {
     );
     expect(mapped[0]!.x).toBeCloseTo(0.5, 5);
     expect(mapped[0]!.y).toBeCloseTo(0.5, 5);
+  });
+
+  it("hands putImageData a real ImageData even for ImageData-shaped frames", () => {
+    class FakeImageData {
+      constructor(
+        readonly data: Uint8ClampedArray,
+        readonly width: number,
+        readonly height: number,
+      ) {}
+    }
+    const g = globalThis as { ImageData?: unknown };
+    const original = g.ImageData;
+    g.ImageData = FakeImageData;
+    const placed: { x: number; y: number }[] = [];
+    const ctx = {
+      fillStyle: "",
+      fillRect: () => undefined,
+      // Browsers throw TypeError for anything that is not a real ImageData.
+      putImageData: (img: unknown, x: number, y: number) => {
+        if (!(img instanceof FakeImageData)) {
+          throw new TypeError(
+            "Failed to execute 'putImageData' on 'CanvasRenderingContext2D': parameter 1 is not of type 'ImageData'.",
+          );
+        }
+        placed.push({ x, y });
+      },
+    };
+    const getContext = vi
+      .spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockReturnValue(ctx as never);
+    try {
+      const plain = makeImageData(480, 640, 90);
+      expect(toCanvasImageData(plain)).toBeInstanceOf(FakeImageData);
+      const { canvas, side, offsetX, offsetY } = letterboxImageDataToSquare(plain);
+      expect(side).toBe(640);
+      expect(canvas.width).toBe(640);
+      expect(canvas.height).toBe(640);
+      expect(offsetX).toBe(80);
+      expect(offsetY).toBe(0);
+      expect(placed).toEqual([{ x: 80, y: 0 }]);
+    } finally {
+      getContext.mockRestore();
+      g.ImageData = original;
+    }
   });
 
   it("summarizeImageDataSignal reports non-zero without exposing pixels", () => {

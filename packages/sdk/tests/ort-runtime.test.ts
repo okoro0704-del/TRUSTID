@@ -53,10 +53,13 @@ type Counters = {
   runtimeInitEntered: number;
   backendInitByName: Record<string, number>;
   sessionsCreated: number;
+  runsInflight: number;
+  maxRunsInflight: number;
 };
 
 type FakeOptions = {
   initMs?: number;
+  runMs?: number;
   initError?: string;
   sessionFailuresLeft?: number;
 };
@@ -77,6 +80,8 @@ async function freshFakeOrt(options: FakeOptions = {}) {
     runtimeInitEntered: 0,
     backendInitByName: {},
     sessionsCreated: 0,
+    runsInflight: 0,
+    maxRunsInflight: 0,
   };
 
   // Mirrors onnxruntime-web/lib/wasm/proxy-wrapper.ts (non-proxy branch).
@@ -115,9 +120,15 @@ async function freshFakeOrt(options: FakeOptions = {}) {
         dispose: async () => {},
         startProfiling: () => {},
         endProfiling: () => {},
-        run: async () => ({
-          "683": { data: new Float32Array(512).fill(0.5), dims: [1, 512], type: "float32" },
-        }),
+        run: async () => {
+          counters.runsInflight += 1;
+          counters.maxRunsInflight = Math.max(counters.maxRunsInflight, counters.runsInflight);
+          await delay(options.runMs ?? 0);
+          counters.runsInflight -= 1;
+          return {
+            "683": { data: new Float32Array(512).fill(0.5), dims: [1, 512], type: "float32" },
+          };
+        },
       };
     },
   };
@@ -331,6 +342,18 @@ describe("ORT runtime owner", { timeout: RUNTIME_TEST_TIMEOUT_MS }, () => {
     await t.arcface.embedAlignedFace112(new Float32Array(3 * 112 * 112));
     expect(second).toBe(first);
     expect(t.counters.runtimeInitEntered).toBe(1);
+    expect(t.counters.sessionsCreated).toBe(1);
+  });
+
+  it("4b. overlapping embed requests run the ArcFace session one at a time", async () => {
+    const t = await setup({ runMs: 15 });
+    const results = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        t.arcface.embedAlignedFace112(new Float32Array(3 * 112 * 112)),
+      ),
+    );
+    expect(results.every((r) => r.vector.length === 512)).toBe(true);
+    expect(t.counters.maxRunsInflight).toBe(1);
     expect(t.counters.sessionsCreated).toBe(1);
   });
 

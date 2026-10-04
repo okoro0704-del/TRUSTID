@@ -32,7 +32,7 @@ describe("silent-camera-web", () => {
   it("stops camera tracks immediately on cancellation even when video playback hangs", async () => {
     const stop = vi.fn();
     const controller = new AbortController();
-    let rejectPlayback!: (error: Error) => void;
+    let rejectPlayback: ((error: Error) => void) | undefined;
     vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(
       () => new Promise((_, reject) => { rejectPlayback = reject; }),
     );
@@ -40,12 +40,28 @@ describe("silent-camera-web", () => {
       async () => ({ getTracks: () => [{ stop }] }) as unknown as MediaStream,
       { signal: controller.signal },
     );
-    await Promise.resolve();
+    await vi.waitFor(() => expect(rejectPlayback).toBeDefined());
     controller.abort();
-    expect(stop).toHaveBeenCalledTimes(1);
-    rejectPlayback(new Error("Capture aborted"));
-    await pending;
+    expect(stop).toHaveBeenCalled();
+    rejectPlayback!(new Error("Capture aborted"));
+    const result = await pending;
+    expect(result?.payload?.vector ?? []).toHaveLength(0);
     expect(document.querySelector("video")).toBeNull();
+  });
+
+  it("releases a camera stream that is granted after the scan was cancelled", async () => {
+    const stop = vi.fn();
+    const controller = new AbortController();
+    let grant!: (stream: MediaStream) => void;
+    const pending = captureSilentFaceFromWebCamera(
+      () => new Promise<MediaStream>((resolve) => { grant = resolve; }),
+      { signal: controller.signal },
+    );
+    await vi.waitFor(() => expect(grant).toBeDefined());
+    controller.abort();
+    await pending;
+    grant({ getTracks: () => [{ stop }] } as unknown as MediaStream);
+    await vi.waitFor(() => expect(stop).toHaveBeenCalled());
   });
 
   afterEach(() => {

@@ -2,7 +2,7 @@
  * Multi-frame enrollment — quality-filtered frames ? gallery + mean primary.
  * Never averages rejected/low-quality embeddings into the stored template.
  */
-import { BIOMETRIC_ERROR_CODES } from "@trustid/shared";
+import { BIOMETRIC_ERROR_CODES, type FaceScanReason } from "@trustid/shared";
 import { meanNormalizeEmbeddings, l2Normalize } from "./face-align.js";
 import {
   extractFaceEmbeddingFromImageData,
@@ -12,7 +12,7 @@ import type { AIVectorPayload, BiometricExtractResult } from "./types.js";
 
 export type EnrollmentFrameResult = {
   accepted: AIVectorPayload[];
-  rejected: Array<{ code: string; message: string }>;
+  rejected: Array<{ code: string; message: string; reason?: FaceScanReason }>;
   primary: AIVectorPayload | null;
   /** Frames dropped as near-duplicates of an already-accepted embedding */
   duplicatesSkipped: number;
@@ -82,7 +82,7 @@ export async function enrollFromImageFrames(
 ): Promise<EnrollmentFrameResult> {
   const minAccepted = options.minAccepted ?? 3;
   const acceptedRaw: AIVectorPayload[] = [];
-  const rejected: Array<{ code: string; message: string }> = [];
+  const rejected: EnrollmentFrameResult["rejected"] = [];
 
   for (const frame of frames) {
     const result: BiometricExtractResult =
@@ -93,7 +93,7 @@ export async function enrollFromImageFrames(
     if (result.ok) {
       acceptedRaw.push(result.payload);
     } else {
-      rejected.push({ code: result.code, message: result.message });
+      rejected.push({ code: result.code, message: result.message, reason: result.reason });
     }
   }
 

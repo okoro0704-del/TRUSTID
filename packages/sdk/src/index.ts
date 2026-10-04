@@ -667,6 +667,27 @@ export type { FaceVectorResult } from "./capture/face-vectorizer.js";
 export type { AIVectorPayload, AIVectorExtractorOptions } from "./capture/ai-vector-extractor.js";
 export type { FacePresentationAttackDetector, FacePadResult };
 export type { FacePresenceResult } from "./capture/face-presence.js";
+export {
+  FACE_SCAN_STATE,
+  faceScanReasonMessage,
+  faceScanReasonToErrorCode,
+  runFaceScanLoop,
+} from "./capture/biometric/face-scan-loop.js";
+export type {
+  FaceScanState,
+  FaceScanDeps,
+  FaceScanOptions,
+  FaceScanOutcome,
+  ScanFrame,
+} from "./capture/biometric/face-scan-loop.js";
+export {
+  DEFAULT_FACE_SCAN_BUDGET_MS,
+  createVideoFrameSource,
+} from "./capture/silent-camera-web.js";
+export type {
+  FaceCaptureOptions,
+  SilentWebCaptureResult,
+} from "./capture/silent-camera-web.js";
 export { getBiometricRuntimeStatus } from "./capture/biometric/runtime-status.js";
 export type { BiometricRuntimeStatus } from "./capture/biometric/runtime-status.js";
 export { ORT_RUNTIME_ERROR_CODES } from "./capture/biometric/ort-runtime.js";

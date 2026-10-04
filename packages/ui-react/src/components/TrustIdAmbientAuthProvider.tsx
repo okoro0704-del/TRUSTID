@@ -1,10 +1,49 @@
 import type { ReactNode } from "react";
+import type { FaceLifecycleDiagnostics, FaceScanReason } from "@trustid/shared";
 import {
   BIOMETRIC_RELOAD_REQUIRED_ERROR,
   BIOMETRIC_UNAVAILABLE_ERROR,
   useAmbientTrustIdAuth,
+  type FaceScanStage,
   type UseAmbientTrustIdAuthOptions,
 } from "../hooks/useAmbientTrustIdAuth.js";
+
+const FACE_NOT_READ_HINTS: Partial<Record<FaceScanReason, string>> = {
+  CAMERA_UNAVAILABLE: "Allow camera access for TrustID, then retry.",
+  NO_VIDEO_FRAME: "The camera didn't send a picture. Close other apps using the camera, then retry.",
+  MODELS_NOT_READY: "Face recognition is still loading. Retry in a moment.",
+  NO_FACE_DETECTED: "Hold the phone at eye level with your whole face in view.",
+  MULTIPLE_FACES: "Make sure only your face is in view.",
+  FACE_TOO_SMALL: "Move the phone closer to your face.",
+  FACE_OUT_OF_BOUNDS: "Center your face in the camera view.",
+  LOW_LIGHT: "Move somewhere brighter.",
+  OVEREXPOSED: "Avoid strong light shining on you or behind you.",
+  EXCESSIVE_BLUR: "Hold the phone steady.",
+  POSE_REJECTED: "Look straight at the camera.",
+  LIVENESS_NOT_CONFIRMED: "Blink once while looking at the camera.",
+};
+
+const DEFAULT_FACE_NOT_READ_HINT = "Look straight at the camera in good light, then retry.";
+
+const SCAN_STAGE_MESSAGES: Record<FaceScanStage, string> = {
+  camera: "Starting camera…",
+  models: "Preparing face recognition…",
+  scanning: "Looking for your Trust ID…",
+};
+
+/** Reason code and counters only. Never frames, landmarks or vectors. */
+function scanDiagnosticsLine(d: FaceLifecycleDiagnostics | undefined): string | null {
+  if (!d?.scanReason && !d?.scanCounters) return null;
+  const c = d.scanCounters;
+  return [
+    d.scanReason ?? null,
+    c
+      ? `frames ${c.framesObserved}/${c.framesSubmitted} · faces ${c.facesDetected} · accepted ${c.qualityAccepted}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
 
 const SERVICE_DOWN = /BIOMETRIC_SERVICE_UNAVAILABLE|BIOMETRIC_MODEL_UNAVAILABLE|timed out/i;
 
@@ -62,6 +101,8 @@ export function TrustIdAmbientAuthProvider({
     error,
     faceDiagnostics,
     createStage,
+    scanStage,
+    faceScanReason,
     fingerprintBusy,
     retry,
     confirmSwitchAccount,
@@ -79,18 +120,88 @@ export function TrustIdAmbientAuthProvider({
     return <>{children}</>;
   }
 
-  if (phase === "NO_MATCH" || phase === "OFFER_CREATE") {
-    // "Not found" is only claimed after a face was actually read and searched.
-    const faceWasRead = Boolean(faceDiagnostics?.vectorCreated);
+  // "Not found" is only claimed after a face was actually read and searched.
+  const faceWasRead = Boolean(faceDiagnostics?.vectorCreated);
+  if (
+    phase === "FACE_NOT_READ" ||
+    ((phase === "NO_MATCH" || phase === "OFFER_CREATE") && !faceWasRead)
+  ) {
+    const reason = faceScanReason ?? faceDiagnostics?.scanReason ?? null;
+    const hint = (reason && FACE_NOT_READ_HINTS[reason]) ?? DEFAULT_FACE_NOT_READ_HINT;
+    const diagLine = scanDiagnosticsLine(faceDiagnostics);
     return (
-      <AmbientSplash
-        brand={brand}
-        msg={faceWasRead ? "No Trust ID found" : "Face scan didn't finish"}
-      >
+      <AmbientSplash brand={brand} msg="We couldn't read your face">
         <p className="tid-ambient-splash-msg" style={{ marginTop: "0.65rem" }}>
-          {faceWasRead
-            ? "Scan complete. No TrustID matches this face. Press Create TrustID to make one."
-            : "Your face wasn't read in time. Retry the scan, use fingerprint, or press Create TrustID to scan your face now."}
+          {hint}
+        </p>
+        <p
+          className="tid-ambient-splash-msg"
+          style={{ marginTop: "0.35rem", fontSize: "0.9rem", opacity: 0.85 }}
+        >
+          Nothing was searched yet, so this doesn't mean you don't have a TrustID.
+        </p>
+        {error ? (
+          <p
+            className="tid-ambient-splash-msg"
+            style={{ marginTop: "0.65rem", color: "#fbbf24" }}
+          >
+            {error}
+          </p>
+        ) : null}
+        {diagLine ? (
+          <p
+            className="tid-ambient-splash-msg"
+            style={{ marginTop: "0.35rem", fontSize: "0.75rem", opacity: 0.75 }}
+            data-testid="face-scan-diagnostics"
+          >
+            {diagLine}
+          </p>
+        ) : null}
+        <div
+          className="tid-ambient-choice-row"
+          role="group"
+          aria-label="Choose next step"
+        >
+          <div className="tid-ambient-choice-card tid-ambient-choice-card-primary">
+            <p className="tid-ambient-choice-label">Try again</p>
+            <button
+              type="button"
+              className="tid-btn tid-btn-primary"
+              onClick={retry}
+              disabled={fingerprintBusy}
+            >
+              Retry Face Scan
+            </button>
+            <button
+              type="button"
+              className="tid-btn tid-btn-ghost"
+              onClick={useFingerprintLogin}
+              disabled={fingerprintBusy}
+            >
+              {fingerprintBusy ? "Verifying…" : "Use Fingerprint"}
+            </button>
+          </div>
+          <div className="tid-ambient-choice-card">
+            <p className="tid-ambient-choice-label">Never made a TrustID?</p>
+            <button
+              type="button"
+              className="tid-btn"
+              onClick={confirmCreateAccount}
+              disabled={fingerprintBusy}
+            >
+              Create TrustID
+            </button>
+          </div>
+        </div>
+      </AmbientSplash>
+    );
+  }
+
+  if (phase === "NO_MATCH" || phase === "OFFER_CREATE") {
+    return (
+      <AmbientSplash brand={brand} msg="No Trust ID found">
+        <p className="tid-ambient-splash-msg" style={{ marginTop: "0.65rem" }}>
+          Scan complete. No TrustID matches this face. Press Create TrustID to make one.
         </p>
         {error ? (
           <p
@@ -341,7 +452,7 @@ export function TrustIdAmbientAuthProvider({
           </div>
           {!serviceDown ? (
             <div className="tid-ambient-choice-card tid-ambient-choice-card-primary">
-              <p className="tid-ambient-choice-label">New here</p>
+              <p className="tid-ambient-choice-label">Never made a TrustID?</p>
               <button
                 type="button"
                 className="tid-btn tid-btn-primary"
@@ -374,11 +485,15 @@ export function TrustIdAmbientAuthProvider({
   const msg =
     phase === "ENROLLING"
       ? createStage === "capturing"
-        ? "Getting your face ready — look at the camera…"
+        ? scanStage && scanStage !== "scanning"
+          ? SCAN_STAGE_MESSAGES[scanStage]
+          : "Getting your face ready — look at the camera…"
         : "Creating your TrustID…"
       : phase === "SAVING_FINGERPRINT"
         ? "Register fingerprint backup…"
-        : "Looking for your Trust ID…";
+        : scanStage
+          ? SCAN_STAGE_MESSAGES[scanStage]
+          : "Looking for your Trust ID…";
 
   return <AmbientSplash brand={brand} msg={msg} spinning={spinning} />;
 }

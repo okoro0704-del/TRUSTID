@@ -237,7 +237,19 @@ export type ArcFaceEmbedResult = {
   modelVersion: number;
 };
 
-export async function embedAlignedFace112(
+/** One ArcFace inference at a time: the ORT session is shared page-wide. */
+let embedQueue: Promise<unknown> = Promise.resolve();
+
+export function embedAlignedFace112(
+  nchw112: Float32Array,
+  modelBaseUrl?: string,
+): Promise<ArcFaceEmbedResult> {
+  const run = embedQueue.then(() => embedAlignedFace112Now(nchw112, modelBaseUrl));
+  embedQueue = run.catch(() => undefined);
+  return run;
+}
+
+async function embedAlignedFace112Now(
   nchw112: Float32Array,
   modelBaseUrl?: string,
 ): Promise<ArcFaceEmbedResult> {
@@ -287,6 +299,7 @@ export function isArcFaceReady(): boolean {
 export function resetArcFaceSessionForTests(): void {
   sessionPromise = null;
   modelBytesPromise = null;
+  embedQueue = Promise.resolve();
   embedderState = "IDLE";
   lastArcFaceInitError = null;
   lastExecutionProvider = null;

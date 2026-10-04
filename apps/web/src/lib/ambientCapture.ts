@@ -1,6 +1,9 @@
 import {
   BIOMETRIC_ERROR_CODES,
   BIOMETRIC_FACE_CAPTURE_MIN_CONFIDENCE,
+  FACE_SCAN_REASON,
+  type FaceScanDiagnostics,
+  type FaceScanReason,
 } from "@trustid/shared";
 import {
   captureNativeFingerprintTemplate,
@@ -11,6 +14,7 @@ import {
   multiModalFromSilentCapture,
   supportsSilentFaceCapture,
   type BiometricPayload,
+  type FaceScanState,
   type FingerprintTemplateBridge,
   type MultiModalBiometricPayload,
   type SilentFaceCaptureBridge,
@@ -75,96 +79,84 @@ export async function captureFingerprintBackup(
 }
 
 type UnifiedFaceResult =
-  | { ok: true; face: BiometricPayload }
-  | { ok: false; code: string; message: string };
+  | { ok: true; face: BiometricPayload; diagnostics?: FaceScanDiagnostics }
+  | {
+      ok: false;
+      code: string;
+      message: string;
+      reason?: FaceScanReason;
+      diagnostics?: FaceScanDiagnostics;
+    };
+
+export type FaceCaptureRequest = {
+  signal?: AbortSignal;
+  onState?: (state: FaceScanState) => void;
+};
+
+function aborted(): UnifiedFaceResult {
+  return {
+    ok: false,
+    code: BIOMETRIC_ERROR_CODES.FACE_NOT_DETECTED,
+    message: "Capture aborted",
+    reason: FACE_SCAN_REASON.SCAN_ABORTED,
+  };
+}
 
 /**
  * Capture one face vector with the SAME JS model on web, PWA, and APK.
- * Prefer getUserMedia; fall back to native CameraX JPEG → same JS extractor.
- * Preserves the first real failure code (never collapses to empty).
+ * One scan per attempt: the scan loop already samples many frames and keeps
+ * the best. Only a camera that never produced a frame is restarted once.
  */
-async function captureUnifiedFace(
-  signal?: AbortSignal,
-): Promise<UnifiedFaceResult> {
-  let lastFailure: UnifiedFaceResult = {
-    ok: false,
-    code: BIOMETRIC_ERROR_CODES.FACE_NOT_DETECTED,
-    message: "No usable face frame captured",
-  };
-
-  for (let i = 0; i < 4; i++) {
-    if (signal?.aborted) {
-      return {
-        ok: false,
-        code: BIOMETRIC_ERROR_CODES.FACE_NOT_DETECTED,
-        message: "Capture aborted",
-      };
-    }
-    if (i > 0) await delay(250 + i * 150);
-    if (signal?.aborted) {
-      return {
-        ok: false,
-        code: BIOMETRIC_ERROR_CODES.FACE_NOT_DETECTED,
-        message: "Capture aborted",
-      };
-    }
-    const once = await captureUnifiedFaceOnce(signal);
-    if (once.ok) return once;
-    lastFailure = once;
-    // Hard failures should not burn retries (model / camera / auth).
-    if (
-      once.code === BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_UNAVAILABLE ||
-      once.code === BIOMETRIC_ERROR_CODES.CAMERA_UNAVAILABLE ||
-      once.code === BIOMETRIC_ERROR_CODES.LIVENESS_FAILED ||
-      once.code === BIOMETRIC_ERROR_CODES.PAD_UNAVAILABLE
-    ) {
-      return once;
-    }
-  }
-  return lastFailure;
+async function captureUnifiedFace(request: FaceCaptureRequest = {}): Promise<UnifiedFaceResult> {
+  const first = await captureUnifiedFaceOnce(request);
+  if (first.ok || first.reason !== FACE_SCAN_REASON.NO_VIDEO_FRAME) return first;
+  if (request.signal?.aborted) return aborted();
+  await delay(400);
+  if (request.signal?.aborted) return aborted();
+  return captureUnifiedFaceOnce(request);
 }
 
-async function captureUnifiedFaceOnce(
-  signal?: AbortSignal,
-): Promise<UnifiedFaceResult> {
+async function captureUnifiedFaceOnce(request: FaceCaptureRequest): Promise<UnifiedFaceResult> {
+  const { signal, onState } = request;
   try {
-    const web = await captureSilentFaceFromWebCamera(undefined, { signal });
-    const mapped = multiModalFromSilentCapture(
-      web,
-      BIOMETRIC_FACE_CAPTURE_MIN_CONFIDENCE,
-    );
-    if (mapped.face) return { ok: true, face: mapped.face };
-    if (mapped.captureErrorCode) {
-      console.warn(
-        "[TrustID] Face capture:",
-        mapped.captureErrorCode,
-        mapped.captureErrorMessage,
-      );
+    const web = await captureSilentFaceFromWebCamera(undefined, { signal, onState });
+    if (web) {
+      const mapped = multiModalFromSilentCapture(web, BIOMETRIC_FACE_CAPTURE_MIN_CONFIDENCE);
+      if (mapped.face) return { ok: true, face: mapped.face, diagnostics: mapped.captureDiagnostics };
+      const code = mapped.captureErrorCode ?? BIOMETRIC_ERROR_CODES.FACE_NOT_DETECTED;
+      console.warn("[TrustID] Face capture:", code, mapped.captureReasonCode ?? "", mapped.captureErrorMessage);
       return {
         ok: false,
-        code: mapped.captureErrorCode,
-        message: mapped.captureErrorMessage ?? mapped.captureErrorCode,
+        code,
+        message: mapped.captureErrorMessage ?? code,
+        reason: mapped.captureReasonCode,
+        diagnostics: mapped.captureDiagnostics,
       };
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn("[TrustID] Face capture failed:", msg);
-    const code = /permission|NotAllowed|NotFound|getUserMedia|camera/i.test(msg)
-      ? BIOMETRIC_ERROR_CODES.CAMERA_UNAVAILABLE
-      : /unavailable|integrity|onnx|mediapipe|model/i.test(msg)
-        ? BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_UNAVAILABLE
-        : BIOMETRIC_ERROR_CODES.EMBEDDING_FAILED;
-    return { ok: false, code, message: msg };
-  }
-
-  if (signal?.aborted) {
+    const camera = /permission|NotAllowed|NotFound|getUserMedia|camera/i.test(msg);
+    const model = /unavailable|integrity|onnx|mediapipe|model/i.test(msg);
     return {
       ok: false,
-      code: BIOMETRIC_ERROR_CODES.FACE_NOT_DETECTED,
-      message: "Capture aborted",
+      code: camera
+        ? BIOMETRIC_ERROR_CODES.CAMERA_UNAVAILABLE
+        : model
+          ? BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_UNAVAILABLE
+          : BIOMETRIC_ERROR_CODES.EMBEDDING_FAILED,
+      message: msg,
+      reason: camera
+        ? FACE_SCAN_REASON.CAMERA_UNAVAILABLE
+        : model
+          ? FACE_SCAN_REASON.MODELS_NOT_READY
+          : FACE_SCAN_REASON.EMBEDDING_FAILED,
     };
   }
 
+  if (signal?.aborted) return aborted();
+
+  // No getUserMedia in this WebView: native CameraX JPEG → same JS extractor.
   const nativeBridge = getNativeSilentFaceBridge();
   if (nativeBridge) {
     const capturer = createSilentCameraCapturer({ nativeBridge });
@@ -190,8 +182,19 @@ async function captureUnifiedFaceOnce(
 
   return {
     ok: false,
-    code: BIOMETRIC_ERROR_CODES.FACE_NOT_DETECTED,
-    message: "No usable face frame captured",
+    code: BIOMETRIC_ERROR_CODES.CAMERA_UNAVAILABLE,
+    message: "No camera API is available in this browser",
+    reason: FACE_SCAN_REASON.CAMERA_UNAVAILABLE,
+  };
+}
+
+function toPayload(result: UnifiedFaceResult): MultiModalBiometricPayload {
+  if (result.ok) return { face: result.face, captureDiagnostics: result.diagnostics };
+  return {
+    captureErrorCode: result.code,
+    captureErrorMessage: result.message,
+    captureReasonCode: result.reason,
+    captureDiagnostics: result.diagnostics,
   };
 }
 
@@ -202,11 +205,9 @@ async function captureUnifiedFaceOnce(
  */
 export async function captureWebAmbientSingleModal(
   _apiFetch?: ApiFetch,
-  options?: { signal?: AbortSignal },
+  options?: FaceCaptureRequest,
 ): Promise<MultiModalBiometricPayload> {
-  const result = await captureUnifiedFace(options?.signal);
-  if (result.ok) return { face: result.face };
-  return captureFailure(result.code, result.message);
+  return toPayload(await captureUnifiedFace(options));
 }
 
 /** Multi-frame enrollment capture for explicit Register Trust ID flow. */
@@ -220,7 +221,9 @@ export async function captureWebAmbientEnrollment(
     );
   }
   try {
-    const enrolled = await captureSilentFaceEnrollmentFromWebCamera();
+    const enrolled = await captureSilentFaceEnrollmentFromWebCamera(undefined, {
+      signal: options?.signal,
+    });
     const mapped = multiModalFromSilentCapture(enrolled);
     if (mapped.face) return mapped;
     if (enrolled?.errorCode) {
@@ -231,7 +234,9 @@ export async function captureWebAmbientEnrollment(
       );
       if (
         enrolled.errorCode === BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_UNAVAILABLE ||
-        enrolled.errorCode === BIOMETRIC_ERROR_CODES.CAMERA_UNAVAILABLE
+        enrolled.errorCode === BIOMETRIC_ERROR_CODES.CAMERA_UNAVAILABLE ||
+        enrolled.errorCode === BIOMETRIC_ERROR_CODES.DETECTOR_ERROR ||
+        enrolled.reasonCode === FACE_SCAN_REASON.SCAN_ABORTED
       ) {
         return mapped;
       }
@@ -256,15 +261,12 @@ export async function captureWebAmbientEnrollment(
       "Capture aborted",
     );
   }
-  const result = await captureUnifiedFace(options?.signal);
-  if (result.ok) return { face: result.face };
-  return captureFailure(result.code, result.message);
+  return toPayload(await captureUnifiedFace({ signal: options?.signal }));
 }
 
 export function createWebAmbientCapture(apiFetch: ApiFetch) {
   return {
-    payload: (opts?: { signal?: AbortSignal }) =>
-      captureWebAmbientSingleModal(apiFetch, opts),
+    payload: (opts?: FaceCaptureRequest) => captureWebAmbientSingleModal(apiFetch, opts),
     enrollmentPayload: (opts?: { signal?: AbortSignal }) =>
       captureWebAmbientEnrollment(opts),
     captureFingerprintBackup,

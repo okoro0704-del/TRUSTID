@@ -218,6 +218,22 @@ export function letterboxImageDataToSquareData(imageData: ImageData): {
 }
 
 /**
+ * Browsers reject ImageData-shaped objects in putImageData(); only a real
+ * ImageData instance is accepted.
+ */
+export function toCanvasImageData(imageData: ImageData): ImageData {
+  if (typeof ImageData === "undefined" || imageData instanceof ImageData) {
+    return imageData;
+  }
+  const shaped = imageData as { data: ArrayLike<number>; width: number; height: number };
+  return new ImageData(
+    new Uint8ClampedArray(shaped.data),
+    shaped.width,
+    shaped.height,
+  );
+}
+
+/**
  * Letterbox onto a square canvas for MediaPipe detect().
  */
 export function letterboxImageDataToSquare(imageData: ImageData): {
@@ -227,19 +243,23 @@ export function letterboxImageDataToSquare(imageData: ImageData): {
   offsetY: number;
   scale: number;
 } {
-  const { square, side, offsetX, offsetY } =
-    letterboxImageDataToSquareData(imageData);
+  const { side, offsetX, offsetY } = squareLetterboxGeometry(
+    imageData.width,
+    imageData.height,
+  );
   const canvas = document.createElement("canvas");
   canvas.width = side;
   canvas.height = side;
   const ctx = canvas.getContext("2d");
   if (!ctx) {
     throw biometricFail(
-      BIOMETRIC_ERROR_CODES.EMBEDDING_FAILED,
+      BIOMETRIC_ERROR_CODES.DETECTOR_ERROR,
       "Canvas 2D context unavailable",
     );
   }
-  ctx.putImageData(square, 0, 0);
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, side, side);
+  ctx.putImageData(toCanvasImageData(imageData), offsetX, offsetY);
   return { canvas, side, offsetX, offsetY, scale: 1 };
 }
 
@@ -438,6 +458,8 @@ async function forceCpuLandmarker(
 export type DetectionResult = {
   faces: DetectedFace[];
   blendshapes?: Array<Record<string, number>>;
+  /** Dimensions of the canvas actually handed to MediaPipe. */
+  input?: { width: number; height: number; ms: number };
 };
 
 export async function detectFacesInImageData(
@@ -500,7 +522,15 @@ export async function detectFacesInImageData(
   canvas.width = 0;
   canvas.height = 0;
 
+  const alignmentIdx = Object.values(IDX);
   const faces: DetectedFace[] = (result.faceLandmarks ?? []).map((mesh) => {
+    const landmarksInFrame = alignmentIdx.every((i) => {
+      const p = mesh[i];
+      if (!p) return false;
+      const sx = p.x * side - offsetX;
+      const sy = p.y * side - offsetY;
+      return sx >= 0 && sy >= 0 && sx <= imageData.width && sy <= imageData.height;
+    });
     const mapped =
       side === imageData.width && side === imageData.height
         ? mesh
@@ -522,6 +552,7 @@ export async function detectFacesInImageData(
       box,
       confidence: 0.9,
       landmarks,
+      landmarksInFrame,
     };
   });
 
@@ -533,7 +564,11 @@ export async function detectFacesInImageData(
     return map;
   });
 
-  return { faces, blendshapes };
+  return {
+    faces,
+    blendshapes,
+    input: { width: side, height: side, ms: detectMs },
+  };
 }
 
 export function selectPrimaryFace(faces: DetectedFace[]): DetectedFace | null {

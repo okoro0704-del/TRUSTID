@@ -52,6 +52,7 @@ export function assessFaceQuality(
   let lumaSq = 0;
   let edge = 0;
   let count = 0;
+  let exposure: FaceQualityResult["exposure"] = "ok";
   const { data } = imageData;
   for (let y = y0; y < y1; y += 2) {
     for (let x = x0; x < x1; x += 2) {
@@ -76,6 +77,7 @@ export function assessFaceQuality(
     const edgeMean = edge / count;
     if (mean < 35 || mean > 230) {
       reasons.push("poor_exposure");
+      exposure = mean < 35 ? "dark" : "bright";
       score *= 0.4;
     }
     if (variance < 120 || edgeMean < 4) {
@@ -90,5 +92,5 @@ export function assessFaceQuality(
       !reasons.includes("extreme_pose") &&
       score >= 0.45);
 
-  return { ok, score: Math.max(0, Math.min(1, score)), reasons };
+  return { ok, score: Math.max(0, Math.min(1, score)), reasons, exposure };
 }

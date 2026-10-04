@@ -31,6 +31,15 @@ export type FaceCaptureDiagEvent = {
   actualHashPrefix?: string;
   errorCode?: string;
   errorMessage?: string;
+  state?: string;
+  reason?: string;
+  counters?: Record<string, number>;
+  orientation?: string;
+  mirrored?: boolean;
+  frameSource?: string;
+  readyState?: number;
+  trackState?: string;
+  frameTimestamp?: number;
 };
 
 export function isFaceCaptureDiagEnabled(): boolean {
@@ -135,6 +144,19 @@ export function faceCaptureDiag(
     errorMessage: event.errorMessage
       ? sanitizeInitError(event.errorMessage)
       : undefined,
+    state: event.state,
+    reason: event.reason,
+    counters: event.counters
+      ? Object.fromEntries(
+          Object.entries(event.counters).filter(([, v]) => typeof v === "number"),
+        )
+      : undefined,
+    orientation: event.orientation,
+    mirrored: event.mirrored,
+    frameSource: event.frameSource,
+    readyState: event.readyState,
+    trackState: event.trackState,
+    frameTimestamp: event.frameTimestamp,
   };
   console.info("[TrustID]", JSON.stringify(safe));
 }

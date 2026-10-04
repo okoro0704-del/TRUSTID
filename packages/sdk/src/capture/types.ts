@@ -1,3 +1,4 @@
+import type { FaceScanDiagnostics, FaceScanReason } from "@trustid/shared";
 import type { BiometricPayload } from "../index.js";
 
 export type MultiModalBiometricPayload = {
@@ -10,6 +11,10 @@ export type MultiModalBiometricPayload = {
    */
   captureErrorCode?: string;
   captureErrorMessage?: string;
+  /** Precise scan reason behind captureErrorCode (diagnostic). */
+  captureReasonCode?: FaceScanReason;
+  /** Non-biometric scan summary (counters, dimensions, final state). */
+  captureDiagnostics?: FaceScanDiagnostics;
 };
 
 export type CaptureHandlers = {

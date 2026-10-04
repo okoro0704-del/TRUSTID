@@ -3,7 +3,7 @@
  */
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ReactNode } from "react";
+import { StrictMode, type ReactNode } from "react";
 import { TrustIdAuthProvider } from "../src/context/TrustIdAuthProvider.js";
 import {
   BIOMETRIC_UNAVAILABLE_ERROR,
@@ -158,7 +158,7 @@ describe("useAmbientTrustIdAuth state machine", () => {
     );
   });
 
-  it("ends a hanging lookup after 30 seconds on the fingerprint or register choice", async () => {
+  it("ends a hanging lookup as a service error, never as 'no TrustID'", async () => {
     vi.useFakeTimers();
     let resolveLookup!: (value: unknown) => void;
     faceLookup.mockImplementation(() => new Promise(resolve => { resolveLookup = resolve; }));
@@ -171,11 +171,12 @@ describe("useAmbientTrustIdAuth state machine", () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(500); });
       expect(faceLookup).toHaveBeenCalledTimes(1);
       const signal = faceLookup.mock.calls[0][0].signal as AbortSignal;
-      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
-      expect(result.current.phase).toBe("NO_MATCH");
+      await act(async () => { await vi.advanceTimersByTimeAsync(25_000); });
+      expect(result.current.phase).toBe("ERROR");
+      expect(result.current.error).toMatch(/BIOMETRIC_SERVICE_UNAVAILABLE/);
       expect(signal.aborted).toBe(true);
       await act(async () => { resolveLookup({ status: "NOT_FOUND", canRegister: true }); });
-      expect(result.current.phase).toBe("NO_MATCH");
+      expect(result.current.phase).toBe("ERROR");
       expect(capturePayload).toHaveBeenCalledTimes(1);
       expect(registerTrustId).not.toHaveBeenCalled();
     } finally {
@@ -387,7 +388,7 @@ describe("useAmbientTrustIdAuth state machine", () => {
       () => useAmbientTrustIdAuth({ capturePayload }),
       { wrapper },
     );
-    await waitFor(() => expect(result.current.phase).toBe("ERROR"));
+    await waitFor(() => expect(result.current.phase).toBe("FACE_NOT_READ"));
     expect(faceLookup).not.toHaveBeenCalled();
     act(() => {
       result.current.confirmCreateAccount();
@@ -513,7 +514,7 @@ describe("biometric runtime unavailable", () => {
       () => useAmbientTrustIdAuth({ capturePayload }),
       { wrapper },
     );
-    await waitFor(() => expect(result.current.phase).toBe("ERROR"));
+    await waitFor(() => expect(result.current.phase).toBe("FACE_NOT_READ"));
     act(() => {
       result.current.confirmCreateAccount();
     });
@@ -536,9 +537,15 @@ describe("biometric runtime unavailable", () => {
     );
     try {
       await act(async () => {});
-      await act(async () => { await vi.advanceTimersByTimeAsync(31_000); });
-      expect(view.container.textContent).toMatch(/Face scan didn't finish/);
-      expect(view.container.textContent).not.toMatch(/No Trust ID found|No TrustID matches/);
+      await act(async () => { await vi.advanceTimersByTimeAsync(46_000); });
+      expect(view.container.textContent).toMatch(/We couldn't read your face/);
+      expect(view.container.textContent).toMatch(/doesn't mean you don't have a TrustID/);
+      expect(view.container.textContent).toMatch(/still loading/);
+      expect(view.container.textContent).not.toMatch(/No Trust ID found|No TrustID matches|New here/);
+      expect(screen.getByRole("button", { name: "Retry Face Scan" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Use Fingerprint" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Create TrustID" })).toBeTruthy();
+      expect((capturePayload.mock.calls[0] as unknown as [{ signal: AbortSignal }])[0].signal.aborted).toBe(true);
       expect(faceLookup).not.toHaveBeenCalled();
       expect(registerTrustId).not.toHaveBeenCalled();
     } finally {
@@ -546,4 +553,174 @@ describe("biometric runtime unavailable", () => {
       vi.useRealTimers();
     }
   });
+});
+
+type CaptureOpts = { signal?: AbortSignal; onState?: (state: string) => void };
+
+describe("face not read", () => {
+  beforeEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    resetEnrollmentCandidateForDev();
+    faceLookup.mockResolvedValue({ status: "NOT_FOUND", canRegister: true });
+  });
+
+  it("a scan window that runs out after detection started reports SCAN_TIMEOUT", async () => {
+    vi.useFakeTimers();
+    const capturePayload = vi.fn((opts?: CaptureOpts) => {
+      opts?.onState?.("PREPARING_MODELS");
+      opts?.onState?.("DETECTING");
+      return new Promise<never>(() => {});
+    });
+    const { result, unmount } = renderHook(
+      () => useAmbientTrustIdAuth({ capturePayload: capturePayload as never }),
+      { wrapper },
+    );
+    try {
+      await act(async () => {});
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(result.current.scanStage).toBe("scanning");
+      await act(async () => { await vi.advanceTimersByTimeAsync(29_000); });
+      expect(result.current.phase).toBe("FACE_NOT_READ");
+      expect(result.current.faceScanReason).toBe("SCAN_TIMEOUT");
+      expect(faceLookup).not.toHaveBeenCalled();
+      expect(registerTrustId).not.toHaveBeenCalled();
+    } finally {
+      unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows the reason hint and counters, without claiming the user is new", async () => {
+    const capturePayload = vi.fn(async () => ({
+      captureErrorCode: "LOW_QUALITY",
+      captureErrorMessage: "Too dark to read the face",
+      captureReasonCode: "LOW_LIGHT",
+      captureDiagnostics: {
+        reason: "LOW_LIGHT",
+        finalState: "FAILED",
+        inferenceMirrored: false,
+        counters: {
+          framesObserved: 40, framesSubmitted: 31, blankFrames: 0, darkFrames: 9,
+          staleFrames: 2, detectorSuccesses: 31, detectorErrors: 0, facesDetected: 12,
+          multipleFaces: 0, qualityAccepted: 0, qualityRejected: 12,
+          embeddingAttempts: 0, embeddingFailures: 0,
+        },
+      },
+    }));
+    const view = render(
+      <TrustIdAmbientAuthProvider capturePayload={capturePayload as never}>
+        Signed in
+      </TrustIdAmbientAuthProvider>,
+      { wrapper },
+    );
+    await screen.findByText("We couldn't read your face", undefined, { timeout: 8000 });
+    expect(view.container.textContent).toMatch(/Move somewhere brighter/);
+    expect(screen.getByTestId("face-scan-diagnostics").textContent).toBe(
+      "LOW_LIGHT · frames 40/31 · faces 12 · accepted 0",
+    );
+    expect(view.container.textContent).not.toMatch(/No Trust ID found|New here/);
+    expect(faceLookup).not.toHaveBeenCalled();
+    expect(registerTrustId).not.toHaveBeenCalled();
+    view.unmount();
+  }, 15000);
+
+  it("a detector failure is a service error, not 'couldn't read your face'", async () => {
+    const capturePayload = vi.fn(async () => ({
+      captureErrorCode: "DETECTOR_ERROR",
+      captureErrorMessage: "Face detector failed on every frame",
+      captureReasonCode: "DETECTOR_ERROR",
+    }));
+    const { result } = renderHook(
+      () => useAmbientTrustIdAuth({ capturePayload: capturePayload as never }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.phase).toBe("ERROR"));
+    expect(result.current.error).toBe(BIOMETRIC_UNAVAILABLE_ERROR);
+    expect(registerTrustId).not.toHaveBeenCalled();
+  });
+
+  it("Retry Face Scan after a failed scan starts exactly one new scan", async () => {
+    const capturePayload = vi.fn(async () => ({
+      captureErrorCode: "NO_FACE",
+      captureErrorMessage: "No face found in the camera view",
+      captureReasonCode: "NO_FACE_DETECTED",
+    }));
+    const view = render(
+      <TrustIdAmbientAuthProvider capturePayload={capturePayload as never}>
+        Signed in
+      </TrustIdAmbientAuthProvider>,
+      { wrapper },
+    );
+    const retry = await screen.findByRole("button", { name: "Retry Face Scan" }, { timeout: 8000 });
+    expect(capturePayload).toHaveBeenCalledTimes(1);
+    fireEvent.click(retry);
+    await waitFor(() => expect(capturePayload).toHaveBeenCalledTimes(2), { timeout: 5000 });
+    await screen.findByText("We couldn't read your face", undefined, { timeout: 8000 });
+    await act(async () => { await new Promise((r) => setTimeout(r, 700)); });
+    expect(capturePayload).toHaveBeenCalledTimes(2);
+    expect(registerTrustId).not.toHaveBeenCalled();
+    view.unmount();
+  }, 15000);
+
+  it("a failed fingerprint unlock stays on the face-not-read screen", async () => {
+    const capturePayload = vi.fn(async () => ({
+      captureErrorCode: "NO_FACE",
+      captureErrorMessage: "No face found in the camera view",
+      captureReasonCode: "NO_FACE_DETECTED",
+    }));
+    const { result } = renderHook(
+      () => useAmbientTrustIdAuth({ capturePayload: capturePayload as never }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.phase).toBe("FACE_NOT_READ"));
+    act(() => {
+      result.current.useFingerprintLogin();
+    });
+    await waitFor(() => expect(result.current.fingerprintBusy).toBe(false));
+    expect(result.current.phase).toBe("FACE_NOT_READ");
+  });
+
+  it("StrictMode double mount keeps a single live scan", async () => {
+    const signals: AbortSignal[] = [];
+    const capturePayload = vi.fn((opts?: CaptureOpts) => {
+      if (opts?.signal) signals.push(opts.signal);
+      return new Promise<never>(() => {});
+    });
+    const view = render(
+      <StrictMode>
+        <TrustIdAmbientAuthProvider capturePayload={capturePayload as never}>
+          Signed in
+        </TrustIdAmbientAuthProvider>
+      </StrictMode>,
+      { wrapper },
+    );
+    await waitFor(() => expect(signals.length).toBeGreaterThan(0), { timeout: 5000 });
+    await act(async () => { await new Promise((r) => setTimeout(r, 700)); });
+    expect(signals.filter((s) => !s.aborted)).toHaveLength(1);
+    view.unmount();
+    expect(signals.every((s) => s.aborted)).toBe(true);
+  }, 15000);
+
+  it("leaving and returning to the page aborts the old scan and starts one new scan", async () => {
+    const signals: AbortSignal[] = [];
+    const capturePayload = vi.fn((opts?: CaptureOpts) => {
+      if (opts?.signal) signals.push(opts.signal);
+      return new Promise<never>(() => {});
+    });
+    const tree = () => (
+      <TrustIdAmbientAuthProvider capturePayload={capturePayload as never}>
+        Signed in
+      </TrustIdAmbientAuthProvider>
+    );
+    const first = render(tree(), { wrapper });
+    await waitFor(() => expect(signals).toHaveLength(1), { timeout: 5000 });
+    first.unmount();
+    expect(signals[0]!.aborted).toBe(true);
+    const second = render(tree(), { wrapper });
+    await waitFor(() => expect(signals).toHaveLength(2), { timeout: 5000 });
+    await act(async () => { await new Promise((r) => setTimeout(r, 700)); });
+    expect(signals.filter((s) => !s.aborted)).toHaveLength(1);
+    second.unmount();
+  }, 15000);
 });

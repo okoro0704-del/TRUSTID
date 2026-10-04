@@ -24,6 +24,8 @@ export function multiModalFromSilentCapture(
     return {
       captureErrorCode: web.errorCode,
       captureErrorMessage: web.errorMessage ?? web.errorCode,
+      captureReasonCode: web.reasonCode,
+      captureDiagnostics: web.diagnostics,
     };
   }
   const vector = web.payload?.vector;
@@ -36,12 +38,14 @@ export function multiModalFromSilentCapture(
       return {
         captureErrorCode: BIOMETRIC_ERROR_CODES.LOW_QUALITY,
         captureErrorMessage: `Face confidence ${web.confidence.toFixed(2)} below ${minConfidence}`,
+        captureDiagnostics: web.diagnostics,
       };
     }
-    return { face: web.payload };
+    return { face: web.payload, captureDiagnostics: web.diagnostics };
   }
   return {
     captureErrorCode: BIOMETRIC_ERROR_CODES.FACE_NOT_DETECTED,
     captureErrorMessage: "No usable face frame captured",
+    captureDiagnostics: web.diagnostics,
   };
 }

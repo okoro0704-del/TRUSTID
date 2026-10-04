@@ -3,15 +3,20 @@ import {
   BIOMETRIC_AI_MODEL_NAME,
   BIOMETRIC_AI_MODEL_VERSION,
   BIOMETRIC_ERROR_CODES,
+  FACE_SCAN_REASON,
   type FaceLifecycleDiagnostics,
+  type FaceScanReason,
 } from "@trustid/shared";
 import {
   createTrustIdSdk,
+  DEFAULT_FACE_SCAN_BUDGET_MS,
   enrollmentDiag,
+  getBiometricRuntimeStatus,
   newBiometricEnrollmentAttemptId,
   summarizeEmbeddingMeta,
   type AmbientSignInResult,
   type CaptureHandlers,
+  type FaceScanState,
   type MultiModalBiometricPayload,
 } from "@trustid/sdk";
 import { resolveGuestRealtimeUrl } from "../api/client.js";
@@ -42,6 +47,11 @@ export type AmbientAuthPhase =
   | "PROMPTING"
   /** Definitive 1:N no identity — scan stopped; user must choose */
   | "NO_MATCH"
+  /**
+   * The scan ended without a usable face. Nothing was searched, so this says
+   * nothing about whether the user has a TrustID.
+   */
+  | "FACE_NOT_READ"
   /** @deprecated alias kept for older call sites — use NO_MATCH */
   | "OFFER_CREATE"
   | "ENROLLING"
@@ -69,6 +79,7 @@ export type UseAmbientTrustIdAuthOptions = CaptureHandlers & {
   getLastTrustId?: () => string | null;
   capturePayload?: (opts?: {
     signal?: AbortSignal;
+    onState?: (state: FaceScanState) => void;
   }) => Promise<MultiModalBiometricPayload>;
   /** Multi-frame enrollment capture for Register Trust ID */
   captureEnrollmentPayload?: (opts?: {
@@ -124,6 +135,10 @@ export type UseAmbientTrustIdAuthResult = {
   faceDiagnostics: FaceLifecycleDiagnostics;
   /** While creating: saving the scanned face, or capturing one because the scan had none */
   createStage: "saving" | "capturing";
+  /** Coarse progress of the running face scan (null when idle). */
+  scanStage: FaceScanStage | null;
+  /** Why the last scan produced no usable face (FACE_NOT_READ). */
+  faceScanReason: FaceScanReason | null;
   lastResult: AmbientSignInResult | null;
   previousTrustId: string | null;
   approvalPollToken: string | null;
@@ -163,6 +178,7 @@ function isUserChoicePhase(p: AmbientAuthPhase): boolean {
   const n = normalizePhase(p);
   return (
     n === "NO_MATCH" ||
+    n === "FACE_NOT_READ" ||
     n === "FACE_SAVED" ||
     n === "OFFER_FINGERPRINT" ||
     n === "FINGERPRINT_FAILED" ||
@@ -189,12 +205,64 @@ export const BIOMETRIC_RELOAD_REQUIRED_ERROR =
 const ON_DEVICE_BIOMETRIC_FAILURE =
   /BIOMETRIC_MODEL_UNAVAILABLE|FACE_VECTOR_UNAVAILABLE|BIOMETRIC_RUNTIME_|BIOMETRIC_SESSION_FAILED|initWasm|wasm|onnx|backend found|warm-up|model init/i;
 
-function isOnDeviceBiometricFailure(code: string | undefined, detail: string): boolean {
+/**
+ * The detector or recognizer itself failed. That is a service problem, never
+ * "no usable face". A face crop failure is a frame problem and stays out.
+ */
+function isOnDeviceBiometricFailure(
+  code: string | undefined,
+  detail: string,
+  reason?: FaceScanReason,
+): boolean {
   return (
     code === BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_UNAVAILABLE ||
     code === BIOMETRIC_ERROR_CODES.FACE_VECTOR_UNAVAILABLE ||
+    code === BIOMETRIC_ERROR_CODES.DETECTOR_ERROR ||
+    reason === FACE_SCAN_REASON.DETECTOR_ERROR ||
+    reason === FACE_SCAN_REASON.EMBEDDING_FAILED ||
     ON_DEVICE_BIOMETRIC_FAILURE.test(detail)
   );
+}
+
+export type FaceScanStage = "camera" | "models" | "scanning";
+
+function scanStageOf(state: FaceScanState): FaceScanStage | null {
+  switch (state) {
+    case "REQUESTING_CAMERA":
+    case "CAMERA_GRANTED":
+    case "WAITING_FOR_VIDEO":
+    case "VIDEO_READY":
+      return "camera";
+    case "PREPARING_MODELS":
+      return "models";
+    case "COMPLETE":
+    case "FAILED":
+    case "IDLE":
+      return null;
+    default:
+      return "scanning";
+  }
+}
+
+/** Best reason for a capture failure that did not carry one. */
+function reasonFromCaptureCode(code: string | undefined): FaceScanReason {
+  switch (code) {
+    case BIOMETRIC_ERROR_CODES.CAMERA_UNAVAILABLE:
+      return FACE_SCAN_REASON.CAMERA_UNAVAILABLE;
+    case BIOMETRIC_ERROR_CODES.LIVENESS_FAILED:
+      return FACE_SCAN_REASON.LIVENESS_NOT_CONFIRMED;
+    case BIOMETRIC_ERROR_CODES.MULTIPLE_FACES:
+      return FACE_SCAN_REASON.MULTIPLE_FACES;
+    case BIOMETRIC_ERROR_CODES.FACE_TOO_SMALL:
+      return FACE_SCAN_REASON.FACE_TOO_SMALL;
+    case BIOMETRIC_ERROR_CODES.LOW_QUALITY:
+      return FACE_SCAN_REASON.EXCESSIVE_BLUR;
+    case BIOMETRIC_ERROR_CODES.NO_FACE:
+    case BIOMETRIC_ERROR_CODES.FACE_NOT_DETECTED:
+      return FACE_SCAN_REASON.NO_FACE_DETECTED;
+    default:
+      return FACE_SCAN_REASON.SCAN_TIMEOUT;
+  }
 }
 
 /** Internal runtime/model detail never reaches the screen. */
@@ -204,8 +272,15 @@ function safeOnDeviceBiometricError(detail: string): string {
     : BIOMETRIC_UNAVAILABLE_ERROR;
 }
 
-/** Hard cap for every face scan. Match signs in; otherwise offer fingerprint or register. */
-const FACE_SCAN_BUDGET_MS = 30_000;
+/**
+ * Camera start + model warm-up cap. Slow mobile networks can need most of it
+ * for the first model download; cached loads take a second or two.
+ */
+const FACE_WARMUP_BUDGET_MS = 45_000;
+/** Once frames reach the detector: the SDK sampling window plus embedding grace. */
+const FACE_SCAN_BUDGET_MS = DEFAULT_FACE_SCAN_BUDGET_MS + 8_000;
+/** A face was read; the identification request must answer within this. */
+const FACE_LOOKUP_BUDGET_MS = 25_000;
 /** A face already scanned must not keep "Saving" open while the camera is still closing. */
 const SAVED_FACE_WAIT_MS = 4_000;
 
@@ -262,6 +337,8 @@ export function useAmbientTrustIdAuth(
   const [fingerprintBusy, setFingerprintBusy] = useState(false);
   const [nonce, setNonce] = useState(0);
   const [createStage, setCreateStage] = useState<"saving" | "capturing">("saving");
+  const [scanStage, setScanStage] = useState<FaceScanStage | null>(null);
+  const [faceScanReason, setFaceScanReason] = useState<FaceScanReason | null>(null);
   const [faceDiagnostics, setFaceDiagnostics] = useState<FaceLifecycleDiagnostics>(
     () => getFaceDiagnostics(),
   );
@@ -316,6 +393,7 @@ export function useAmbientTrustIdAuth(
     setPhase(normalized);
     if (
       normalized === "NO_MATCH" ||
+      normalized === "FACE_NOT_READ" ||
       normalized === "ERROR" ||
       normalized === "AUTHENTICATED" ||
       normalized === "FACE_SAVED" ||
@@ -395,6 +473,10 @@ export function useAmbientTrustIdAuth(
    * Stays on NO_MATCH if unlock fails (never re-enters spinner).
    */
   const useFingerprintLogin = useCallback(() => {
+    // A failed fingerprint keeps the user on the screen they came from; it is
+    // not evidence that no TrustID exists.
+    const backPhase: AmbientAuthPhase =
+      phaseRef.current === "FACE_NOT_READ" ? "FACE_NOT_READ" : "NO_MATCH";
     void (async () => {
       setFingerprintBusy(true);
       setError(null);
@@ -445,7 +527,7 @@ export function useAmbientTrustIdAuth(
                 result.error ??
                   "FINGERPRINT_UNAVAILABLE — fingerprint did not unlock a Trust ID.",
               );
-              setPhaseSafe("NO_MATCH");
+              setPhaseSafe(backPhase);
               return;
             }
           } catch (e) {
@@ -454,7 +536,7 @@ export function useAmbientTrustIdAuth(
                 ? e.message
                 : "FINGERPRINT_UNAVAILABLE — fingerprint unlock failed.",
             );
-            setPhaseSafe("NO_MATCH");
+            setPhaseSafe(backPhase);
             return;
           }
         }
@@ -462,7 +544,7 @@ export function useAmbientTrustIdAuth(
         setError(
           "FINGERPRINT_UNAVAILABLE — register a passkey in Account, retry face, or create a new Trust ID.",
         );
-        setPhaseSafe("NO_MATCH");
+        setPhaseSafe(backPhase);
       } finally {
         setFingerprintBusy(false);
       }
@@ -524,6 +606,7 @@ export function useAmbientTrustIdAuth(
       // Invalidate any concurrent/stale work; this scan attempt is done.
       if (!aliveRef.current || runId !== runIdRef.current) return;
       abortCapture();
+      setScanStage(null);
       setError(null);
       // Keep ArcFace identification face for Register (module session survives remounts).
       const face = pendingPayloadRef.current?.face;
@@ -558,11 +641,45 @@ export function useAmbientTrustIdAuth(
     (runId: number, message: string) => {
       if (!aliveRef.current || runId !== runIdRef.current) return;
       abortCapture();
+      setScanStage(null);
       setError(message);
       setPhaseSafe("ERROR", runId);
       runIdRef.current += 1;
     },
     [abortCapture, setPhaseSafe],
+  );
+
+  /** No usable face: nothing was searched, so no claim about the account. */
+  const enterFaceNotRead = useCallback(
+    (runId: number, reason: FaceScanReason) => {
+      if (!aliveRef.current || runId !== runIdRef.current) return;
+      abortCapture();
+      setScanStage(null);
+      setError(null);
+      setFaceScanReason(reason);
+      syncDiagnostics({ vectorCreated: false, scanReason: reason });
+      setPhaseSafe("FACE_NOT_READ", runId);
+      runIdRef.current += 1;
+    },
+    [abortCapture, setPhaseSafe, syncDiagnostics],
+  );
+
+  /** The scan window ran out before the capture returned. */
+  const enterScanTimeout = useCallback(
+    (runId: number, scanStarted: boolean) => {
+      const status = getBiometricRuntimeStatus();
+      if (status.failed) {
+        enterServiceError(runId, BIOMETRIC_UNAVAILABLE_ERROR);
+        return;
+      }
+      enterFaceNotRead(
+        runId,
+        scanStarted || status.ready
+          ? FACE_SCAN_REASON.SCAN_TIMEOUT
+          : FACE_SCAN_REASON.MODELS_NOT_READY,
+      );
+    },
+    [enterFaceNotRead, enterServiceError],
   );
 
   const runAmbient = useCallback(async () => {
@@ -576,16 +693,32 @@ export function useAmbientTrustIdAuth(
     const ac = new AbortController();
     captureAbortRef.current = ac;
 
-    // The search must end. A match signs in. No match, or no result inside
-    // this window, offers fingerprint or registration. It is not a service outage.
-    const scanTimeout = window.setTimeout(() => {
-      enterNoMatch(runId);
-    }, FACE_SCAN_BUDGET_MS);
-    ac.signal.addEventListener("abort", () => window.clearTimeout(scanTimeout), {
-      once: true,
-    });
+    // The scan must end. Warm-up gets its own window; once frames reach the
+    // detector the scan window starts. Running out means the face was not
+    // read, never that no TrustID exists.
+    let scanStarted = false;
+    let scanTimer = window.setTimeout(
+      () => enterScanTimeout(runId, scanStarted),
+      FACE_WARMUP_BUDGET_MS,
+    );
+    const clearScanTimer = () => window.clearTimeout(scanTimer);
+    ac.signal.addEventListener("abort", clearScanTimer, { once: true });
+    const onScanState = (state: FaceScanState) => {
+      if (runId !== runIdRef.current || ac.signal.aborted) return;
+      if (state === "DETECTING" && !scanStarted) {
+        scanStarted = true;
+        clearScanTimer();
+        scanTimer = window.setTimeout(
+          () => enterScanTimeout(runId, true),
+          FACE_SCAN_BUDGET_MS,
+        );
+      }
+      setScanStage(scanStageOf(state));
+    };
 
     setPhaseSafe("PROMPTING", runId);
+    setScanStage("camera");
+    setFaceScanReason(null);
     setError(null);
     setApprovalPollToken(null);
     setPreviousTrustId(null);
@@ -600,7 +733,7 @@ export function useAmbientTrustIdAuth(
 
     let payload: MultiModalBiometricPayload | undefined;
     const captureWork = capturePayload
-      ? capturePayload({ signal: ac.signal })
+      ? capturePayload({ signal: ac.signal, onState: onScanState })
       : Promise.resolve(undefined);
     captureInflightRef.current = captureWork;
     try {
@@ -608,11 +741,26 @@ export function useAmbientTrustIdAuth(
     } catch {
       payload = undefined;
     }
+    clearScanTimer();
+    const scanCounters = payload?.captureDiagnostics?.counters;
+    if (runId === runIdRef.current && scanCounters) {
+      syncDiagnostics({
+        scanReason: payload?.captureReasonCode ?? null,
+        scanCounters: {
+          framesObserved: scanCounters.framesObserved,
+          framesSubmitted: scanCounters.framesSubmitted,
+          facesDetected: scanCounters.facesDetected,
+          qualityAccepted: scanCounters.qualityAccepted,
+        },
+      });
+    }
     const scannedFace = payload?.face;
     if (payload && scannedFace && isArcFaceEnrollmentFace(scannedFace)) {
       const stillCurrent = runId === runIdRef.current;
       const choiceAfterThisScan =
-        !stillCurrent && phaseRef.current === "NO_MATCH" && !pendingPayloadRef.current;
+        !stillCurrent &&
+        (phaseRef.current === "NO_MATCH" || phaseRef.current === "FACE_NOT_READ") &&
+        !pendingPayloadRef.current;
       if (stillCurrent || choiceAfterThisScan) {
         pendingPayloadRef.current = payload;
         setEnrollmentCandidate(scannedFace, "identification");
@@ -623,29 +771,29 @@ export function useAmbientTrustIdAuth(
     if (!payload?.face) {
       const code =
         payload?.captureErrorCode ?? BIOMETRIC_ERROR_CODES.FACE_NOT_DETECTED;
-      const detail =
-        payload?.captureErrorMessage ??
-        "No face detected. Retry the camera, use fingerprint if you already have a Trust ID, or register.";
-      enterServiceError(
-        runId,
-        isOnDeviceBiometricFailure(code, detail)
-          ? safeOnDeviceBiometricError(detail)
-          : `${code} — ${detail}`,
-      );
+      const detail = payload?.captureErrorMessage ?? "No usable face frame captured";
+      const reason = payload?.captureReasonCode ?? reasonFromCaptureCode(code);
+      const serviceFailure = isOnDeviceBiometricFailure(code, detail, reason);
       syncDiagnostics({
-        cameraReady: true,
-        faceDetected: code !== BIOMETRIC_ERROR_CODES.FACE_NOT_DETECTED &&
-          code !== BIOMETRIC_ERROR_CODES.NO_FACE &&
-          code !== BIOMETRIC_ERROR_CODES.CAMERA_UNAVAILABLE,
+        cameraReady:
+          reason !== FACE_SCAN_REASON.CAMERA_UNAVAILABLE &&
+          reason !== FACE_SCAN_REASON.NO_VIDEO_FRAME,
+        faceDetected: (payload?.captureDiagnostics?.counters.facesDetected ?? 0) > 0,
         vectorCreated: false,
         errorCode: code,
+        scanReason: reason,
         stage:
           code === BIOMETRIC_ERROR_CODES.LIVENESS_FAILED
             ? "liveness_failed"
-            : code === BIOMETRIC_ERROR_CODES.BIOMETRIC_MODEL_UNAVAILABLE
+            : serviceFailure
               ? "model_unavailable"
               : "face_not_detected",
       });
+      if (serviceFailure) {
+        enterServiceError(runId, safeOnDeviceBiometricError(detail));
+        return;
+      }
+      enterFaceNotRead(runId, reason);
       return;
     }
 
@@ -666,7 +814,7 @@ export function useAmbientTrustIdAuth(
         });
         return;
       }
-      enterNoMatch(runId);
+      enterFaceNotRead(runId, FACE_SCAN_REASON.EMBEDDING_FAILED);
       return;
     }
 
@@ -685,6 +833,14 @@ export function useAmbientTrustIdAuth(
       errorCode: null,
     });
 
+    setScanStage(null);
+    // A slow lookup is a service problem; it must never read as "not found".
+    const lookupTimer = window.setTimeout(() => {
+      enterServiceError(
+        runId,
+        "BIOMETRIC_SERVICE_UNAVAILABLE — identification timed out. Retry.",
+      );
+    }, FACE_LOOKUP_BUDGET_MS);
     let lookup;
     try {
       lookup = await sdk.faceLookup({
@@ -695,6 +851,7 @@ export function useAmbientTrustIdAuth(
         signal: ac.signal,
       });
     } catch (e) {
+      window.clearTimeout(lookupTimer);
       if (runId !== runIdRef.current) return;
       const msg = e instanceof Error ? e.message : "Face lookup failed";
       enterServiceError(
@@ -705,6 +862,7 @@ export function useAmbientTrustIdAuth(
       );
       return;
     }
+    window.clearTimeout(lookupTimer);
 
     if (ac.signal.aborted || runId !== runIdRef.current) return;
 
@@ -785,7 +943,9 @@ export function useAmbientTrustIdAuth(
     captureFace,
     captureFingerprint,
     capturePayload,
+    enterFaceNotRead,
     enterNoMatch,
+    enterScanTimeout,
     enterServiceError,
     getDeviceFingerprint,
     getInstallId,
@@ -820,7 +980,7 @@ export function useAmbientTrustIdAuth(
 
       let enrolledFace: MultiModalBiometricPayload["face"] | undefined;
       let enrollSource: "probe" | "none" = "none";
-      let captureFailure: string | null = null;
+      let captureReason: FaceScanReason | null = null;
       setCreateStage("saving");
 
       // Register uses the face from the identification scan. It does not
@@ -845,7 +1005,13 @@ export function useAmbientTrustIdAuth(
         // still loading). Capture the face for this Trust ID now. No search runs.
         if (!(late?.face && isArcFaceEnrollmentFace(late.face)) && capturePayload) {
           setCreateStage("capturing");
-          late = await capturePayload({ signal: ac.signal }).catch(() => undefined);
+          late = await capturePayload({
+            signal: ac.signal,
+            onState: (s) => {
+              if (!ac.signal.aborted) setScanStage(scanStageOf(s));
+            },
+          }).catch(() => undefined);
+          setScanStage(null);
           setCreateStage("saving");
         }
         const lateFace = late?.face;
@@ -854,13 +1020,14 @@ export function useAmbientTrustIdAuth(
           enrollSource = "probe";
           pendingPayloadRef.current = late;
           setEnrollmentCandidate(lateFace, "identification");
-        } else if (late?.captureErrorMessage) {
-          captureFailure = late.captureErrorMessage;
-          if (isOnDeviceBiometricFailure(late.captureErrorCode, captureFailure)) {
+        } else if (late?.captureErrorMessage || late?.captureErrorCode) {
+          const detail = late.captureErrorMessage ?? "";
+          captureReason = late.captureReasonCode ?? reasonFromCaptureCode(late.captureErrorCode);
+          if (isOnDeviceBiometricFailure(late.captureErrorCode, detail, late.captureReasonCode)) {
             // Biometrics cannot start here, so no face can be enrolled. Fail
             // closed: service error, and registration is not offered.
             if (ac.signal.aborted) return;
-            setError(safeOnDeviceBiometricError(captureFailure));
+            setError(safeOnDeviceBiometricError(detail));
             syncDiagnostics({
               vectorCreated: false,
               templateAvailable: false,
@@ -875,17 +1042,17 @@ export function useAmbientTrustIdAuth(
       if (ac.signal.aborted) return;
 
       if (!isProductionArcFaceFace(enrolledFace)) {
-        setError(
-          captureFailure
-            ? `Could not get a usable face: ${captureFailure}. Look straight at the camera in good light, then press Create TrustID.`
-            : "Could not get a usable face. Look straight at the camera in good light, then press Create TrustID.",
-        );
+        // No face, no enrollment. Nothing is created from a failed scan.
+        const reason = captureReason ?? FACE_SCAN_REASON.SCAN_TIMEOUT;
+        setError(null);
+        setFaceScanReason(reason);
         syncDiagnostics({
           vectorCreated: false,
           templateAvailable: false,
           errorCode: null,
+          scanReason: reason,
         });
-        setPhaseSafe("NO_MATCH");
+        setPhaseSafe("FACE_NOT_READ");
         return;
       }
 
@@ -1304,6 +1471,8 @@ export function useAmbientTrustIdAuth(
     phaseRef.current = "PROMPTING";
     setPhase("PROMPTING");
     setError(null);
+    setFaceScanReason(null);
+    setScanStage(null);
     setNonce((n) => n + 1);
   }, [abortCapture, syncDiagnostics]);
 
@@ -1319,6 +1488,8 @@ export function useAmbientTrustIdAuth(
     error,
     faceDiagnostics,
     createStage,
+    scanStage,
+    faceScanReason,
     lastResult,
     previousTrustId,
     approvalPollToken,

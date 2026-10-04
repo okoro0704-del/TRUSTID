@@ -554,6 +554,8 @@ export const BIOMETRIC_ERROR_CODES = {
   LOW_QUALITY: "LOW_QUALITY",
   LIVENESS_FAILED: "LIVENESS_FAILED",
   PAD_UNAVAILABLE: "PAD_UNAVAILABLE",
+  /** Face detector threw on every frame it was given (not "no face") */
+  DETECTOR_ERROR: "DETECTOR_ERROR",
   EMBEDDING_FAILED: "EMBEDDING_FAILED",
   /** Face seen but production ArcFace vector could not be produced */
   FACE_VECTOR_UNAVAILABLE: "FACE_VECTOR_UNAVAILABLE",
@@ -571,6 +573,70 @@ export const BIOMETRIC_ERROR_CODES = {
 
 export type BiometricErrorCode =
   (typeof BIOMETRIC_ERROR_CODES)[keyof typeof BIOMETRIC_ERROR_CODES];
+
+/**
+ * Why a face scan produced no usable face. Internal/diagnostic — the UI keeps
+ * its copy simple. A scan failure never establishes that a Trust ID is absent.
+ */
+export const FACE_SCAN_REASON = {
+  CAMERA_UNAVAILABLE: "CAMERA_UNAVAILABLE",
+  NO_VIDEO_FRAME: "NO_VIDEO_FRAME",
+  MODELS_NOT_READY: "MODELS_NOT_READY",
+  NO_FACE_DETECTED: "NO_FACE_DETECTED",
+  MULTIPLE_FACES: "MULTIPLE_FACES",
+  FACE_TOO_SMALL: "FACE_TOO_SMALL",
+  FACE_OUT_OF_BOUNDS: "FACE_OUT_OF_BOUNDS",
+  LOW_LIGHT: "LOW_LIGHT",
+  OVEREXPOSED: "OVEREXPOSED",
+  EXCESSIVE_BLUR: "EXCESSIVE_BLUR",
+  POSE_REJECTED: "POSE_REJECTED",
+  DETECTOR_ERROR: "DETECTOR_ERROR",
+  FACE_CROP_FAILED: "FACE_CROP_FAILED",
+  EMBEDDING_FAILED: "EMBEDDING_FAILED",
+  /** Enrollment blink liveness was not observed. */
+  LIVENESS_NOT_CONFIRMED: "LIVENESS_NOT_CONFIRMED",
+  SCAN_TIMEOUT: "SCAN_TIMEOUT",
+  SCAN_ABORTED: "SCAN_ABORTED",
+} as const;
+
+export type FaceScanReason =
+  (typeof FACE_SCAN_REASON)[keyof typeof FACE_SCAN_REASON];
+
+/** Non-biometric scan counters (never frames, landmarks or embeddings). */
+export type FaceScanCounters = {
+  framesObserved: number;
+  framesSubmitted: number;
+  blankFrames: number;
+  darkFrames: number;
+  staleFrames: number;
+  detectorSuccesses: number;
+  detectorErrors: number;
+  facesDetected: number;
+  multipleFaces: number;
+  qualityAccepted: number;
+  qualityRejected: number;
+  embeddingAttempts: number;
+  embeddingFailures: number;
+};
+
+/** Safe, non-biometric summary of one scan attempt. */
+export type FaceScanDiagnostics = {
+  reason?: FaceScanReason;
+  finalState: string;
+  counters: FaceScanCounters;
+  videoWidth?: number;
+  videoHeight?: number;
+  detectorInputWidth?: number;
+  detectorInputHeight?: number;
+  orientation?: "portrait" | "landscape" | "square";
+  /** Inference frames are never mirrored; presentation is separate. */
+  inferenceMirrored: false;
+  frameSource?: "video-frame-callback" | "video-poll";
+  meanLumaApprox?: number;
+  detectorReady?: boolean;
+  embedderReady?: boolean;
+  elapsedMs?: number;
+};
 
 /**
  * Face-template lifecycle stages (metadata only — never include vectors).
@@ -607,5 +673,12 @@ export type FaceLifecycleDiagnostics = {
   trustId?: string | null;
   stage?: FaceLifecycleStage | string;
   errorCode?: BiometricErrorCode | string | null;
+  /** Precise reason the last scan produced no usable face. */
+  scanReason?: FaceScanReason | null;
+  /** Non-biometric counters from the last scan. */
+  scanCounters?: Pick<
+    FaceScanCounters,
+    "framesObserved" | "framesSubmitted" | "facesDetected" | "qualityAccepted"
+  > | null;
 };
 export { isAuthorityClaimsShape } from "./authority-claims.js";

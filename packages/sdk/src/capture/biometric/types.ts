@@ -12,6 +12,7 @@ import {
   BIOMETRIC_MODALITIES,
   BIOMETRIC_PREPROCESSING_VERSION,
   type BiometricErrorCode,
+  type FaceScanReason,
 } from "@trustid/shared";
 
 export type Point2D = { x: number; y: number };
@@ -36,12 +37,19 @@ export type DetectedFace = {
   box: FaceBoundingBox;
   confidence: number;
   landmarks: FaceLandmarks5;
+  /**
+   * False when any of the five alignment landmarks fell outside the source
+   * frame (they are clamped to the edge, so alignment would sample edge pixels).
+   */
+  landmarksInFrame?: boolean;
 };
 
 export type FaceQualityResult = {
   ok: boolean;
   score: number;
   reasons: string[];
+  /** Which side of the exposure gate a poor_exposure rejection fell on. */
+  exposure?: "dark" | "bright" | "ok";
 };
 
 export type PadDecision = "accept" | "reject" | "unavailable";
@@ -90,6 +98,8 @@ export type BiometricExtractError = {
   ok: false;
   code: BiometricErrorCode;
   message: string;
+  /** Precise scan-level reason (diagnostic). */
+  reason?: FaceScanReason;
 };
 
 export type BiometricExtractSuccess = {
