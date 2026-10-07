@@ -76,6 +76,15 @@
 # the API's CORS allow-list are all bound to trustedid.netlify.app, so the
 # getlifeos alias is redirected instead of served (served, its API calls fail
 # with origin_not_allowed and passkeys cannot work). Must stay first.
+# Installed copies of the app on the alias are run by their service worker
+# from cache and never see the 301 below (and a redirected /sw.js update is
+# refused by the browser). Serve them a worker that retires itself instead.
+[[redirects]]
+  from = "https://trustid.getlifeos.app/sw.js"
+  to = "/sw-retire.js"
+  status = 200
+  force = true
+
 [[redirects]]
   from = "https://trustid.getlifeos.app/*"
   to = "https://trustedid.netlify.app/:splat"

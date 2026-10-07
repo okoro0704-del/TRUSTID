@@ -82,6 +82,7 @@ export default defineConfig(({ mode }) => ({
           "**/ort/**",
           "**/mediapipe/**",
           "**/biometric/**",
+          "sw-retire.js",
           "releases/**",
         ],
         maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
