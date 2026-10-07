@@ -1,5 +1,6 @@
 import {
   AUDIT_EVENTS,
+  BIOMETRIC_ERROR_CODES,
   BIOMETRIC_PGVECTOR_MAX_DISTANCE,
   BIOMETRIC_SINGLE_MODALITY_THRESHOLD,
   DEVICE_STATUS,
@@ -43,7 +44,27 @@ export type FusionMatchResult = {
   isMasterDevice: boolean;
   errorCode?: string;
   error?: string;
+  /**
+   * True only when every presented modality was searched and genuinely not
+   * found (no error, or NO_MATCH). False for service outages, model or
+   * template mismatches, gated thresholds and modality conflicts: none of
+   * those may create an identity.
+   */
+  genuineNoMatch?: boolean;
 };
+
+/** The most telling error: an infrastructure/policy code wins over NO_MATCH. */
+function firstFailureCode(...results: Array<BiometricMatchResult | null>): string | undefined {
+  const codes = results.map((r) => r?.errorCode).filter((c): c is string => Boolean(c));
+  return codes.find((c) => c !== BIOMETRIC_ERROR_CODES.NO_MATCH) ?? codes[0];
+}
+
+/** A modality result that is a real "not enrolled", not an infrastructure or policy failure. */
+function isGenuineNoMatch(result: BiometricMatchResult | null): boolean {
+  if (!result) return true; // modality not presented
+  if (result.matched) return false;
+  return !result.errorCode || result.errorCode === BIOMETRIC_ERROR_CODES.NO_MATCH;
+}
 
 async function evaluateMaster(
   userId: string,
@@ -176,9 +197,9 @@ export async function matchMultiModalFusion(input: {
       fingerprintMatchScore: fpScore,
       accessLevel: TRUST_ID_ACCESS_LEVELS.UNIVERSAL,
       isMasterDevice: false,
-      errorCode:
-        faceResult?.errorCode ?? fpResult?.errorCode,
+      errorCode: firstFailureCode(faceResult, fpResult),
       error: faceResult?.error ?? fpResult?.error,
+      genuineNoMatch: isGenuineNoMatch(faceResult) && isGenuineNoMatch(fpResult),
     };
   }
 
@@ -344,6 +365,19 @@ export async function ambientSignInAndSession(input: {
   const faceConfidence = input.payload.face?.confidence;
   const faceOk =
     hasFace && (faceConfidence == null || faceConfidence >= 0.5);
+
+  // Only a genuine "not enrolled" may create a Trust ID. A matcher outage,
+  // model/template mismatch, gated threshold or modality conflict must fail
+  // closed: auto-enrolling then would mint a duplicate identity for an
+  // existing person.
+  if (!fusion.matched && input.allowAutoEnroll && fusion.genuineNoMatch !== true) {
+    return {
+      matched: false as const,
+      fusion,
+      error: fusion.error,
+      errorCode: fusion.errorCode,
+    };
+  }
 
   if (!fusion.matched && input.allowAutoEnroll) {
     if (!faceOk) {

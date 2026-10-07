@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { BIOMETRIC_ERROR_CODES } from "@trustid/shared";
 import { z } from "zod";
 import { config } from "../lib/config.js";
 import {
@@ -418,8 +419,18 @@ export async function trustIdRoutes(app: FastifyInstance) {
       });
 
       if (!result.matched) {
+        // An identification outage is not a no-match: report it as such.
+        if (result.errorCode === BIOMETRIC_ERROR_CODES.BIOMETRIC_SERVICE_UNAVAILABLE) {
+          return reply.code(503).send({
+            error: "biometric_service_unavailable",
+            errorCode: BIOMETRIC_ERROR_CODES.BIOMETRIC_SERVICE_UNAVAILABLE,
+            message:
+              "BIOMETRIC_SERVICE_UNAVAILABLE: TrustID identification is temporarily unavailable. Retry shortly.",
+          });
+        }
         return reply.code(401).send({
           error: "ambient_no_match",
+          errorCode: result.errorCode ?? BIOMETRIC_ERROR_CODES.NO_MATCH,
           message: "No Trust ID identity matched this biometric",
           fusionScore: result.fusion.fusionScore,
           faceMatchScore: result.fusion.faceMatchScore,
