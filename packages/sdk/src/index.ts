@@ -696,7 +696,9 @@ export {
   detectBiometricPlatform,
   getBiometricEngine,
   prefetchBiometricAssets,
+  prewarmBiometricEngine,
   schedulePrefetchBiometricAssets,
+  schedulePrewarmBiometricEngine,
 } from "./capture/biometric/biometric-engine.js";
 export type {
   BiometricCameraSession,
@@ -705,6 +707,7 @@ export type {
   BiometricEngineStatus,
   BiometricPlatform,
   BiometricPrefetchResult,
+  BiometricPrewarmResult,
 } from "./capture/biometric/biometric-engine.js";
 export {
   configureBiometricDelivery,

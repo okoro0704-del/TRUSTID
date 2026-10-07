@@ -1,5 +1,6 @@
 package com.trustid.device.plugins
 
+import android.os.Build
 import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
@@ -25,6 +26,22 @@ class BiometricAssetsPlugin : Plugin() {
     ret.put("apiVersion", NativeBiometricAssets.API_VERSION)
     ret.put("baseUrl", NativeBiometricAssets.URL_PREFIX)
     ret.put("assets", JSArray(NativeBiometricAssets.bundledDirs(context.assets)))
+    ret.put("installId", installId())
     call.resolve(ret)
+  }
+
+  /**
+   * Changes on every install and update of this APK, so the SDK re-verifies
+   * bundled files exactly once per installation.
+   */
+  private fun installId(): String {
+    val info = context.packageManager.getPackageInfo(context.packageName, 0)
+    val version = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+      info.longVersionCode
+    } else {
+      @Suppress("DEPRECATION")
+      info.versionCode.toLong()
+    }
+    return "$version-${info.lastUpdateTime}"
   }
 }

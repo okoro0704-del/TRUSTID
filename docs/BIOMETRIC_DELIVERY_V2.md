@@ -186,6 +186,26 @@ The production shell loads the live site, which does not have the V2 SDK
 until it is deployed, so identification against TrustID could not be run
 with the V2 engine on the phone.
 
+### Ready at launch (prewarm), 2026-10-07
+
+`schedulePrewarmBiometricEngine()` starts the shared engine as the app opens
+(web: after an idle asset prefetch; skipped under Save-Data, assets-only below
+4 GB device memory). It never opens the camera. Bundled files are SHA-256
+verified once per app installation (`installId` = version code + last update
+time); later launches check size and type only. The service worker checks for
+new web code whenever the app becomes visible, so a long-running app no longer
+keeps an old bundle after a deploy.
+
+OPPO CPH2727, bundled-shell verification build, no user action after launch:
+
+| Launch | Activity start | Engine READY (page time) | Bundled requests | Remote model requests | initWasm |
+|---|---:|---:|---:|---:|---:|
+| 1st after install (full hash) | 2,234 ms | 8,846 ms | 6 | 0 | 1 |
+| 2nd (hashes skipped) | 1,922 ms | 7,281 ms | 6 | 0 | 1 |
+| 3rd | 1,900 ms | 7,288 ms | 6 | 0 | 1 |
+
+Reproduce: `ANDROID_SERIAL=<serial> node scripts/measure-android-launch.mjs --apk <debug apk>`.
+
 ### iOS verification runbook (Mac + iPhone; not yet run)
 
 Status: implementation present, build not verified, device not verified.

@@ -31,16 +31,34 @@ import {
   biometricReadiness,
   configureBiometricDelivery,
   createTrustIdSdk,
-  schedulePrefetchBiometricAssets,
+  schedulePrewarmBiometricEngine,
 } from "@trustid/sdk";
+import { registerSW } from "virtual:pwa-register";
 import "./styles.css";
 
-// Face-recognition assets: optional CDN first, this origin as the fallback.
-// Preparing assets at idle downloads and verifies files only; it never opens
-// the camera or reads a frame. Installed apps skip it (assets are bundled).
+// New web code must reach a long-running app or tab, not only a fresh page
+// load: check for an updated service worker whenever the page becomes
+// visible (app opened or brought back) and every 30 minutes while open.
+// autoUpdate then activates it and reloads onto the new release.
+registerSW({
+  immediate: true,
+  onRegisteredSW(_url, registration) {
+    if (!registration) return;
+    const check = () => {
+      if (document.visibilityState === "visible") void registration.update().catch(() => undefined);
+    };
+    document.addEventListener("visibilitychange", check);
+    window.addEventListener("focus", check);
+    window.setInterval(check, 30 * 60 * 1000);
+  },
+});
+
+// Face recognition is made ready before sign-in: right away in the installed
+// app (assets are bundled), at idle on the web (download once, then cached).
+// This never opens the camera or reads a frame.
 const biometricCdn = import.meta.env.VITE_TRUSTID_BIOMETRIC_ASSET_BASE?.trim();
 if (biometricCdn) configureBiometricDelivery({ assetBaseUrls: [biometricCdn] });
-schedulePrefetchBiometricAssets();
+void schedulePrewarmBiometricEngine().catch(() => undefined);
 
 // APK / Capacitor: wire App Lock + biometric + media vault + heads-up plugins
 injectCapacitorSecurityBridges();

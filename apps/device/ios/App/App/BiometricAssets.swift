@@ -83,6 +83,15 @@ public class BiometricAssetsPlugin: CAPPlugin, CAPBridgedPlugin {
             "apiVersion": BiometricAssetSchemeHandler.apiVersion,
             "baseUrl": BiometricAssetSchemeHandler.baseUrl,
             "assets": BiometricAssetSchemeHandler.bundledDirs(),
+            "installId": Self.installId(),
         ])
+    }
+
+    /// Changes on every install/update, so bundled files are verified once per installation.
+    private static func installId() -> String {
+        let version = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
+        let modified = (try? FileManager.default.attributesOfItem(atPath: Bundle.main.bundlePath)[.modificationDate] as? Date)?
+            .map { String(Int($0.timeIntervalSince1970)) } ?? "0"
+        return "\(version)-\(modified)"
     }
 }

@@ -1,5 +1,5 @@
 /**
- * Safe face-capture / model-init diagnostics — metadata only.
+ * Safe face-capture / model-init diagnostics ï¿½ metadata only.
  * Enable: localStorage.TRUSTID_FACE_CAPTURE_DIAG = "1"
  * Never logs frames, ImageData, vectors, embeddings, landmarks, or model bytes.
  */
@@ -107,7 +107,7 @@ export function sanitizeInitError(err: unknown): string {
   }
   if (raw === "[object Event]") raw = "Event:unknown";
   return raw
-    .replace(/[0-9a-f]{64}/gi, (h) => `${h.slice(0, 12)}…`)
+    .replace(/[0-9a-f]{64}/gi, (h) => `${h.slice(0, 12)}ï¿½`)
     .slice(0, 240);
 }
 
@@ -159,4 +159,22 @@ export function faceCaptureDiag(
     frameTimestamp: event.frameTimestamp,
   };
   console.info("[TrustID]", JSON.stringify(safe));
+  recordTimeline(safe);
+}
+
+/** Bounded in-memory timeline (diagnostics only): stage, component, success, page time. */
+const TIMELINE_MAX = 200;
+
+function recordTimeline(e: FaceCaptureDiagEvent): void {
+  const g = globalThis as { __TRUSTID_BIOMETRIC_TIMELINE__?: Array<Record<string, unknown>> };
+  const list = (g.__TRUSTID_BIOMETRIC_TIMELINE__ ??= []);
+  list.push({
+    t: Math.round(typeof performance !== "undefined" ? performance.now() : Date.now()),
+    stage: e.stage,
+    component: e.component,
+    success: e.success,
+    ms: e.ms,
+    errorCode: e.errorCode,
+  });
+  if (list.length > TIMELINE_MAX) list.splice(0, list.length - TIMELINE_MAX);
 }

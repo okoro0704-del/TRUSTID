@@ -264,6 +264,94 @@ describe("network delivery", () => {
 describe("app bundle delivery (installed Android/iOS app)", () => {
   const BUNDLE = "https://trustid.example/__trustid_native__/";
 
+  /** Minimal Web Storage for the node test environment. */
+  function fakeLocalStorage() {
+    const m = new Map<string, string>();
+    const store = {
+      get length() {
+        return m.size;
+      },
+      key: (i: number) => [...m.keys()][i] ?? null,
+      getItem: (k: string) => m.get(k) ?? null,
+      setItem: (k: string, v: string) => void m.set(k, String(v)),
+      removeItem: (k: string) => void m.delete(k),
+      clear: () => m.clear(),
+    };
+    (globalThis as { localStorage?: unknown }).localStorage = store;
+    return m;
+  }
+
+  function countDigests() {
+    const subtle = globalThis.crypto.subtle;
+    const original = subtle.digest.bind(subtle);
+    let n = 0;
+    (subtle as { digest: unknown }).digest = (...a: Parameters<typeof original>) => {
+      n += 1;
+      return original(...a);
+    };
+    return { count: () => n, restore: () => ((subtle as { digest: unknown }).digest = original) };
+  }
+
+  it("bundled files are hashed once per app installation, not on every launch", async () => {
+    const stored = fakeLocalStorage();
+    const bytes = modelBytes(300_000);
+    const asset = assetFor(bytes);
+    const bundle = (installId: string) => ({
+      nativeBridge: { getBundle: async () => ({ apiVersion: 1, baseUrl: BUNDLE, assets: [biometricAssetDir(asset)], installId }) },
+    });
+    useHost(new Map([[`${BUNDLE}${biometricAssetPath(asset)}`, { body: bytes }]]));
+    const digests = countDigests();
+    try {
+      configureBiometricDelivery(bundle("3-1700000000000"));
+      expect((await loadBiometricAsset(asset, { progressId: "arcface" })).source).toBe("app-bundle");
+      const afterFirst = digests.count();
+      expect(afterFirst).toBeGreaterThan(0);
+
+      // Next launch of the same installation: no re-hash.
+      resetBiometricDeliveryForTests();
+      configureBiometricDelivery({ assetBaseUrls: [ORIGIN], ...bundle("3-1700000000000") });
+      expect((await loadBiometricAsset(asset, { progressId: "arcface" })).source).toBe("app-bundle");
+      expect(digests.count()).toBe(afterFirst);
+
+      // An app update is a new installation: verify again, forget the old verdict.
+      resetBiometricDeliveryForTests();
+      configureBiometricDelivery({ assetBaseUrls: [ORIGIN], ...bundle("4-1700000999000") });
+      await loadBiometricAsset(asset, { progressId: "arcface" });
+      expect(digests.count()).toBeGreaterThan(afterFirst);
+      expect([...stored.keys()].every((k) => k.includes("4-1700000999000"))).toBe(true);
+    } finally {
+      digests.restore();
+      delete (globalThis as { localStorage?: unknown }).localStorage;
+    }
+  });
+
+  it("a remembered verdict never covers a file of the wrong size: it is hashed and rejected", async () => {
+    fakeLocalStorage();
+    const bytes = modelBytes(120_000);
+    const asset = assetFor(bytes);
+    const truncated = bytes.slice(0, 100_000);
+    const bridge = {
+      nativeBridge: { getBundle: async () => ({ apiVersion: 1, baseUrl: BUNDLE, assets: [biometricAssetDir(asset)], installId: "3-1" }) },
+    };
+    const files = new Map([
+      [`${BUNDLE}${biometricAssetPath(asset)}`, { body: bytes }],
+      [`${ORIGIN}${biometricAssetPath(asset, true)}`, { body: gzipSync(bytes) }],
+    ]);
+    useHost(files);
+    try {
+      configureBiometricDelivery(bridge);
+      await loadBiometricAsset(asset, { progressId: "arcface" });
+      files.set(`${BUNDLE}${biometricAssetPath(asset)}`, { body: truncated });
+      resetBiometricDeliveryForTests();
+      configureBiometricDelivery({ assetBaseUrls: [ORIGIN], ...bridge });
+      const loaded = await loadBiometricAsset(asset, { progressId: "arcface" });
+      expect(loaded.source).toBe("network");
+      expect(Buffer.from(loaded.bytes).equals(Buffer.from(bytes))).toBe(true);
+    } finally {
+      delete (globalThis as { localStorage?: unknown }).localStorage;
+    }
+  });
+
   it("serves pinned assets from the installed app with no network download", async () => {
     const bytes = modelBytes(400_000);
     const asset = assetFor(bytes);

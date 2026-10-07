@@ -50,6 +50,12 @@ export type NativeBiometricAssetBridge = {
     baseUrl: string;
     /** Content directories (sha256 prefixes) shipped inside the app. */
     assets: string[];
+    /**
+     * Identity of this installation of the app (changes on every install or
+     * update). Bundled files verified once for an installation are not
+     * re-hashed on later launches of that same installation.
+     */
+    installId?: string;
   }>;
 };
 
@@ -63,7 +69,7 @@ export type BiometricDeliveryConfig = {
   nativeBridge?: NativeBiometricAssetBridge | null;
 };
 
-type NativeBundle = { baseUrl: string; dirs: Set<string> };
+type NativeBundle = { baseUrl: string; dirs: Set<string>; installId: string | null };
 
 const NATIVE_ASSET_API_VERSION = 1;
 const NATIVE_DISCOVERY_TIMEOUT_MS = 1_500;
@@ -122,7 +128,7 @@ export function getNativeBiometricBundle(): Promise<NativeBundle | null> {
         // A path-only base is served by the shell on the page's own origin.
         const absolute = info.baseUrl.startsWith("/") ? `${pageOrigin()}${info.baseUrl}` : info.baseUrl;
         const baseUrl = absolute.endsWith("/") ? absolute : `${absolute}/`;
-        return { baseUrl, dirs: new Set(info.assets ?? []) };
+        return { baseUrl, dirs: new Set(info.assets ?? []), installId: info.installId?.trim() || null };
       } catch {
         return null;
       } finally {
@@ -225,6 +231,35 @@ async function fromCache(asset: BiometricReleaseAsset, progressId: BiometricAsse
   return { bytes: cached, source: "cache", url: key };
 }
 
+const VERIFIED_KEY_PREFIX = "trustid-biometric-bundle-verified:";
+
+function verifiedKey(installId: string, asset: BiometricReleaseAsset): string {
+  return `${VERIFIED_KEY_PREFIX}${installId}:${asset.sha256}`;
+}
+
+function wasVerifiedForInstall(installId: string, asset: BiometricReleaseAsset): boolean {
+  try {
+    return globalThis.localStorage?.getItem(verifiedKey(installId, asset)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function rememberVerifiedForInstall(installId: string, asset: BiometricReleaseAsset): void {
+  try {
+    const store = globalThis.localStorage;
+    if (!store) return;
+    // Forget verdicts of earlier installations.
+    for (let i = store.length - 1; i >= 0; i--) {
+      const k = store.key(i);
+      if (k?.startsWith(VERIFIED_KEY_PREFIX) && !k.startsWith(`${VERIFIED_KEY_PREFIX}${installId}:`)) store.removeItem(k);
+    }
+    store.setItem(verifiedKey(installId, asset), "1");
+  } catch {
+    /* storage unavailable: the next launch verifies again */
+  }
+}
+
 async function fromAppBundle(asset: BiometricReleaseAsset, progressId: BiometricAssetId): Promise<LoadedBiometricAsset | null> {
   const bundle = await getNativeBiometricBundle();
   if (!bundle || !bundle.dirs.has(biometricAssetDir(asset))) return null;
@@ -234,7 +269,14 @@ async function fromAppBundle(asset: BiometricReleaseAsset, progressId: Biometric
     if (!res.ok) throw new BiometricAssetError("ASSET_MISSING", url, `HTTP ${res.status}`, res.status);
     const bytes = new Uint8Array(await res.arrayBuffer());
     reportAssetProgress(progressId, { url, loaded: 0, total: 0, fromCache: true, source: "app-bundle", phase: "verifying" });
-    await verify(asset, bytes, url);
+    if (bundle.installId && wasVerifiedForInstall(bundle.installId, asset) && bytes.byteLength === asset.bytes && !looksLikeHtml(bytes)) {
+      // Already SHA-256-verified for this installation of the app. The OS
+      // verified the signed package at install and the files are read-only
+      // app assets; a new install or update changes installId and re-verifies.
+    } else {
+      await verify(asset, bytes, url);
+      if (bundle.installId) rememberVerifiedForInstall(bundle.installId, asset);
+    }
     reportAssetProgress(progressId, { url, loaded: 0, total: 0, fromCache: true, source: "app-bundle", phase: "ready" });
     return { bytes, source: "app-bundle", url };
   } catch (err) {

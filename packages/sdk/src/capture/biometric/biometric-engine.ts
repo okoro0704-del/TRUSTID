@@ -492,6 +492,90 @@ export function prefetchBiometricAssets(
   return prefetchPromise;
 }
 
+export type BiometricPrewarmResult = {
+  platform: BiometricPlatform;
+  /** What prewarm did: engine initialized, assets only, or nothing. */
+  mode: "engine" | "assets-only" | "skipped";
+  reason?: "save-data" | "low-memory" | "offline-no-cache";
+  status: BiometricEngineStatus;
+};
+
+/** Below this, a background engine init on the web could crowd the page. */
+const WEB_PREWARM_MIN_DEVICE_MEMORY_GB = 4;
+
+/**
+ * Bring the page's engine to READY before the user asks for a scan, so the
+ * sign-in screen opens on a working camera instead of a progress bar.
+ *
+ * PRELOADING THE ENGINE IS NOT SCANNING A PERSON: this never opens the
+ * camera or reads a frame.
+ *
+ *   native app  initialize immediately (assets come from the installed app)
+ *   web         download + verify at idle, then initialize, unless the user
+ *               asked to save data or the device reports < 4 GB of memory
+ *               (assets are still cached so the scan starts without a download)
+ *
+ * Shares the single page-level engine: a later sign-in reuses this work and
+ * ORT is still initialized at most once.
+ */
+export async function prewarmBiometricEngine(): Promise<BiometricPrewarmResult> {
+  const engine = getBiometricEngine();
+  const platform = detectBiometricPlatform();
+  if (platform !== "web") {
+    const status = await engine.initialize();
+    return { platform, mode: "engine", status };
+  }
+  const nav = globalThis.navigator as (Navigator & { connection?: { saveData?: boolean }; deviceMemory?: number }) | undefined;
+  if (nav?.connection?.saveData) {
+    return { platform, mode: "skipped", reason: "save-data", status: engine.getStatus() };
+  }
+  const prefetch = await prefetchBiometricAssets();
+  if (typeof nav?.deviceMemory === "number" && nav.deviceMemory < WEB_PREWARM_MIN_DEVICE_MEMORY_GB) {
+    return { platform, mode: "assets-only", reason: "low-memory", status: engine.getStatus() };
+  }
+  if (prefetch.status !== "complete" && prefetch.reason === "offline") {
+    // Offline: initialize only from what is already cached; never wait on the network.
+    const status = await engine.initialize();
+    return status.state === "READY"
+      ? { platform, mode: "engine", status }
+      : { platform, mode: "skipped", reason: "offline-no-cache", status };
+  }
+  const status = await engine.initialize();
+  return { platform, mode: "engine", status };
+}
+
+let prewarmPromise: Promise<BiometricPrewarmResult> | null = null;
+
+/**
+ * Start prewarmBiometricEngine once per page: right away in the native app,
+ * at browser idle on the web (after first paint, so it never delays the UI).
+ */
+export function schedulePrewarmBiometricEngine(webDelayMs = 1_500): Promise<BiometricPrewarmResult> {
+  if (prewarmPromise) return prewarmPromise;
+  const native = detectBiometricPlatform() !== "web";
+  prewarmPromise = new Promise<void>((resolve) => {
+    if (native || typeof window === "undefined") return resolve();
+    window.setTimeout(() => {
+      const ric = (window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number })
+        .requestIdleCallback;
+      if (ric) ric(() => resolve(), { timeout: 5_000 });
+      else resolve();
+    }, webDelayMs);
+  }).then(() => prewarmBiometricEngine());
+  prewarmPromise.catch(() => {
+    prewarmPromise = null;
+  });
+  return prewarmPromise;
+}
+
+/** Test helper. */
+export function resetBiometricPrewarmForTests(): void {
+  prewarmPromise = null;
+  prefetchPromise = null;
+  sharedEngine?.dispose();
+  sharedEngine = null;
+}
+
 /** Run prefetchBiometricAssets when the browser is idle. Returns a cancel function. */
 export function schedulePrefetchBiometricAssets(delayMs = 2_000): () => void {
   if (typeof window === "undefined") return () => undefined;
