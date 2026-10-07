@@ -10,7 +10,7 @@
     "start:dev": "node --env-file=.env dist/index.js",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
-    "db:push:deploy": "prisma db push",
+    "db:push:deploy": "node ../../scripts/ensure-pg-extensions.mjs && prisma db push",
     "db:push:reset": "node ../../scripts/guard-local-reset.mjs",
     "db:seed": "tsx prisma/seed.ts",
     "test": "vitest run"

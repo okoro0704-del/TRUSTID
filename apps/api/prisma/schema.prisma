@@ -859,6 +859,11 @@ model BiometricEmbedding {
   status        String    @default("active")
   lastMatchedAt DateTime? @map("last_matched_at")
   createdAt     DateTime  @default(now()) @map("created_at")
+  /// pgvector copy of the embedding for ANN search (Postgres). Written and
+  /// indexed by bootstrapPgVector() and the matcher with raw SQL; declared here
+  /// so `prisma db push` on boot never drops it (a drop would refuse once the
+  /// column holds data, and the API would crash-loop).
+  vector        Unsupported("vector(512)")?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
