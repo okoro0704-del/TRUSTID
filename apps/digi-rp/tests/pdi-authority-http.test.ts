@@ -50,6 +50,16 @@ describe.sequential("public PDI authority HTTP contract", () => {
     const owner = await exchange(started.base, await started.sign("subject-a"));
     expect(owner.status).toBe(200);
     const other = await exchange(started.base, await started.sign("subject-b"));
+    const ownerProjection = await fetch(new URL("/me", started.base), { headers: auth(owner.sessionToken) });
+    expect(ownerProjection.status).toBe(200);
+    expect(await ownerProjection.json()).toMatchObject({ ownerId: owner.ownerId, subject: "subject-a" });
+    const otherProjection = await fetch(new URL("/me", started.base), { headers: auth(other.sessionToken) });
+    expect(await otherProjection.json()).toMatchObject({ ownerId: other.ownerId, subject: "subject-b" });
+    const noIdentity = await started.sessions.create({ ownerId: "own-no-trustid-identity" });
+    const missingProjection = await fetch(new URL("/me", started.base), { headers: auth(noIdentity.token) });
+    const missingBody = await missingProjection.json() as { ownerId: string; subject?: string };
+    expect(missingBody).toMatchObject({ ownerId: "own-no-trustid-identity" });
+    expect(missingBody.subject).toBeUndefined();
     const resource = `ddi:pdi:infra:a:${"identity.currentActor"}`;
     const checked = await fetch(new URL("/authority/check", started.base), { method: "POST", headers: auth(owner.sessionToken), body: JSON.stringify({ actor: "app:app:a", action: "identity.currentActor", resource, audience: "ddi", ownerId: owner.ownerId }) });
     const decision = await checked.json() as { decision: string; requestId?: string };

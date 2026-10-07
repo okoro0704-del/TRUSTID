@@ -53,6 +53,9 @@ export function createMemoryOwnerStore(): OwnerStore {
     async findByIssuerSubject(issuer, subject) {
       return byKey.get(key(issuer, subject)) ?? null;
     },
+    async listForOwner(ownerId) {
+      return [...byKey.values()].filter((identity) => identity.ownerId === ownerId);
+    },
     async resolveOrCreate({ issuer, subject }) {
       const k = key(issuer, subject);
       return withLock(k, async () => {

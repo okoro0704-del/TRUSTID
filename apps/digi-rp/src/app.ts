@@ -245,10 +245,14 @@ export async function buildDigiRp(opts: DigiRpOptions) {
         ? req.headers.authorization.slice(7)
         : null);
     const session = sessionToken ? await sessions.resolve(sessionToken) : null;
+    const identities = await owners.listForOwner(ownerId);
+    const matched = identities.filter((identity) => identity.issuer === opts.trustIdIssuer);
+    const subject = matched.length === 1 ? matched[0]?.subject : undefined;
     return {
       ownerId,
       sessionId: session?.id,
       expiresAt: session?.expiresAt.toISOString(),
+      ...(subject ? { subject } : {}),
     };
   });
 

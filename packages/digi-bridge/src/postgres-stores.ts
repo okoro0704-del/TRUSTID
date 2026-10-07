@@ -190,6 +190,15 @@ export function createPostgresOwnerStore(pool: pg.Pool): OwnerStore {
       const row = found.rows[0];
       return row ? mapIdentity(row) : null;
     },
+    async listForOwner(ownerId) {
+      const found = await pool.query<IdentityRow>(
+        `SELECT id, owner_id, issuer, subject, created_at, last_seen_at
+         FROM external_identities
+         WHERE owner_id = $1`,
+        [ownerId],
+      );
+      return found.rows.map(mapIdentity);
+    },
     async resolveOrCreate({ issuer, subject }) {
       return withClient(pool, async (client) => {
         const ownerId = newId("own");

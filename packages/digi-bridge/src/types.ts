@@ -39,6 +39,8 @@ export type OwnerStore = {
     issuer: string,
     subject: string,
   ): Promise<ExternalIdentity | null>;
+  /** Existing identities for an owner. Digi does not create a second subject here. */
+  listForOwner(ownerId: string): Promise<ExternalIdentity[]>;
 };
 
 export type ReplayStore = {
