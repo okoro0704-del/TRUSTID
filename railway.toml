@@ -15,4 +15,6 @@ restartPolicyMaxRetries = 3
 # OIDC_ISSUER=https://trustedid.netlify.app/api
 # ASSERTION_ISSUER=https://trustedid.netlify.app
 # COOKIE_SECRET, WEBAUTHN_RP_ID, WEBAUTHN_ORIGIN, WEBAUTHN_RP_NAME, CORS_ORIGINS
+# Production CORS_ORIGINS must include https://lifeosapp.getlifeos.app
+# https://lifeos011.netlify.app is not a substitute for that origin.
 # Never set LIFEOS_AUTH_BYPASS=true in production.

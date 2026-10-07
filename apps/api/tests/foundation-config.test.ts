@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
-import { config } from "../src/lib/config.js";
+import {
+  assertCanonicalLifeOsCors,
+  CANONICAL_LIFEOS_WEB_ORIGIN,
+  config,
+} from "../src/lib/config.js";
 
 afterEach(() => vi.unstubAllEnvs());
 describe("Foundation production configuration", () => {
@@ -10,6 +14,26 @@ describe("Foundation production configuration", () => {
   });
   it("does not implicitly allow development origins in production", () => {
     vi.stubEnv("NODE_ENV","production"); vi.stubEnv("CORS_ORIGINS",""); expect(config.corsOrigins).toEqual([]);
+  });
+  it("refuses production boot when the canonical LifeOS origin is omitted", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("COOKIE_SECRET", "cors-regression-guard-not-a-secret-value");
+    vi.stubEnv("SESSION_SECRET", "cors-regression-guard-not-a-secret-value");
+    vi.stubEnv("PII_PEPPER", "cors-regression-guard-pepper");
+    vi.stubEnv("SEAL_KEY", "cors-regression-guard-seal");
+    vi.stubEnv("CORS_ORIGINS", "https://lifeos011.netlify.app,https://trustedid.netlify.app");
+    await expect(buildApp()).rejects.toThrow(CANONICAL_LIFEOS_WEB_ORIGIN);
+  });
+  it("accepts production CORS when the canonical LifeOS origin is present", () => {
+    expect(() =>
+      assertCanonicalLifeOsCors(
+        ["https://lifeos011.netlify.app", CANONICAL_LIFEOS_WEB_ORIGIN],
+        false,
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertCanonicalLifeOsCors(["https://lifeos011.netlify.app"], true),
+    ).not.toThrow();
   });
   it("allows configured credentials and rejects unknown actual and preflight origins", async () => {
     vi.stubEnv("CORS_ORIGINS","https://trustedid.netlify.app,http://localhost:5173");

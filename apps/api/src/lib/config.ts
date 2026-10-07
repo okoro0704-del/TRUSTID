@@ -334,3 +334,15 @@ export const config = {
     return process.env.EXPOSE_SESSION_TOKEN_IN_BODY === "true";
   },
 };
+
+/** Canonical LifeOS browser origin. Production CORS must keep this; it is not a secret. */
+export const CANONICAL_LIFEOS_WEB_ORIGIN = "https://lifeosapp.getlifeos.app";
+
+export function assertCanonicalLifeOsCors(origins: string[], isDev: boolean) {
+  if (isDev) return;
+  if (!origins.includes(CANONICAL_LIFEOS_WEB_ORIGIN)) {
+    throw new Error(
+      `Production CORS_ORIGINS must include ${CANONICAL_LIFEOS_WEB_ORIGIN}`,
+    );
+  }
+}
