@@ -35,3 +35,5 @@ artifacts/apk/
 apps/web/public/ort/
 # Copied from node_modules by scripts/copy-mediapipe-wasm.mjs at build/dev time
 apps/web/public/mediapipe/
+# Content-addressed biometric engine release, staged by scripts/stage-biometric-assets.mjs
+apps/web/public/biometric/

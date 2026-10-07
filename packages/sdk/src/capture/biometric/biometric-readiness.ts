@@ -108,8 +108,8 @@ type MutableReport = {
 };
 
 const COMPONENT_ASSETS: Record<BiometricComponent, BiometricAssetId[]> = {
-  runtime: ["ort-wasm"],
-  detector: ["face-landmarker", "mediapipe-wasm"],
+  runtime: ["ort-wasm", "ort-loader"],
+  detector: ["face-landmarker", "mediapipe-wasm", "mediapipe-loader"],
   embedder: ["arcface"],
   warmup: [],
 };

@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type { FaceLifecycleDiagnostics, FaceScanReason } from "@trustid/shared";
-import type { BiometricReadinessSnapshot, BiometricReadinessStage } from "@trustid/sdk";
+import type { BiometricReadinessSnapshot } from "@trustid/sdk";
+import { biometricEngineStatusFromReadiness, describeBiometricEngineStatus } from "@trustid/sdk";
 import {
   BIOMETRIC_RELOAD_REQUIRED_ERROR,
   BIOMETRIC_UNAVAILABLE_ERROR,
@@ -32,36 +33,32 @@ const SCAN_STAGE_MESSAGES: Record<FaceScanStage, string> = {
   scanning: "Looking for your Trust ID…",
 };
 
-const READINESS_MESSAGES: Partial<Record<BiometricReadinessStage, string>> = {
-  RUNTIME_LOADING: "Loading face recognition…",
-  DETECTOR_LOADING: "Loading face recognition…",
-  EMBEDDER_LOADING: "Loading face recognition…",
-  WARMUP_RUNNING: "Checking face recognition…",
-  BIOMETRIC_READY: "Starting camera…",
-};
+/**
+ * Engine state line: PREPARING / DOWNLOADING / VERIFYING / INITIALIZING /
+ * WARMING_UP / READY / FAILED. Infrastructure only, never a match result.
+ */
+function readinessMessage(s: BiometricReadinessSnapshot | null): string | null {
+  if (!s) return null;
+  const status = biometricEngineStatusFromReadiness(s);
+  // Byte counts go on their own line (readinessProgressLine).
+  return status.state === "DOWNLOADING" ? "Downloading face recognition…" : describeBiometricEngineStatus(status);
+}
 
 function megabytes(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1);
 }
 
-/** Download progress across the biometric assets, e.g. "12.4 of 39.7 MB". */
+/**
+ * Network transfer progress (compressed bytes actually received), shown only
+ * while downloading. Assets from the installed app or the cache never show one.
+ */
 function readinessProgressLine(s: BiometricReadinessSnapshot | null): string | null {
   if (!s || s.ready) return null;
-  let loaded = 0;
-  let total = 0;
-  let totalKnown = true;
-  let seen = false;
-  for (const c of [s.runtime, s.detector, s.embedder]) {
-    if (c.bytesLoaded == null) continue;
-    seen = true;
-    loaded += c.bytesLoaded;
-    if (c.bytesTotal == null) totalKnown = false;
-    else total += c.bytesTotal;
-  }
-  if (!seen) return null;
-  return totalKnown && total > 0
-    ? `Downloaded ${megabytes(loaded)} of ${megabytes(total)} MB`
-    : `Downloaded ${megabytes(loaded)} MB`;
+  const { state, download } = biometricEngineStatusFromReadiness(s);
+  if (state !== "DOWNLOADING" || !download) return null;
+  return download.total
+    ? `Downloaded ${megabytes(download.loaded)} of ${megabytes(download.total)} MB`
+    : `Downloaded ${megabytes(download.loaded)} MB`;
 }
 
 /** Component states and failure categories only. */
@@ -566,7 +563,7 @@ export function TrustIdAmbientAuthProvider({
       : phase === "SAVING_FINGERPRINT"
         ? "Register fingerprint backup…"
         : scanStage === "models" && biometricStatus
-          ? READINESS_MESSAGES[biometricStatus.stage] ?? SCAN_STAGE_MESSAGES.models
+          ? readinessMessage(biometricStatus) ?? SCAN_STAGE_MESSAGES.models
           : scanStage
             ? SCAN_STAGE_MESSAGES[scanStage]
             : "Looking for your Trust ID…";

@@ -15,22 +15,19 @@ import {
   hashPrefix,
   sanitizeInitError,
 } from "./face-capture-diag.js";
-import { sha256Hex } from "./integrity.js";
-import { ARCFACE_MBF_ARTIFACT } from "./model-manifest.js";
+import { loadBiometricAsset } from "./asset-delivery.js";
+import {
+  assessEngineConformance,
+  conformanceTensor,
+  ENGINE_CONFORMANCE_MIN_COSINE,
+} from "./engine-conformance.js";
+import { ARCFACE_MBF_ARTIFACT, BIOMETRIC_RELEASE_ASSETS } from "./model-manifest.js";
 import {
   createOrtSession,
   getOrtModule,
   ORT_EXECUTION_PROVIDER,
   type OrtSession,
 } from "./ort-runtime.js";
-import { reportAssetProgress } from "./asset-progress.js";
-import {
-  BIOMETRIC_ASSET_KEYS,
-  dropBiometricAsset,
-  readBiometricAsset,
-  storeBiometricAsset,
-} from "./biometric-asset-cache.js";
-import { downloadModelBytes } from "./resumable-download.js";
 
 export type EmbedderState = "IDLE" | "LOADING" | "READY" | "FAILED";
 
@@ -52,86 +49,29 @@ export function getArcFaceEmbedderState(): EmbedderState {
   return embedderState;
 }
 
-function downloadArcFace(url: string): Promise<ArrayBuffer> {
-  return downloadModelBytes(url, fetch, undefined, {
-    onProgress: (loaded, total) =>
-      reportAssetProgress("arcface", { url, loaded, total, fromCache: false }),
-  });
-}
-
 async function loadVerifiedModelBytes(url: string): Promise<Uint8Array> {
-  const cacheKey = BIOMETRIC_ASSET_KEYS.arcface();
   faceCaptureDiag({
     stage: "arcface_model_fetch_start",
     component: "arcface",
     success: true,
     modelUrl: url,
   });
-
-  let buffer: ArrayBuffer;
-  let fromCache = false;
   try {
     const fetchStarted = performance.now();
-    const cached = await readBiometricAsset(cacheKey);
-    if (cached) {
-      buffer = cached.buffer as ArrayBuffer;
-      fromCache = true;
-      reportAssetProgress("arcface", {
-        url,
-        loaded: cached.byteLength,
-        total: cached.byteLength,
-        fromCache: true,
-      });
-    } else {
-      buffer = await downloadArcFace(url);
-    }
-    faceCaptureDiag({
-      stage: "arcface_model_fetch_ok",
-      component: "arcface",
-      success: true,
-      ms: Math.round(performance.now() - fetchStarted),
-      modelUrl: url,
-      imageWidth: buffer.byteLength,
-    });
-
-    faceCaptureDiag({
-      stage: "arcface_integrity_start",
-      component: "arcface",
-      success: true,
-      expectedHashPrefix: hashPrefix(ARCFACE_MBF_ARTIFACT.sha256),
-    });
-    let actual = await sha256Hex(buffer);
-    if (
-      fromCache &&
-      actual.toLowerCase() !== ARCFACE_MBF_ARTIFACT.sha256.toLowerCase()
-    ) {
-      await dropBiometricAsset(cacheKey);
-      buffer = await downloadArcFace(url);
-      fromCache = false;
-      actual = await sha256Hex(buffer);
-    }
-    if (actual.toLowerCase() !== ARCFACE_MBF_ARTIFACT.sha256.toLowerCase()) {
-      faceCaptureDiag({
-        stage: "arcface_integrity_failed",
-        component: "arcface",
-        success: false,
-        expectedHashPrefix: hashPrefix(ARCFACE_MBF_ARTIFACT.sha256),
-        actualHashPrefix: hashPrefix(actual),
-        errorCode: "INTEGRITY_MISMATCH",
-      });
-      throw biometricUnavailable(
-        `ASSET_INTEGRITY_MISMATCH: ArcFace integrity failed (${url}): expected ${hashPrefix(ARCFACE_MBF_ARTIFACT.sha256)}? got ${hashPrefix(actual)}?`,
-      );
-    }
+    // Cache, app bundle or network; resolves only with bytes whose SHA-256
+    // equals ARCFACE_MBF_ARTIFACT.sha256.
+    const loaded = await loadBiometricAsset(BIOMETRIC_RELEASE_ASSETS.arcface, { progressId: "arcface" });
     faceCaptureDiag({
       stage: "arcface_integrity_ok",
       component: "arcface",
       success: true,
+      ms: Math.round(performance.now() - fetchStarted),
+      modelUrl: loaded.url,
+      imageWidth: loaded.bytes.byteLength,
       expectedHashPrefix: hashPrefix(ARCFACE_MBF_ARTIFACT.sha256),
-      actualHashPrefix: hashPrefix(actual),
+      errorMessage: `source=${loaded.source}`,
     });
-    if (!fromCache) await storeBiometricAsset(cacheKey, new Uint8Array(buffer));
-    return new Uint8Array(buffer);
+    return loaded.bytes;
   } catch (err) {
     const msg = sanitizeInitError(err);
     lastArcFaceInitError = msg;
@@ -264,19 +204,17 @@ async function embedAlignedFace112Now(
 }
 
 /**
- * Run the loaded session once on a constant tensor and check the output shape.
- * Only the check result leaves this function; the output is discarded.
+ * Run the loaded session once on the engine conformance input (a synthetic
+ * test card through the real alignment) and require the output to match the
+ * golden embedding. Proves this device computes the TrustID embedding space
+ * before any face is embedded. Only the check result leaves this function.
  */
-export function warmUpArcFace(modelBaseUrl?: string): Promise<{ dims: number }> {
+export function warmUpArcFace(modelBaseUrl?: string): Promise<{ dims: number; conformanceCosine: number }> {
   const run = embedQueue.then(async () => {
     const session = await getArcFaceSession(modelBaseUrl);
     const ort = await getOrtModule();
     const inputName = session.inputNames[0] ?? "input.1";
-    const tensor = new ort.Tensor(
-      "float32",
-      new Float32Array(1 * 3 * 112 * 112),
-      [1, 3, 112, 112],
-    );
+    const tensor = new ort.Tensor("float32", conformanceTensor(), [1, 3, 112, 112]);
     const outputs = await session.run({ [inputName]: tensor });
     const firstKey = session.outputNames[0] ?? Object.keys(outputs)[0];
     const data = firstKey ? outputs[firstKey]?.data : undefined;
@@ -285,13 +223,28 @@ export function warmUpArcFace(modelBaseUrl?: string): Promise<{ dims: number }> 
     for (let i = 0; finite && i < dims; i++) {
       if (!Number.isFinite(data![i])) finite = false;
     }
-    data?.fill?.(0);
     if (dims !== BIOMETRIC_AI_EMBEDDING_DIMS || !finite) {
+      data?.fill?.(0);
       throw biometricUnavailable(
         `WARMUP_INVALID_OUTPUT: ArcFace warm-up returned ${dims} values${finite ? "" : " (non-finite)"}; expected ${BIOMETRIC_AI_EMBEDDING_DIMS}`,
       );
     }
-    return { dims };
+    const conformance = assessEngineConformance(data!);
+    data?.fill?.(0);
+    faceCaptureDiag({
+      stage: conformance.ok ? "arcface_conformance_ok" : "arcface_conformance_failed",
+      component: "arcface",
+      success: conformance.ok,
+      errorMessage: `cosine=${conformance.cosine.toFixed(6)} maxAbsDiff=${conformance.maxAbsDiff.toExponential(2)}`,
+    });
+    if (!conformance.ok) {
+      // Fail closed: embeddings from this engine would not be comparable to
+      // enrolled templates, so it must not produce any.
+      throw biometricUnavailable(
+        `WARMUP_INVALID_OUTPUT: engine conformance failed (cosine ${conformance.cosine.toFixed(6)} < ${ENGINE_CONFORMANCE_MIN_COSINE})`,
+      );
+    }
+    return { dims, conformanceCosine: conformance.cosine };
   });
   embedQueue = run.catch(() => undefined);
   return run;

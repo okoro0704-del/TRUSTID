@@ -688,6 +688,42 @@ export type {
   FaceCaptureOptions,
   SilentWebCaptureResult,
 } from "./capture/silent-camera-web.js";
+export {
+  BIOMETRIC_ENGINE_STATE,
+  WasmBiometricEngine,
+  biometricEngineStatusFromReadiness,
+  describeBiometricEngineStatus,
+  detectBiometricPlatform,
+  getBiometricEngine,
+  prefetchBiometricAssets,
+  schedulePrefetchBiometricAssets,
+} from "./capture/biometric/biometric-engine.js";
+export type {
+  BiometricCameraSession,
+  BiometricEngine,
+  BiometricEngineState,
+  BiometricEngineStatus,
+  BiometricPlatform,
+  BiometricPrefetchResult,
+} from "./capture/biometric/biometric-engine.js";
+export {
+  configureBiometricDelivery,
+  getNativeBiometricBundle,
+} from "./capture/biometric/asset-delivery.js";
+export type {
+  BiometricDeliveryConfig,
+  NativeBiometricAssetBridge,
+} from "./capture/biometric/asset-delivery.js";
+export {
+  BIOMETRIC_ENGINE_RELEASE,
+  BIOMETRIC_RELEASE_ASSETS,
+  biometricAssetPath,
+} from "./capture/biometric/model-manifest.js";
+export type {
+  BiometricEngineRelease,
+  BiometricReleaseAsset,
+  BiometricReleaseAssetId,
+} from "./capture/biometric/model-manifest.js";
 export { getBiometricRuntimeStatus } from "./capture/biometric/runtime-status.js";
 export type { BiometricRuntimeStatus } from "./capture/biometric/runtime-status.js";
 export { ORT_RUNTIME_ERROR_CODES } from "./capture/biometric/ort-runtime.js";

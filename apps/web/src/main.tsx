@@ -27,8 +27,20 @@ import {
   getNativePushToken,
 } from "./lib/headsUpNotifications";
 import { initElfComPushRegistration } from "./lib/notification_registration";
-import { biometricReadiness, createTrustIdSdk } from "@trustid/sdk";
+import {
+  biometricReadiness,
+  configureBiometricDelivery,
+  createTrustIdSdk,
+  schedulePrefetchBiometricAssets,
+} from "@trustid/sdk";
 import "./styles.css";
+
+// Face-recognition assets: optional CDN first, this origin as the fallback.
+// Preparing assets at idle downloads and verifies files only; it never opens
+// the camera or reads a frame. Installed apps skip it (assets are bundled).
+const biometricCdn = import.meta.env.VITE_TRUSTID_BIOMETRIC_ASSET_BASE?.trim();
+if (biometricCdn) configureBiometricDelivery({ assetBaseUrls: [biometricCdn] });
+schedulePrefetchBiometricAssets();
 
 // APK / Capacitor: wire App Lock + biometric + media vault + heads-up plugins
 injectCapacitorSecurityBridges();

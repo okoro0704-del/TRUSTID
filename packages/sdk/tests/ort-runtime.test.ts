@@ -42,7 +42,7 @@ vi.mock("../src/capture/biometric/resumable-download.js", async (importOriginal)
     for (const [fragment, body] of download.bodyFor) {
       if (url.includes(fragment)) return body();
     }
-    if (url.endsWith(".task")) return new ArrayBuffer(TASK_BYTES);
+    if (/\.task(\.gz\.bin)?$/.test(url)) return new ArrayBuffer(TASK_BYTES);
     if (download.failuresLeft > 0) {
       download.failuresLeft -= 1;
       throw new Error("ASSET_HTTP_ERROR: HTTP 503 at 0-262143");
@@ -61,6 +61,8 @@ vi.mock("../src/capture/biometric/integrity.js", async () => {
         : data.byteLength === 77
           ? manifest.MEDIAPIPE_FACE_LANDMARKER_ARTIFACT.sha256
           : manifest.ARCFACE_MBF_ARTIFACT.sha256,
+    // Every pinned asset verifies unless it carries the 0xEE stale marker.
+    sha256Mismatch: async (bytes: Uint8Array) => (bytes[0] === 0xee ? "0".repeat(64) : null),
     fetchVerifiedArtifact: async () => new ArrayBuffer(0),
   };
 });
@@ -110,11 +112,15 @@ type FakeOptions = {
   runMs?: number;
   initError?: string;
   sessionFailuresLeft?: number;
-  /** Values the ArcFace session returns (default 512 x 0.5). */
+  /** Values the ArcFace session returns (default: the conformance golden). */
   embedOutput?: () => Float32Array;
 };
 
 const PROBE_MODEL_BYTES = 63;
+
+const GOLDEN = await import("../src/capture/biometric/engine-conformance-golden.js").then(
+  (m) => m.ENGINE_CONFORMANCE_GOLDEN,
+);
 
 const ORT_VERSION = "1.21.0";
 
@@ -189,7 +195,8 @@ async function freshFakeOrt(options: FakeOptions = {}) {
           counters.maxRunsInflight = Math.max(counters.maxRunsInflight, counters.runsInflight);
           await delay(options.runMs ?? 0);
           counters.runsInflight -= 1;
-          const data = options.embedOutput?.() ?? new Float32Array(512).fill(0.5);
+          // Default: the reference engine's output, so warm-up conformance passes.
+          const data = options.embedOutput?.() ?? Float32Array.from(GOLDEN.embedding);
           return {
             "683": { data, dims: [1, data.length], type: "float32" },
           };
@@ -361,17 +368,16 @@ describe("ORT runtime owner", { timeout: RUNTIME_TEST_TIMEOUT_MS }, () => {
     );
     expect(providers).toEqual([["wasm"]]);
     expect(t.counters.backendInitByName).toEqual({ wasm: 1 });
-    expect(t.binaryFetches).toEqual([
-      `https://trustedid.netlify.app/ort/${ORT_VERSION}/ort-wasm-simd-threaded.wasm`,
-    ]);
-    expect(t.modulePreloads).toEqual([
-      `https://trustedid.netlify.app/ort/${ORT_VERSION}/ort-wasm-simd-threaded.mjs`,
-    ]);
+    // The binary and its loader come from the pinned, content-addressed release.
+    expect(t.binaryFetches).toHaveLength(1);
+    expect(t.binaryFetches[0]).toMatch(/\/biometric\/06b3f98e5aa2fffe\/ort-wasm-simd-threaded\.wasm(\.gz\.bin)?$/);
+    // The loader is imported from its content-addressed, same-origin path.
+    expect(t.modulePreloads).toHaveLength(1);
+    expect(t.modulePreloads[0]).toMatch(/\/biometric\/e9ba2350c370278f\/ort-wasm-simd-threaded\.mjs$/);
     expect(t.module.env.wasm.numThreads).toBe(1);
     expect(t.module.env.wasm.proxy).toBe(false);
-    expect(t.module.env.wasm.wasmPaths).toEqual({
-      mjs: `https://trustedid.netlify.app/ort/${ORT_VERSION}/ort-wasm-simd-threaded.mjs`,
-    });
+    expect((t.module.env.wasm as { initTimeout?: number }).initTimeout).toBe(60_000);
+    expect(t.module.env.wasm.wasmPaths).toEqual({ mjs: t.modulePreloads[0] });
     const status = t.runtime.getOrtRuntimeStatus();
     expect(status).toMatchObject({
       state: "READY",
@@ -380,6 +386,61 @@ describe("ORT runtime owner", { timeout: RUNTIME_TEST_TIMEOUT_MS }, () => {
       numThreads: 1,
       requiresReload: false,
     });
+  });
+
+  it("in browsers the runtime runs only SHA-256-verified loader and binary bytes (blob: URLs)", async () => {
+    const created: Blob[] = [];
+    const create = vi.fn((b: Blob) => {
+      created.push(b);
+      return `blob:https://trustedid.netlify.app/${created.length}`;
+    });
+    const revoke = vi.fn();
+    Object.assign(URL, { createObjectURL: create, revokeObjectURL: revoke });
+    try {
+      const t = await setup();
+      await t.runtime.createOrtSession(MODEL);
+      expect(t.binaryFetches.map((u) => u.replace(/^.*\/biometric\//, ""))).toEqual([
+        "06b3f98e5aa2fffe/ort-wasm-simd-threaded.wasm.gz.bin",
+        "e9ba2350c370278f/ort-wasm-simd-threaded.mjs.gz.bin",
+      ]);
+      expect(t.module.env.wasm.wasmPaths).toEqual({
+        mjs: "blob:https://trustedid.netlify.app/1",
+        wasm: "blob:https://trustedid.netlify.app/2",
+      });
+      expect(t.module.env.wasm.wasmBinary).toBeUndefined();
+      // Only the verified blob is imported; no URL is imported as code.
+      expect(t.modulePreloads).toEqual(["blob:https://trustedid.netlify.app/1"]);
+      expect(t.runtime.getOrtRuntimeStatus().loaderIntegrity).toBe("sha256");
+      expect(revoke).toHaveBeenCalledTimes(2);
+    } finally {
+      Object.assign(URL, { createObjectURL: undefined, revokeObjectURL: undefined });
+    }
+  });
+
+  it("a loader that fails verification is never imported, by blob or by URL", async () => {
+    Object.assign(URL, { createObjectURL: vi.fn(() => "blob:x"), revokeObjectURL: vi.fn() });
+    try {
+      const t = await setup();
+      t.runtime.resetOrtRuntimeForTests({
+        importOrt: async () => t.module as never,
+        fetchBinary: async (url) => {
+          t.binaryFetches.push(url);
+          const bytes = new Uint8Array(validWasmBinary());
+          if (url.includes(".mjs")) bytes[0] = 0xee; // tampered loader
+          return bytes.buffer;
+        },
+        preloadModule: async (url) => {
+          t.modulePreloads.push(url);
+          return { default: () => undefined };
+        },
+        origin: () => "https://trustedid.netlify.app",
+      });
+      await expect(t.runtime.createOrtSession(MODEL)).rejects.toThrow(/BIOMETRIC_RUNTIME_ASSETS_UNAVAILABLE/);
+      expect(t.modulePreloads).toEqual([]);
+      expect(t.counters.runtimeInitEntered).toBe(0);
+    } finally {
+      Object.assign(URL, { createObjectURL: undefined, revokeObjectURL: undefined });
+    }
   });
 
   it("3. StrictMode double mount does not initialize twice", async () => {
@@ -659,7 +720,7 @@ describe("biometric readiness", { timeout: RUNTIME_TEST_TIMEOUT_MS }, () => {
     expect(t.counters.probeSessions).toBe(1);
     expect(t.counters.sessionsCreated).toBe(1);
     expect(mediapipe.creates).toBe(1);
-    expect(download.urls.filter((u) => u.endsWith("w600k_mbf.onnx"))).toHaveLength(1);
+    expect(download.urls.filter((u) => /w600k_mbf\.onnx(\.gz\.bin)?$/.test(u))).toHaveLength(1);
   });
 
   it("a detector failure is not ready; retry reloads only the detector", async () => {
@@ -681,7 +742,7 @@ describe("biometric readiness", { timeout: RUNTIME_TEST_TIMEOUT_MS }, () => {
     expect(t.counters.runtimeInitEntered).toBe(1);
     expect(t.counters.sessionsCreated).toBe(1);
     // The detector assets were fetched once; the retry reused them.
-    expect(download.urls.filter((u) => u.endsWith(".task"))).toHaveLength(1);
+    expect(download.urls.filter((u) => /\.task(\.gz\.bin)?$/.test(u))).toHaveLength(1);
   });
 
   it("an embedder download failure is not ready; retry does not re-initialize WASM or duplicate sessions", async () => {
@@ -709,7 +770,7 @@ describe("biometric readiness", { timeout: RUNTIME_TEST_TIMEOUT_MS }, () => {
   it("a warm-up failure is not ready and retries only the warm-up", async () => {
     let bad = true;
     const t = await setupReadiness({
-      embedOutput: () => (bad ? new Float32Array(10) : new Float32Array(512).fill(0.5)),
+      embedOutput: () => (bad ? new Float32Array(10) : Float32Array.from(GOLDEN.embedding)),
     });
     const failed = await t.readiness.ensureBiometricReady();
     expect(failed).toMatchObject({
@@ -726,6 +787,20 @@ describe("biometric readiness", { timeout: RUNTIME_TEST_TIMEOUT_MS }, () => {
     expect(t.counters.runtimeInitEntered).toBe(1);
     expect(t.counters.sessionsCreated).toBe(1);
     expect(mediapipe.creates).toBe(1);
+  });
+
+  it("an engine whose output is outside the TrustID embedding space is not ready (never a match result)", async () => {
+    // Right shape, finite, but not what the reference engine computes: e.g. a
+    // different model, a BGR pipeline or a broken runtime on some device.
+    const t = await setupReadiness({ embedOutput: () => new Float32Array(512).fill(0.5) });
+    const snap = await t.readiness.ensureBiometricReady();
+    expect(snap).toMatchObject({
+      ready: false,
+      stage: "WARMUP_FAILED",
+      warmup: { state: "FAILED", failureCategory: "WARMUP_INVALID" },
+    });
+    expect(snap.warmup.error).toMatch(/engine conformance failed/);
+    expect(snap.warmup.error).not.toMatch(/NO_MATCH/);
   });
 
   it("a non-finite warm-up output is not ready", async () => {
@@ -817,7 +892,7 @@ describe("biometric readiness", { timeout: RUNTIME_TEST_TIMEOUT_MS }, () => {
     expect(base.modelAssetPath).toBeUndefined();
     expect((base.modelAssetBuffer as Uint8Array).byteLength).toBe(TASK_BYTES);
     expect(download.urls.filter((u) => u.includes("vision_wasm_internal.wasm"))).toHaveLength(1);
-    expect(download.urls.filter((u) => u.endsWith(".task"))).toHaveLength(1);
+    expect(download.urls.filter((u) => /\.task(\.gz\.bin)?$/.test(u))).toHaveLength(1);
   });
 
   it("an HTML page served for the MediaPipe .wasm is rejected", async () => {
@@ -841,21 +916,24 @@ describe("biometric readiness", { timeout: RUNTIME_TEST_TIMEOUT_MS }, () => {
     const t = await setupReadiness();
     const bucket = await storage.open(t.cache.BIOMETRIC_ASSET_CACHE);
     await bucket.put(t.cache.BIOMETRIC_ASSET_KEYS.arcface(), new Response(new Uint8Array([0xee, 1, 2, 3])));
-    await bucket.put(t.cache.BIOMETRIC_ASSET_KEYS.ortWasm("1.20.0"), new Response(new Uint8Array(validWasmBinary())));
+    const staleOrtKey = "/__trustid/biometric-assets/ort-wasm-simd-threaded/1.20.0";
+    await bucket.put(staleOrtKey, new Response(new Uint8Array(validWasmBinary())));
     await storage.open("trustid-models-0123456789abcdef");
     await storage.open("trustid-ort-1.20.0");
 
     const snap = await t.readiness.ensureBiometricReady();
     expect(snap.ready).toBe(true);
-    expect(download.urls.filter((u) => u.endsWith("w600k_mbf.onnx"))).toHaveLength(1);
+    expect(download.urls.filter((u) => /w600k_mbf\.onnx(\.gz\.bin)?$/.test(u))).toHaveLength(1);
     const stored = bucket.entries.get(
       new URL(t.cache.BIOMETRIC_ASSET_KEYS.arcface(), "https://trustedid.netlify.app").href,
     );
     expect(stored?.[0]).not.toBe(0xee);
     await vi.waitFor(async () => {
-      expect(await storage.keys()).toEqual([t.cache.BIOMETRIC_ASSET_CACHE]);
+      expect((await storage.keys()).sort()).toEqual(
+        [t.cache.BIOMETRIC_ASSET_CACHE, t.cache.BIOMETRIC_PARTIAL_CACHE].sort(),
+      );
       const keys = [...bucket.entries.keys()].map((k) => new URL(k).pathname);
-      expect(keys).not.toContain(t.cache.BIOMETRIC_ASSET_KEYS.ortWasm("1.20.0"));
+      expect(keys).not.toContain(staleOrtKey);
     });
   });
 
@@ -883,7 +961,7 @@ describe("biometric readiness", { timeout: RUNTIME_TEST_TIMEOUT_MS }, () => {
     const snap = await second.readiness.ensureBiometricReady();
     expect(snap.ready).toBe(true);
     expect(snap.embedder.fromCache).toBe(true);
-    expect(download.urls.slice(downloadsAfterFirst).filter((u) => u.endsWith("w600k_mbf.onnx"))).toHaveLength(0);
+    expect(download.urls.slice(downloadsAfterFirst).filter((u) => /w600k_mbf\.onnx(\.gz\.bin)?$/.test(u))).toHaveLength(0);
   });
 
   it("remounts and navigating away and back never start another initialization", async () => {
@@ -936,7 +1014,7 @@ describe("biometric readiness", { timeout: RUNTIME_TEST_TIMEOUT_MS }, () => {
     );
     expect(snaps.every((s) => s.ready)).toBe(true);
     expect(t.readiness.getBiometricReadiness().passes).toBe(2);
-    expect(download.urls.slice(before).filter((u) => u.endsWith("w600k_mbf.onnx"))).toHaveLength(1);
+    expect(download.urls.slice(before).filter((u) => /w600k_mbf\.onnx(\.gz\.bin)?$/.test(u))).toHaveLength(1);
     expect(t.counters.runtimeInitEntered).toBe(1);
     expect(t.counters.sessionsCreated).toBe(1);
   });
@@ -961,7 +1039,12 @@ describe("biometric readiness", { timeout: RUNTIME_TEST_TIMEOUT_MS }, () => {
     await t.readiness.ensureBiometricReady();
     expect(seen.length).toBeGreaterThan(0);
     for (const s of seen) {
-      expect(s).not.toMatch(/vector|embedding|landmark|template|imageData/i);
+      // Asset URLs name release files (e.g. face_landmarker.task); everything else must be metadata.
+      const withoutUrls = s.replace(/"assetUrl":"[^"]*"/g, '"assetUrl":"<url>"');
+      expect(withoutUrls).not.toMatch(/vector|embedding|landmark|template|imageData/i);
+      for (const url of s.match(/"assetUrl":"([^"]*)"/g) ?? []) {
+        expect(url).toMatch(/\/(biometric\/[0-9a-f]{16}\/[\w.-]+|__trustid\/biometric-assets\/[\w./-]+)"$/);
+      }
     }
   });
 });

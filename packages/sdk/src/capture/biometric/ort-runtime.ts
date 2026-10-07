@@ -20,15 +20,11 @@
  *
  * Diagnostics are metadata only. Nothing here sees frames or embeddings.
  */
-import { reportAssetProgress } from "./asset-progress.js";
-import {
-  BIOMETRIC_ASSET_KEYS,
-  readBiometricAsset,
-  storeBiometricAsset,
-} from "./biometric-asset-cache.js";
+import { biometricAssetUrls, loadBiometricAsset } from "./asset-delivery.js";
 import { biometricUnavailable } from "./errors.js";
 import { faceCaptureDiag, sanitizeInitError } from "./face-capture-diag.js";
-import { BiometricAssetError, downloadModelBytes } from "./resumable-download.js";
+import { BIOMETRIC_RELEASE_ASSETS, ORT_WEB_VERSION } from "./model-manifest.js";
+import { BiometricAssetError } from "./resumable-download.js";
 
 export type OrtTensor = { data: Float32Array; dims: number[] };
 
@@ -54,6 +50,8 @@ export type OrtModule = {
     wasm: {
       numThreads?: number;
       proxy?: boolean;
+      /** ms before ORT gives up on its WebAssembly init (0 = never). */
+      initTimeout?: number;
       wasmPaths?: string | { mjs?: string; wasm?: string };
       wasmBinary?: ArrayBufferLike | Uint8Array;
     };
@@ -90,11 +88,21 @@ export type OrtRuntimeStatus = {
   failureCode: OrtRuntimeErrorCode | null;
   /** True once ORT's runtime init failed: only a page reload can recover. */
   requiresReload: boolean;
+  /**
+   * How the runtime's own code was checked: "sha256" (loader and binary are
+   * verified bytes) or "content-addressed-url" (binary verified, loader
+   * imported by its content-addressed URL; hosts without blob: URLs only).
+   */
+  loaderIntegrity: "sha256" | "content-addressed-url" | null;
 };
 
 type RuntimeHooks = {
   importOrt: () => Promise<OrtModule>;
-  fetchBinary: (url: string) => Promise<ArrayBuffer>;
+  /** Network transfer override; default is the delivery layer's resumable download. */
+  fetchBinary?: (
+    url: string,
+    onProgress: (loaded: number, total: number | null) => void,
+  ) => Promise<ArrayBuffer>;
   preloadModule: (url: string) => Promise<unknown>;
   origin: () => string;
 };
@@ -106,11 +114,6 @@ const defaultHooks: RuntimeHooks = {
     const mod = await import("onnxruntime-web/wasm");
     return mod as unknown as OrtModule;
   },
-  fetchBinary: (url) =>
-    downloadModelBytes(url, fetch, undefined, {
-      onProgress: (loaded, total) =>
-        reportAssetProgress("ort-wasm", { url, loaded, total, fromCache: false }),
-    }),
   preloadModule: (url) => import(/* @vite-ignore */ url),
   origin: () =>
     typeof location !== "undefined" && location.origin
@@ -131,8 +134,11 @@ let ortVersion: string | null = null;
 let failureStage: string | null = null;
 let failureCode: OrtRuntimeErrorCode | null = null;
 let state: OrtRuntimeState = "IDLE";
+let loaderIntegrity: OrtRuntimeStatus["loaderIntegrity"] = null;
 
 const ASSET_ATTEMPTS = 3;
+/** Compiling the 12.7 MB runtime takes seconds on slow phones; a minute means it is stuck. */
+export const ORT_INIT_TIMEOUT_MS = 60_000;
 const WASM_MAGIC = [0x00, 0x61, 0x73, 0x6d];
 const MIN_WASM_BYTES = 1024 * 1024;
 
@@ -163,6 +169,9 @@ function configureEnv(ort: OrtModule): void {
   // no proxy worker keeps init on this thread where it can be observed.
   ort.env.wasm.numThreads = 1;
   ort.env.wasm.proxy = false;
+  // A runtime init that never settles must become an explicit failure
+  // ("WebAssembly backend initializing failed due to timeout"), not a hang.
+  ort.env.wasm.initTimeout = ORT_INIT_TIMEOUT_MS;
   ortVersion = ort.env.versions?.web ?? null;
 }
 
@@ -201,51 +210,84 @@ function isWasmBinary(bytes: Uint8Array): boolean {
   );
 }
 
-async function loadWasmBinary(url: string, version: string): Promise<Uint8Array> {
-  const cacheKey = BIOMETRIC_ASSET_KEYS.ortWasm(version);
-  const cached = await readBiometricAsset(cacheKey);
-  if (cached && isWasmBinary(cached)) {
-    reportAssetProgress("ort-wasm", {
-      url,
-      loaded: cached.byteLength,
-      total: cached.byteLength,
-      fromCache: true,
-    });
-    return cached;
-  }
+function isPermanentAssetError(err: unknown): boolean {
+  return (
+    err instanceof BiometricAssetError &&
+    (err.category === "ASSET_MISSING" || err.category === "ASSET_NOT_BINARY")
+  );
+}
+
+async function loadWasmBinary(): Promise<Uint8Array> {
   let lastError: unknown;
   for (let attempt = 0; attempt < ASSET_ATTEMPTS; attempt++) {
     try {
-      const bytes = new Uint8Array(await hooks.fetchBinary(url));
+      const { bytes, url } = await loadBiometricAsset(BIOMETRIC_RELEASE_ASSETS["ort-wasm"], {
+        progressId: "ort-wasm",
+        download: hooks.fetchBinary,
+      });
       if (!isWasmBinary(bytes)) {
-        // The SPA fallback answers missing files with index.html (HTTP 200).
         throw new BiometricAssetError(
           "ASSET_NOT_BINARY",
           url,
           `not a WebAssembly binary (${bytes.byteLength} bytes)`,
         );
       }
-      await storeBiometricAsset(cacheKey, bytes, "application/wasm");
       return bytes;
     } catch (err) {
       lastError = err;
-      if (
-        err instanceof BiometricAssetError &&
-        (err.category === "ASSET_MISSING" || err.category === "ASSET_NOT_BINARY")
-      ) {
-        break;
-      }
+      if (isPermanentAssetError(err)) break;
     }
   }
   throw lastError;
 }
 
-async function preloadWasmModule(url: string): Promise<string> {
+function canUseBlobUrls(): boolean {
+  return typeof URL !== "undefined" && typeof URL.createObjectURL === "function" && typeof Blob !== "undefined";
+}
+
+let runtimeBlobUrls: string[] = [];
+
+/**
+ * Blob URLs for the verified loader and binary. Verification failures
+ * propagate: there is no fallback to importing unverified code.
+ */
+async function verifiedRuntimeUrls(binary: Uint8Array): Promise<{ mjs: string; wasm: string }> {
+  const { bytes: loader } = await loadBiometricAsset(BIOMETRIC_RELEASE_ASSETS["ort-loader"], {
+    progressId: "ort-loader",
+    download: hooks.fetchBinary,
+  });
+  const mjs = URL.createObjectURL(new Blob([loader as BlobPart], { type: "text/javascript" }));
+  const wasm = URL.createObjectURL(new Blob([binary as BlobPart], { type: "application/wasm" }));
+  runtimeBlobUrls = [mjs, wasm];
+  const mod = (await hooks.preloadModule(mjs)) as { default?: unknown };
+  if (typeof mod?.default !== "function") throw new Error("ORT loader module has no factory export");
+  return { mjs, wasm };
+}
+
+/**
+ * Fallback for hosts without blob: URLs. The loader is an ES module and must be imported by URL. It cannot come from
+ * a blob: URL: with a preloaded wasmBinary, ORT gives the loader no locateFile
+ * and the loader resolves its .wasm name against import.meta.url, which throws
+ * for blob: (and hangs ORT's init). So it is imported from same-origin,
+ * content-addressed paths: the installed app's copy first (local, offline),
+ * then /biometric/<sha16>/, then the versioned legacy path.
+ */
+async function preloadWasmModule(fallbackUrl: string): Promise<string> {
   let lastError: unknown;
+  const pinned = await biometricAssetUrls(BIOMETRIC_RELEASE_ASSETS["ort-loader"]).catch(() => [] as string[]);
+  for (const candidate of pinned) {
+    try {
+      const mod = (await hooks.preloadModule(candidate)) as { default?: unknown };
+      if (typeof mod?.default === "function") return candidate;
+      lastError = new Error("ORT loader module has no factory export");
+    } catch (err) {
+      lastError = err;
+    }
+  }
   for (let attempt = 0; attempt < ASSET_ATTEMPTS; attempt++) {
     // A failed module fetch may be remembered for that exact URL, so each
     // retry uses a distinct one; ORT is then pointed at the URL that loaded.
-    const candidate = attempt === 0 ? url : `${url}?attempt=${attempt}`;
+    const candidate = attempt === 0 ? fallbackUrl : `${fallbackUrl}?attempt=${attempt}`;
     try {
       const mod = (await hooks.preloadModule(candidate)) as { default?: unknown };
       if (typeof mod?.default !== "function") {
@@ -265,11 +307,27 @@ async function prepareRuntimeAssets(ort: OrtModule): Promise<void> {
     assetsPromise = (async () => {
       const started = performance.now();
       if (!ortVersion) throw new Error("onnxruntime-web version unknown");
+      if (ortVersion !== ORT_WEB_VERSION) {
+        // The pinned binary belongs to ORT_WEB_VERSION; never pair it with other JS.
+        throw new Error(`onnxruntime-web ${ortVersion} does not match pinned ${ORT_WEB_VERSION}`);
+      }
       const base = ortAssetBase(ortVersion);
-      const binary = await loadWasmBinary(`${base}${ORT_WASM_BINARY_FILE}`, ortVersion);
-      const mjs = await preloadWasmModule(`${base}${ORT_WASM_MODULE_FILE}`);
-      ort.env.wasm.wasmPaths = { mjs };
-      ort.env.wasm.wasmBinary = binary;
+      const binary = await loadWasmBinary();
+      if (canUseBlobUrls()) {
+        // Both pieces of code ORT runs are the pinned, SHA-256-verified bytes.
+        // With wasmPaths.wasm set (and no wasmBinary) ORT gives the loader a
+        // locateFile hook, so it never resolves against a blob: import.meta.url.
+        const urls = await verifiedRuntimeUrls(binary);
+        ort.env.wasm.wasmPaths = urls;
+        ort.env.wasm.wasmBinary = undefined;
+        loaderIntegrity = "sha256";
+      } else {
+        // No blob: URLs (non-browser hosts): import the content-addressed loader by URL.
+        const mjs = await preloadWasmModule(`${base}${ORT_WASM_MODULE_FILE}`);
+        ort.env.wasm.wasmPaths = { mjs };
+        ort.env.wasm.wasmBinary = binary;
+        loaderIntegrity = "content-addressed-url";
+      }
       assetsReady = true;
       faceCaptureDiag({
         stage: "ort_runtime_assets_ok",
@@ -297,6 +355,9 @@ function markRuntimeReady(ort: OrtModule): void {
   runtimeReady = true;
   state = "READY";
   ort.env.wasm.wasmBinary = undefined;
+  // The runtime is instantiated; the blob copies are no longer needed.
+  for (const url of runtimeBlobUrls) URL.revokeObjectURL?.(url);
+  runtimeBlobUrls = [];
 }
 
 /**
@@ -428,6 +489,7 @@ export function getOrtRuntimeStatus(): OrtRuntimeStatus {
     failureStage,
     failureCode,
     requiresReload: runtimeFailed,
+    loaderIntegrity,
   };
 }
 
@@ -450,4 +512,6 @@ export function resetOrtRuntimeForTests(overrides: Partial<RuntimeHooks> = {}): 
   failureStage = null;
   failureCode = null;
   state = "IDLE";
+  loaderIntegrity = null;
+  runtimeBlobUrls = [];
 }

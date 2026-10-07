@@ -34,6 +34,27 @@
   [headers.values]
     Cache-Control = "public, max-age=31536000, immutable"
 
+# Biometric engine release (scripts/stage-biometric-assets.mjs). Paths are
+# content-addressed (/biometric/<sha256 prefix>/<file>), so they never change
+# and may be cached forever. The SDK fetches the .gz.bin files as plain binaries
+# in Range requests (resumable) and checks SHA-256 itself; octet-stream keeps
+# any intermediary from adding Content-Encoding. CORS lets other Digiconomy
+# origins use this host as their asset CDN (no credentials are involved).
+[[headers]]
+  for = "/biometric/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+    Content-Type = "application/octet-stream"
+    X-Content-Type-Options = "nosniff"
+    Access-Control-Allow-Origin = "*"
+    Access-Control-Expose-Headers = "Content-Range, Content-Length, Accept-Ranges"
+
+[[headers]]
+  for = "/biometric/release.json"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+    Content-Type = "application/json; charset=utf-8"
+
 # Android OTA channel. The manifest must never be served stale; the APK URL is stable
 # (TrustID.apk) so it is revalidated too and bound by SHA-256 in the manifest.
 [[headers]]
@@ -83,6 +104,17 @@
 
 [[redirects]]
   from = "/wasm/*"
+  to = "/404.html"
+  status = 404
+
+[[redirects]]
+  from = "/biometric/*"
+  to = "/404.html"
+  status = 404
+
+# Served only by the installed Android app (WebView intercept); never by the web host.
+[[redirects]]
+  from = "/__trustid_native__/*"
   to = "/404.html"
   status = 404
 

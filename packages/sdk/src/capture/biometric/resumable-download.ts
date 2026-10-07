@@ -10,6 +10,13 @@
  */
 
 const DEFAULT_CHUNK_BYTES = 256 * 1024;
+/** Adaptive bounds: a fast link earns larger ranges (fewer round trips), a slow one smaller. */
+export const MIN_CHUNK_BYTES = 128 * 1024;
+export const MAX_CHUNK_BYTES = 4 * 1024 * 1024;
+/** A range that finishes faster than this doubles the next one. */
+const GROW_BELOW_MS = 2_000;
+/** A range slower than this halves the next one, keeping ranges well under connection cut-offs. */
+const SHRINK_ABOVE_MS = 10_000;
 const CHUNK_ATTEMPTS = 4;
 /** No bytes for this long means the connection is dead, not slow. */
 export const DEFAULT_STALL_MS = 30_000;
@@ -21,6 +28,7 @@ export const BIOMETRIC_ASSET_ERROR = {
   STALLED: "ASSET_STALLED",
   NETWORK: "ASSET_NETWORK_ERROR",
   INCOMPLETE: "ASSET_INCOMPLETE",
+  INTEGRITY: "ASSET_INTEGRITY_MISMATCH",
 } as const;
 
 export type BiometricAssetErrorCategory =
@@ -56,9 +64,24 @@ function isPermanent(err: unknown): boolean {
 
 type FetchLike = typeof fetch;
 
+/**
+ * Durable record of received ranges, so a reload or a closed tab resumes
+ * instead of starting from zero. Integrity is still checked on the whole file.
+ */
+export type PartialRangeStore = {
+  load(url: string): Promise<{ total: number; bytes: Uint8Array } | null>;
+  append(url: string, start: number, bytes: Uint8Array, total: number): Promise<void>;
+  clear(url: string): Promise<void>;
+};
+
 export type DownloadOptions = {
   stallMs?: number;
   onProgress?: (loaded: number, total: number | null) => void;
+  /** Persist received ranges across page loads. */
+  store?: PartialRangeStore;
+  /** Grow/shrink the range size with measured throughput. */
+  adaptive?: boolean;
+  now?: () => number;
 };
 
 type PartialDownload = { total: number; out: Uint8Array; offset: number };
@@ -244,6 +267,47 @@ async function fetchRange(
     : new BiometricAssetError(BIOMETRIC_ASSET_ERROR.NETWORK, url, `range ${start}-${end} failed`);
 }
 
+export function nextChunkBytes(current: number, elapsedMs: number): number {
+  if (elapsedMs < GROW_BELOW_MS) return Math.min(MAX_CHUNK_BYTES, current * 2);
+  if (elapsedMs > SHRINK_ABOVE_MS) return Math.max(MIN_CHUNK_BYTES, Math.floor(current / 2));
+  return current;
+}
+
+async function restoreFromStore(
+  url: string,
+  store: PartialRangeStore | undefined,
+): Promise<PartialDownload | null> {
+  if (!store) return null;
+  try {
+    const saved = await store.load(url);
+    if (!saved || saved.bytes.byteLength === 0 || saved.bytes.byteLength >= saved.total) return null;
+    const out = new Uint8Array(saved.total);
+    out.set(saved.bytes, 0);
+    return { total: saved.total, out, offset: saved.bytes.byteLength };
+  } catch {
+    return null;
+  }
+}
+
+/** Range writes run alongside the next fetch; `settle` waits for them before a clear. */
+function rangeWriter(store: PartialRangeStore | undefined, url: string) {
+  const pending = new Set<Promise<void>>();
+  return {
+    persist(start: number, bytes: Uint8Array, total: number): void {
+      if (!store) return;
+      // Best effort: a failed write only means a later reload re-downloads this range.
+      const p = store.append(url, start, bytes, total).catch(() => undefined);
+      pending.add(p);
+      void p.finally(() => pending.delete(p));
+    },
+    async clear(): Promise<void> {
+      if (!store) return;
+      await Promise.all(pending);
+      await store.clear(url).catch(() => undefined);
+    },
+  };
+}
+
 export async function downloadModelBytes(
   url: string,
   fetchImpl: FetchLike = fetch,
@@ -251,9 +315,20 @@ export async function downloadModelBytes(
   options: DownloadOptions = {},
 ): Promise<ArrayBuffer> {
   const stallMs = options.stallMs ?? DEFAULT_STALL_MS;
-  let partial = partialDownloads.get(url);
+  const now = options.now ?? (() => (typeof performance !== "undefined" ? performance.now() : Date.now()));
+  let chunk = chunkBytes;
+  const timedRange = async (start: number, end: number) => {
+    const t0 = now();
+    const r = await fetchRange(fetchImpl, url, start, end, stallMs);
+    if (options.adaptive) chunk = nextChunkBytes(chunk, now() - t0);
+    return r;
+  };
+
+  const writer = rangeWriter(options.store, url);
+  let partial = partialDownloads.get(url) ?? (await restoreFromStore(url, options.store));
+  if (partial) partialDownloads.set(url, partial);
   if (!partial) {
-    const first = await fetchRange(fetchImpl, url, 0, chunkBytes - 1, stallMs);
+    const first = await timedRange(0, chunk - 1);
     if (first.completeBody) {
       options.onProgress?.(first.bytes.byteLength, first.bytes.byteLength);
       return bytesToArrayBuffer(first.bytes);
@@ -266,25 +341,44 @@ export async function downloadModelBytes(
     partial.out.set(first.bytes, 0);
     partial.offset = first.bytes.byteLength;
     partialDownloads.set(url, partial);
+    writer.persist(0, first.bytes, total);
   }
   options.onProgress?.(partial.offset, partial.total);
   while (partial.offset < partial.total) {
-    const end = Math.min(partial.total - 1, partial.offset + chunkBytes - 1);
-    const next = await fetchRange(fetchImpl, url, partial.offset, end, stallMs);
+    const end = Math.min(partial.total - 1, partial.offset + chunk - 1);
+    const next = await timedRange(partial.offset, end);
     if (next.completeBody) {
       partialDownloads.delete(url);
+      await writer.clear();
       throw new BiometricAssetError(
         BIOMETRIC_ASSET_ERROR.INCOMPLETE,
         url,
         `server ignored Range while resuming at ${partial.offset}`,
       );
     }
+    if (next.total != null && next.total !== partial.total) {
+      // The file behind this URL changed size mid-download: start over.
+      partialDownloads.delete(url);
+      await writer.clear();
+      throw new BiometricAssetError(
+        BIOMETRIC_ASSET_ERROR.INCOMPLETE,
+        url,
+        `size changed from ${partial.total} to ${next.total} while resuming`,
+      );
+    }
     partial.out.set(next.bytes, partial.offset);
+    writer.persist(partial.offset, next.bytes, partial.total);
     partial.offset += next.bytes.byteLength;
     options.onProgress?.(partial.offset, partial.total);
   }
   partialDownloads.delete(url);
+  await writer.clear();
   return partial.out.buffer as ArrayBuffer;
+}
+
+/** Drop bytes kept for a URL whose assembled file failed verification. */
+export function forgetPartialDownload(url: string): void {
+  partialDownloads.delete(url);
 }
 
 /** Test helper: forget bytes kept from failed downloads. */

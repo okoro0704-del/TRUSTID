@@ -9,25 +9,16 @@
  * - GPU first, CPU fallback if GPU init fails or yields persistent empty detections.
  */
 import { BIOMETRIC_ERROR_CODES } from "@trustid/shared";
-import { reportAssetProgress, type BiometricAssetId } from "./asset-progress.js";
-import {
-  BIOMETRIC_ASSET_KEYS,
-  dropBiometricAsset,
-  readBiometricAsset,
-  storeBiometricAsset,
-} from "./biometric-asset-cache.js";
+import { loadBiometricAsset } from "./asset-delivery.js";
 import { biometricFail, biometricUnavailable } from "./errors.js";
 import {
   faceCaptureDiag,
-  hashPrefix,
   summarizeImageDataSignal,
 } from "./face-capture-diag.js";
-import { sha256Hex } from "./integrity.js";
 import {
-  MEDIAPIPE_FACE_LANDMARKER_ARTIFACT,
+  BIOMETRIC_RELEASE_ASSETS,
   MEDIAPIPE_WASM_BASE,
 } from "./model-manifest.js";
-import { downloadModelBytes } from "./resumable-download.js";
 import type { DetectedFace, FaceLandmarks5, Point2D } from "./types.js";
 
 type FaceLandmarkerLike = {
@@ -327,30 +318,11 @@ function isWasmBinary(bytes: Uint8Array): boolean {
   );
 }
 
-async function loadCachedOrDownload(
-  id: BiometricAssetId,
-  url: string,
-  cacheKey: string,
-  validate: (bytes: Uint8Array) => Promise<string | null>,
-  contentType: string,
-): Promise<Uint8Array> {
-  const cached = await readBiometricAsset(cacheKey);
-  if (cached) {
-    if ((await validate(cached)) === null) {
-      reportAssetProgress(id, { url, loaded: cached.byteLength, total: cached.byteLength, fromCache: true });
-      return cached;
-    }
-    await dropBiometricAsset(cacheKey);
+function blobUrl(bytes: Uint8Array, type: string): string | null {
+  if (typeof URL === "undefined" || typeof URL.createObjectURL !== "function" || typeof Blob === "undefined") {
+    return null;
   }
-  const bytes = new Uint8Array(
-    await downloadModelBytes(url, fetch, undefined, {
-      onProgress: (loaded, total) => reportAssetProgress(id, { url, loaded, total, fromCache: false }),
-    }),
-  );
-  const problem = await validate(bytes);
-  if (problem) throw new Error(problem);
-  await storeBiometricAsset(cacheKey, bytes, contentType);
-  return bytes;
+  return URL.createObjectURL(new Blob([bytes as BlobPart], { type }));
 }
 
 /**
@@ -358,7 +330,11 @@ async function loadCachedOrDownload(
  * them, and keep them for every create attempt. The GPU create timeout then
  * covers initialization only, and a CPU fallback never downloads again.
  */
-function prepareDetectorAssets(modelBaseUrl: string): Promise<DetectorAssets> {
+/**
+ * `_modelBaseUrl` is kept for callers of the legacy signature: asset locations
+ * now come from the pinned release (asset-delivery.ts).
+ */
+function prepareDetectorAssets(_modelBaseUrl: string): Promise<DetectorAssets> {
   if (!detectorAssetsPromise) {
     detectorAssetsPromise = (async () => {
       const started = performance.now();
@@ -367,40 +343,36 @@ function prepareDetectorAssets(modelBaseUrl: string): Promise<DetectorAssets> {
       // with an old loader or binary, and iOS Safari avoids opaque loads.
       const resolved = (await vision.FilesetResolver.forVisionTasks(MEDIAPIPE_WASM_BASE)) as Record<string, unknown>;
       const fileset: Record<string, unknown> = { ...resolved };
-      const modelUrl = `${modelBaseUrl.replace(/\/$/, "")}/${MEDIAPIPE_FACE_LANDMARKER_ARTIFACT.relativePath}`;
+      // FilesetResolver picks the SIMD or non-SIMD build for this browser;
+      // the bytes for that choice come from the pinned release.
+      const resolvedWasm = typeof resolved.wasmBinaryPath === "string" ? resolved.wasmBinaryPath : null;
+      const variant = resolvedWasm && /nosimd/.test(resolvedWasm) ? "nosimd" : "simd";
+      const wasmAsset = BIOMETRIC_RELEASE_ASSETS[variant === "simd" ? "mediapipe-wasm-simd" : "mediapipe-wasm-nosimd"];
+      const loaderAsset = BIOMETRIC_RELEASE_ASSETS[variant === "simd" ? "mediapipe-loader-simd" : "mediapipe-loader-nosimd"];
+      const landmarkerAsset = BIOMETRIC_RELEASE_ASSETS["face-landmarker"];
 
-      const wasmUrl = typeof resolved.wasmBinaryPath === "string" ? resolved.wasmBinaryPath : null;
-      const wasmWork = wasmUrl
-        ? loadCachedOrDownload(
-            "mediapipe-wasm",
-            wasmUrl,
-            BIOMETRIC_ASSET_KEYS.mediapipeWasm(/nosimd/.test(wasmUrl) ? "nosimd" : "simd"),
-            async (b) =>
-              isWasmBinary(b)
-                ? null
-                : `ASSET_NOT_BINARY: MediaPipe WASM is not a WebAssembly binary (${b.byteLength} bytes)`,
-            "application/wasm",
-          ).then((bytes) => {
-            if (typeof URL !== "undefined" && typeof URL.createObjectURL === "function" && typeof Blob !== "undefined") {
-              fileset.wasmBinaryPath = URL.createObjectURL(
-                new Blob([bytes as BlobPart], { type: "application/wasm" }),
-              );
+      const wasmWork = resolvedWasm
+        ? loadBiometricAsset(wasmAsset, { progressId: "mediapipe-wasm" }).then(({ bytes, url }) => {
+            if (!isWasmBinary(bytes)) {
+              throw new Error(`ASSET_NOT_BINARY: MediaPipe WASM is not a WebAssembly binary (${url})`);
             }
+            const href = blobUrl(bytes, "application/wasm");
+            if (href) fileset.wasmBinaryPath = href;
           })
         : Promise.resolve();
-      const modelWork = loadCachedOrDownload(
-        "face-landmarker",
-        modelUrl,
-        BIOMETRIC_ASSET_KEYS.faceLandmarker(),
-        async (b) => {
-          const actual = await sha256Hex(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer);
-          return actual.toLowerCase() === MEDIAPIPE_FACE_LANDMARKER_ARTIFACT.sha256.toLowerCase()
-            ? null
-            : `ASSET_INTEGRITY_MISMATCH: face_landmarker.task expected ${hashPrefix(MEDIAPIPE_FACE_LANDMARKER_ARTIFACT.sha256)} got ${hashPrefix(actual)}`;
-        },
-        "application/octet-stream",
-      );
-      const [model] = await Promise.all([modelWork, wasmWork]);
+      // The loader script is small; if it cannot come from the release, the
+      // versioned same-origin path FilesetResolver returned still works online.
+      const loaderWork =
+        typeof resolved.wasmLoaderPath === "string"
+          ? loadBiometricAsset(loaderAsset, { progressId: "mediapipe-loader" })
+              .then(({ bytes }) => {
+                const href = blobUrl(bytes, "text/javascript");
+                if (href) fileset.wasmLoaderPath = href;
+              })
+              .catch(() => undefined)
+          : Promise.resolve();
+      const modelWork = loadBiometricAsset(landmarkerAsset, { progressId: "face-landmarker" });
+      const [{ bytes: model, url: modelUrl }] = await Promise.all([modelWork, wasmWork, loaderWork]);
       faceCaptureDiag({
         stage: "mediapipe_assets_ok",
         component: "mediapipe",

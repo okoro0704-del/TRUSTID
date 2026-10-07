@@ -14,6 +14,16 @@ export async function sha256Hex(data: ArrayBuffer): Promise<string> {
   throw new Error("Web Crypto SHA-256 unavailable");
 }
 
+/** null when `bytes` hash to `expected`, otherwise the actual hash. */
+export async function sha256Mismatch(bytes: Uint8Array, expected: string): Promise<string | null> {
+  const view =
+    bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
+      ? (bytes.buffer as ArrayBuffer)
+      : (bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer);
+  const actual = await sha256Hex(view);
+  return actual.toLowerCase() === expected.toLowerCase() ? null : actual;
+}
+
 export async function fetchVerifiedArtifact(
   url: string,
   expectedSha256: string | null,
