@@ -210,6 +210,26 @@ describe.skipIf(!PG_URL)("PostgreSQL Digi Core", () => {
     expect(await count(core, "external_identities")).toBe(1);
   });
 
+  it("lists only the requested owner's identities across a new database client", async () => {
+    const ownerA = await core.owners.resolveOrCreate({ issuer: ISSUER, subject: "trustid-subject-owner-a" });
+    const ownerB = await core.owners.resolveOrCreate({ issuer: ISSUER, subject: "trustid-subject-owner-b" });
+    expect(ownerA.owner.id).not.toBe(ownerB.owner.id);
+
+    const assertIsolated = async () => {
+      const identitiesA = await core.owners.listForOwner(ownerA.owner.id);
+      const identitiesB = await core.owners.listForOwner(ownerB.owner.id);
+      expect(identitiesA.map((identity) => [identity.ownerId, identity.issuer, identity.subject]))
+        .toEqual([[ownerA.owner.id, ISSUER, "trustid-subject-owner-a"]]);
+      expect(identitiesB.map((identity) => [identity.ownerId, identity.issuer, identity.subject]))
+        .toEqual([[ownerB.owner.id, ISSUER, "trustid-subject-owner-b"]]);
+    };
+
+    await assertIsolated();
+    await core.close();
+    core = await openPostgresDigiCore(PG_URL!, { schema: SCHEMA });
+    await assertIsolated();
+  });
+
   it("creates one owner under concurrent first login", async () => {
     const requests = 16;
     const results = await Promise.all(
