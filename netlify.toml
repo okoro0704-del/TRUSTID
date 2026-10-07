@@ -72,6 +72,22 @@
     Content-Disposition = "attachment; filename=\"TrustID.apk\""
     X-Content-Type-Options = "nosniff"
 
+# One canonical TrustID address. Passkeys (WEBAUTHN_RP_ID), token issuers and
+# the API's CORS allow-list are all bound to trustedid.netlify.app, so the
+# getlifeos alias is redirected instead of served (served, its API calls fail
+# with origin_not_allowed and passkeys cannot work). Must stay first.
+[[redirects]]
+  from = "https://trustid.getlifeos.app/*"
+  to = "https://trustedid.netlify.app/:splat"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "http://trustid.getlifeos.app/*"
+  to = "https://trustedid.netlify.app/:splat"
+  status = 301
+  force = true
+
 # Proxy API to Railway — browser sees trustedid.netlify.app (first-party cookies)
 [[redirects]]
   from = "/api/*"
