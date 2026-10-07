@@ -37,6 +37,7 @@ const config: CapacitorConfig = {
     TrustIdAppLock: {},
     TrustIdSilentAuth: {},
     TrustIdSilentFaceCapture: {},
+    TrustIdBiometricAssets: {},
   },
 };
 

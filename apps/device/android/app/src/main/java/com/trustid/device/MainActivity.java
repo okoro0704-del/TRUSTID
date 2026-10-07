@@ -6,9 +6,12 @@ import android.os.Build;
 import android.os.Bundle;
 import android.view.WindowManager;
 import com.getcapacitor.BridgeActivity;
+import com.trustid.device.biometric.BiometricAssetInterceptor;
+import com.trustid.device.biometric.WebViewNetworkState;
 import com.trustid.device.ota.TrustIdUpdater;
 import com.trustid.device.plugins.AppLockPlugin;
 import com.trustid.device.plugins.AppUpdatePlugin;
+import com.trustid.device.plugins.BiometricAssetsPlugin;
 import com.trustid.device.plugins.BiometricGatePlugin;
 import com.trustid.device.plugins.HeadsUpNotificationPlugin;
 import com.trustid.device.plugins.MediaVaultPlugin;
@@ -28,7 +31,12 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(SilentFaceCapturePlugin.class);
         registerPlugin(HeadsUpNotificationPlugin.class);
         registerPlugin(AppUpdatePlugin.class);
+        registerPlugin(BiometricAssetsPlugin.class);
         super.onCreate(savedInstanceState);
+        // Face-recognition runtimes and models ship in the APK; serve them locally.
+        BiometricAssetInterceptor.INSTANCE.install(getBridge());
+        // navigator.onLine must reflect real connectivity: engine ready != identification available.
+        WebViewNetworkState.INSTANCE.install(this, getBridge().getWebView());
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         ensureHeadsUpApprovalChannels();
         TrustIdUpdater.onCreate(this);
