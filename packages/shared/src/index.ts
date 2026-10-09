@@ -11,6 +11,8 @@ export const SCOPES = {
   IDENTITY_ZK_CLAIMS: "identity.zk_claims",
   /** Payment-bound biometric banking step-up (BBS) */
   IDENTITY_BBS_STEP_UP: "identity.bbs_step_up",
+  /** Request and consume authenticated step-up approvals (Master Device / biometric) */
+  IDENTITY_STEP_UP: "identity.step_up",
   OFFLINE_ACCESS: "offline_access",
 } as const;
 

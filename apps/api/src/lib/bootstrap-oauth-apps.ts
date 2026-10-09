@@ -1,5 +1,6 @@
 import { DEFAULT_APP_SCOPES } from "@trustid/shared";
 import { prisma } from "../db/client.js";
+import { PORTAL_CLIENT_SCOPES, PORTAL_OAUTH_CLIENTS } from "./portal-oauth-clients.js";
 
 const ELFCOM_CLIENT_ID = "elfcom_web";
 const MYBRANDOS_CLIENT_ID = "mybrandos_public";
@@ -20,6 +21,42 @@ function configuredRedirects(defaults: string[], envName: string): string[] {
     if (redirect && !redirects.includes(redirect)) redirects.push(redirect);
   }
   return redirects;
+}
+
+/**
+ * Create the LifeOS Portal public clients if they do not exist. Create-only:
+ * an existing client (e.g. registered by hand) is never modified here; a
+ * registration that differs from the code is reported, not overwritten.
+ */
+export async function bootstrapPortalClients(log: (msg: string) => void = console.warn) {
+  const results: Array<{ clientId: string; action: "created" | "unchanged" | "differs" }> = [];
+  for (const client of PORTAL_OAUTH_CLIENTS) {
+    const existing = await prisma.application.findUnique({ where: { clientId: client.clientId } });
+    if (!existing) {
+      await prisma.application.create({
+        data: {
+          name: client.name,
+          clientId: client.clientId,
+          type: "public",
+          clientSecretHash: null,
+          redirectUris: JSON.stringify(client.redirectUris),
+          allowedScopes: JSON.stringify(PORTAL_CLIENT_SCOPES),
+          status: "active",
+        },
+      });
+      results.push({ clientId: client.clientId, action: "created" });
+      continue;
+    }
+    const same =
+      existing.type === "public" &&
+      existing.redirectUris === JSON.stringify(client.redirectUris) &&
+      existing.allowedScopes === JSON.stringify(PORTAL_CLIENT_SCOPES);
+    if (!same) {
+      log(`[oauth] ${client.clientId} exists with a registration that differs from code; left unchanged`);
+    }
+    results.push({ clientId: client.clientId, action: same ? "unchanged" : "differs" });
+  }
+  return results;
 }
 
 /**
@@ -72,4 +109,6 @@ export async function bootstrapOAuthApplications() {
       status: "active",
     },
   });
+
+  await bootstrapPortalClients();
 }

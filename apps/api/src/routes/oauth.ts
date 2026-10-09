@@ -8,6 +8,7 @@ import {
   parseScopeParam,
   resolveAccessToken,
 } from "../modules/authorization/service.js";
+import { ID_TOKEN_SIGNING_ALGS } from "../modules/authorization/id-token.js";
 import { getIdentityForUser } from "../modules/identity/service.js";
 import { prisma } from "../db/client.js";
 
@@ -19,6 +20,8 @@ const authorizeQuerySchema = z.object({
   state: z.string().optional(),
   code_challenge: z.string().min(43),
   code_challenge_method: z.literal("S256"),
+  /** OIDC nonce: returned unchanged in the id_token for the client to check. */
+  nonce: z.string().min(1).max(256).optional(),
   /** OIDC-style: "consent" forces Allow UI; "login" forces re-auth (Continue). */
   prompt: z.string().optional(),
   login_hint: z.string().optional(),
@@ -55,6 +58,8 @@ async function issueSessionCode(
     state?: string;
     codeChallenge: string;
     codeChallengeMethod: "S256";
+    nonce?: string;
+    sessionId?: string;
   },
 ): Promise<string> {
   const scopes = parseScopeParam(input.scope);
@@ -65,9 +70,18 @@ async function issueSessionCode(
     scopes,
     codeChallenge: input.codeChallenge,
     codeChallengeMethod: input.codeChallengeMethod,
+    nonce: input.nonce,
+    authTime: await sessionAuthTime(input.sessionId),
   });
   void clientMeta(req);
   return buildRedirectWithCode(input.redirectUri, code, input.state);
+}
+
+/** When the TrustID session behind this authorization started (id_token auth_time). */
+async function sessionAuthTime(sessionId?: string): Promise<Date | null> {
+  if (!sessionId) return null;
+  const session = await prisma.session.findUnique({ where: { id: sessionId }, select: { createdAt: true } });
+  return session?.createdAt ?? null;
 }
 
 /**
@@ -85,6 +99,10 @@ export async function oauthRoutes(app: FastifyInstance) {
       response_types_supported: ["code"],
       grant_types_supported: ["authorization_code"],
       code_challenge_methods_supported: ["S256"],
+      // id_token: signed with the jwks_uri key, aud = requesting client_id.
+      subject_types_supported: ["public"],
+      id_token_signing_alg_values_supported: [...ID_TOKEN_SIGNING_ALGS],
+      claims_supported: ["iss", "sub", "aud", "azp", "exp", "iat", "jti", "nonce", "auth_time"],
       scopes_supported: [
         "openid",
         "identity.basic",
@@ -95,6 +113,7 @@ export async function oauthRoutes(app: FastifyInstance) {
         "identity.email",
         "identity.phone",
         "identity.portrait",
+        "identity.step_up",
         "offline_access",
       ],
       jwks_uri: `${issuer}/.well-known/jwks.json`,
@@ -126,6 +145,8 @@ export async function oauthRoutes(app: FastifyInstance) {
             state: query.state,
             codeChallenge: query.code_challenge,
             codeChallengeMethod: query.code_challenge_method,
+            nonce: query.nonce,
+            sessionId: session.sessionId,
           });
           return reply.redirect(redirectTo);
         } catch {
@@ -143,6 +164,7 @@ export async function oauthRoutes(app: FastifyInstance) {
       code_challenge_method: query.code_challenge_method,
       app_name: appRow.name,
     });
+    if (query.nonce) params.set("nonce", query.nonce);
     if (query.prompt) params.set("prompt", query.prompt);
     if (query.login_hint) params.set("login_hint", query.login_hint);
     if (query.auth_mode) params.set("auth_mode", query.auth_mode);
@@ -168,6 +190,7 @@ export async function oauthRoutes(app: FastifyInstance) {
         state: z.string().optional(),
         code_challenge: z.string(),
         code_challenge_method: z.literal("S256"),
+        nonce: z.string().min(1).max(256).optional(),
         prompt: z.string().optional(),
       })
       .parse(req.body);
@@ -185,6 +208,8 @@ export async function oauthRoutes(app: FastifyInstance) {
         state: body.state,
         codeChallenge: body.code_challenge,
         codeChallengeMethod: body.code_challenge_method,
+        nonce: body.nonce,
+        sessionId: req.auth!.sessionId,
       });
       return { redirectTo, needsConsent: false as const };
     } catch (err) {
@@ -204,6 +229,7 @@ export async function oauthRoutes(app: FastifyInstance) {
         state: z.string().optional(),
         code_challenge: z.string(),
         code_challenge_method: z.literal("S256"),
+        nonce: z.string().min(1).max(256).optional(),
         approve: z.boolean(),
       })
       .parse(req.body);
@@ -223,6 +249,8 @@ export async function oauthRoutes(app: FastifyInstance) {
         scopes: parseScopeParam(body.scope),
         codeChallenge: body.code_challenge,
         codeChallengeMethod: body.code_challenge_method,
+        nonce: body.nonce,
+        authTime: await sessionAuthTime(req.auth!.sessionId),
       });
       void clientMeta(req);
       return {

@@ -9,6 +9,8 @@ import { prisma } from "../../db/client.js";
 import { config } from "../../lib/config.js";
 import { hashSecret, randomToken, sha256Base64Url } from "../../lib/crypto.js";
 import { recordAudit } from "../audit/service.js";
+import { PORTAL_CLIENT_IDS } from "../../lib/portal-oauth-clients.js";
+import { issueIdToken } from "./id-token.js";
 
 function parseJsonArray(raw: string): string[] {
   try {
@@ -18,9 +20,11 @@ function parseJsonArray(raw: string): string[] {
   }
 }
 
-function isAllowedRedirectUri(appRedirectUrisJson: string, redirectUri: string): boolean {
+function isAllowedRedirectUri(appRedirectUrisJson: string, redirectUri: string, clientId?: string): boolean {
   const redirects = parseJsonArray(appRedirectUrisJson);
   if (redirects.includes(redirectUri)) return true;
+  // Portal relying parties: exact registered URIs only.
+  if (clientId && PORTAL_CLIENT_IDS.has(clientId)) return false;
   try {
     const target = new URL(redirectUri);
     const origin = new URL(config.webauthn.origin);
@@ -269,6 +273,10 @@ export async function createAuthorizationCode(input: {
   scopes: string[];
   codeChallenge: string;
   codeChallengeMethod: string;
+  /** OIDC nonce from the authorization request (echoed in the id_token). */
+  nonce?: string | null;
+  /** When the user authenticated to TrustID (id_token auth_time). */
+  authTime?: Date | null;
 }) {
   const app = await prisma.application.findUnique({
     where: { clientId: input.clientId },
@@ -276,7 +284,7 @@ export async function createAuthorizationCode(input: {
   if (!app || app.status !== "active") {
     throw Object.assign(new Error("invalid_client"), { statusCode: 400 });
   }
-  if (!isAllowedRedirectUri(app.redirectUris, input.redirectUri)) {
+  if (!isAllowedRedirectUri(app.redirectUris, input.redirectUri, app.clientId)) {
     throw Object.assign(new Error("invalid_redirect_uri"), { statusCode: 400 });
   }
   const allowed = new Set(parseJsonArray(app.allowedScopes));
@@ -301,6 +309,8 @@ export async function createAuthorizationCode(input: {
       scopes: JSON.stringify(scopes),
       codeChallenge: input.codeChallenge,
       codeChallengeMethod: input.codeChallengeMethod,
+      nonce: input.nonce ?? null,
+      authTime: input.authTime ?? null,
       expiresAt: new Date(Date.now() + 10 * 60 * 1000),
     },
   });
@@ -328,6 +338,7 @@ export async function exchangeAuthorizationCode(input: {
 
   const row = await prisma.oAuthAuthorizationCode.findUnique({
     where: { codeHash: hashSecret(input.code) },
+    include: { user: { select: { trustId: true } } },
   });
   if (!row || row.consumedAt || row.expiresAt.getTime() < Date.now()) {
     throw Object.assign(new Error("invalid_grant"), { statusCode: 400 });
@@ -376,12 +387,23 @@ export async function exchangeAuthorizationCode(input: {
     });
   }
 
+  // OIDC: an id_token for the client that redeemed the code, when openid was granted.
+  const idToken = scopes.includes(SCOPES.OPENID)
+    ? await issueIdToken({
+        trustId: row.user.trustId,
+        clientId: app.clientId,
+        nonce: row.nonce,
+        authTime: row.authTime,
+      })
+    : undefined;
+
   return {
     access_token: accessToken,
     token_type: "Bearer",
     expires_in: 3600,
     scope: scopes.join(" "),
     refresh_token: refreshToken,
+    id_token: idToken,
   };
 }
 
@@ -392,8 +414,10 @@ export async function resolveAccessToken(token: string) {
   });
   if (!row || row.revokedAt || row.expiresAt.getTime() < Date.now()) return null;
   return {
+    tokenId: row.id,
     userId: row.userId,
     applicationId: row.applicationId,
+    clientId: row.application.clientId,
     scopes: parseJsonArray(row.scopes),
     trustId: row.user.trustId,
   };

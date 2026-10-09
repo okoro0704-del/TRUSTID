@@ -58,6 +58,16 @@ async function loadPrivateKey(keyRow: {
   return jose.importJWK(jwk, keyRow.algorithm);
 }
 
+/**
+ * The active TrustID signing key (published in /.well-known/jwks.json).
+ * Used for identity assertions, OIDC id_tokens and step-up approvals; each
+ * token type carries its own typ/audience so one cannot stand in for another.
+ */
+export async function activeSigningKey(): Promise<{ kid: string; alg: string; privateKey: Awaited<ReturnType<typeof jose.importJWK>> }> {
+  const keyRow = await ensureSigningKey();
+  return { kid: keyRow.kid, alg: keyRow.algorithm, privateKey: await loadPrivateKey(keyRow) };
+}
+
 export async function getJwks() {
   const keys = await prisma.assertionSigningKey.findMany({
     where: { OR: [{ active: true }, { retiredAt: { not: null } }] },
