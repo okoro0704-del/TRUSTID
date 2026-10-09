@@ -5,7 +5,7 @@ name: Portal Provider Contracts Verification
 # Scoped to the verification branch; never deploys.
 on:
   push:
-    branches: [verify/portal-provider-contracts-v1]
+    branches: [verify/portal-provider-contracts-v1, verify/portal-provider-ci-recovery-v1]
   workflow_dispatch:
 
 permissions:
@@ -40,10 +40,16 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # A clean checkout has no built workspace packages and no Prisma client,
+      # and npm test assumes both. build:api builds the API's workspace
+      # dependencies in order, generates the Prisma client (SQLite schema) and
+      # builds the API; build:web builds the UI packages and the web app.
+      - name: Build API (workspace deps, Prisma client, API)
+        run: npm run build:api
+      - name: Web production build (UI packages, typecheck, bundle)
+        run: npm run build:web
       - name: Repository test suite (security packages, API, SDK, Digi, vault, UI)
         run: npm test
-      - name: Web production build (typecheck + bundle)
-        run: npm run build:web
 
   postgres:
     name: Provider contracts on PostgreSQL + pgvector
@@ -71,8 +77,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Build shared packages
-        run: npm run build -w @trustid/shared && npm run build -w @trustid/zk && npm run build -w @trustid/sdk
+      # API test imports need every API workspace dependency built
+      # (shared, zk, bbs-sdk, baas-sdk, sdk, sovereign-crypto, digi-bridge).
+      - name: Build API workspace dependencies
+        run: npm run build:api && npm run build -w @trustid/digi-bridge
       - name: Generate the Prisma client for PostgreSQL
         run: PRISMA_PROVIDER=postgresql node scripts/sync-prisma-provider.mjs && npm run db:generate -w @trustid/api
       - name: Provider contract suites against PostgreSQL
