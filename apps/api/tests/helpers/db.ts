@@ -15,6 +15,8 @@ const testDbPath = path.join(testRoot, "test.db").replaceAll("\\", "/");
  * no --force-reset (avoid destructive migrate flags in CI/agent contexts).
  */
 export function setupTestDatabase() {
+  const postgresUrl = process.env.TRUSTID_TEST_POSTGRES_URL?.trim();
+  if (postgresUrl) return setupPostgresTestDatabase(postgresUrl);
   // Windows schema engine expects the freshly allocated SQLite file to exist.
   fs.writeFileSync(testDbPath, "", { flag: "wx" });
   process.env.DATABASE_URL = `file:${testDbPath}`;
@@ -39,6 +41,43 @@ export function setupTestDatabase() {
   });
 }
 
+/**
+ * CI only (TRUSTID_TEST_POSTGRES_URL): run the same suites against a real,
+ * disposable PostgreSQL + pgvector database. The Prisma client must have been
+ * generated for postgresql (PRISMA_PROVIDER=postgresql npm run db:generate).
+ */
+function setupPostgresTestDatabase(url: string) {
+  if (!/^postgres(ql)?:\/\/[^@]+@(127\.0\.0\.1|localhost)[:/]/.test(url)) {
+    throw new Error("TRUSTID_TEST_POSTGRES_URL must point at a local disposable database");
+  }
+  process.env.DATABASE_URL = url;
+  process.env.NODE_ENV = "test";
+  process.env.COOKIE_SECRET = "test-cookie-secret";
+  process.env.WEBAUTHN_RP_ID = "localhost";
+  process.env.WEBAUTHN_RP_NAME = "TrustID";
+  process.env.WEBAUTHN_ORIGIN = "http://localhost:5173";
+  process.env.IDENTITY_VERIFICATION_MODE = "mock";
+  process.env.ASSERTION_ISSUER = "http://localhost:5173";
+  process.env.TRUSTID_MEDIA_ROOT = path.join(testRoot, "media");
+  const repoRoot = path.resolve(apiRoot, "../..");
+  const prismaCli = path.join(repoRoot, "node_modules/prisma/build/index.js");
+  const schema = fs.readFileSync(path.join(apiRoot, "prisma/schema.prisma"), "utf8")
+    .replace(/(datasource db\s*\{\s*provider\s*=\s*)"[^"]+"/, '$1"postgresql"');
+  const isolatedSchema = path.join(testRoot, "schema.prisma");
+  fs.writeFileSync(isolatedSchema, schema);
+  const env = { ...process.env, DATABASE_URL: url };
+  execFileSync(process.execPath, [prismaCli, "db", "execute", "--url", url, "--stdin"], {
+    input: "CREATE EXTENSION IF NOT EXISTS vector;",
+    env,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  execFileSync(process.execPath, [prismaCli, "db", "push", "--skip-generate", "--schema", isolatedSchema], {
+    cwd: testRoot,
+    env,
+    stdio: "pipe",
+  });
+}
+
 export async function resetTables(prisma: PrismaClient) {
   await prisma.auditEvent.deleteMany();
   await prisma.securityNotification.deleteMany();
@@ -50,6 +89,7 @@ export async function resetTables(prisma: PrismaClient) {
   await prisma.identityPortrait.deleteMany();
   await prisma.identityMediaObject.deleteMany();
   await prisma.webAuthnChallenge.deleteMany();
+  await prisma.stepUpChallenge.deleteMany();
   await prisma.oAuthAccessToken.deleteMany();
   await prisma.oAuthRefreshToken.deleteMany();
   await prisma.oAuthAuthorizationCode.deleteMany();

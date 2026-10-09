@@ -1,0 +1,82 @@
+name: Portal Provider Contracts Verification
+
+# Clean-checkout verification of the TrustID provider contracts for the LifeOS
+# Portal (OIDC id_token, Portal clients, CORS, authenticated step-up).
+# Scoped to the verification branch; never deploys.
+on:
+  push:
+    branches: [verify/portal-provider-contracts-v1]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    name: Full regression + builds
+    runs-on: ubuntu-latest
+    # The Digi RP suite (part of npm test) needs a local PostgreSQL.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: pdi_test
+          POSTGRES_PASSWORD: pdi_test
+          POSTGRES_DB: pdi_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pdi_test -d pdi_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DIGI_CORE_TEST_DATABASE_URL: postgresql://pdi_test:pdi_test@127.0.0.1:5432/pdi_test
+      DDI_TEST_DATABASE_URL: postgresql://pdi_test:pdi_test@127.0.0.1:5432/pdi_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Repository test suite (security packages, API, SDK, Digi, vault, UI)
+        run: npm test
+      - name: Web production build (typecheck + bundle)
+        run: npm run build:web
+
+  postgres:
+    name: Provider contracts on PostgreSQL + pgvector
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: trustid_test
+          POSTGRES_PASSWORD: trustid_test
+          POSTGRES_DB: trustid_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U trustid_test -d trustid_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      TRUSTID_TEST_POSTGRES_URL: postgresql://trustid_test:trustid_test@127.0.0.1:5432/trustid_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build shared packages
+        run: npm run build -w @trustid/shared && npm run build -w @trustid/zk && npm run build -w @trustid/sdk
+      - name: Generate the Prisma client for PostgreSQL
+        run: PRISMA_PROVIDER=postgresql node scripts/sync-prisma-provider.mjs && npm run db:generate -w @trustid/api
+      - name: Provider contract suites against PostgreSQL
+        run: >-
+          npm run test -w @trustid/api -- --run
+          tests/portal-oidc.test.ts tests/portal-cors.test.ts tests/step-up.test.ts
+          tests/ambient-no-enroll-on-failure.test.ts tests/foundation-config.test.ts
