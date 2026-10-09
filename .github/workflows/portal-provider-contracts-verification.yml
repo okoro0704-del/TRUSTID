@@ -80,3 +80,4 @@ jobs:
           npm run test -w @trustid/api -- --run
           tests/portal-oidc.test.ts tests/portal-cors.test.ts tests/step-up.test.ts
           tests/ambient-no-enroll-on-failure.test.ts tests/foundation-config.test.ts
+          tests/oauth-authorization-transaction.postgres.test.ts

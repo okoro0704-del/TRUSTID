@@ -25,6 +25,7 @@ model User {
   devicePairingRequests   DevicePairingRequest[]
   webauthnChallenges      WebAuthnChallenge[]
   oauthAuthorizationCodes OAuthAuthorizationCode[]
+  oauthAuthorizationTransactions OAuthAuthorizationTransaction[]
   oauthAccessTokens       OAuthAccessToken[]
   oauthRefreshTokens      OAuthRefreshToken[]
   identityVerifications   IdentityVerification[]
@@ -220,6 +221,7 @@ model Session {
   device      Device?      @relation(fields: [deviceId], references: [id], onDelete: SetNull)
   application Application? @relation(fields: [applicationId], references: [id], onDelete: SetNull)
   presentation SessionPresentation?
+  oauthAuthorizationTransactions OAuthAuthorizationTransaction[]
 
   @@index([userId])
   @@map("sessions")
@@ -313,6 +315,7 @@ model Application {
   authorizations          Authorization[]
   sessions                Session[]
   oauthAuthorizationCodes OAuthAuthorizationCode[]
+  oauthAuthorizationTransactions OAuthAuthorizationTransaction[]
   oauthAccessTokens       OAuthAccessToken[]
   oauthRefreshTokens      OAuthRefreshToken[]
   deviceApprovalRequests  DeviceApprovalRequest[]
@@ -371,6 +374,35 @@ model OAuthAuthorizationCode {
   application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
 
   @@map("oauth_authorization_codes")
+}
+
+/// Server-bound, pre-consent OAuth context. The raw handle is never persisted.
+model OAuthAuthorizationTransaction {
+  id                String    @id @default(cuid())
+  handleHash        String    @unique @map("handle_hash")
+  preAuthBindingHash String   @map("pre_auth_binding_hash")
+  userId            String?   @map("user_id")
+  sessionId         String?   @map("session_id")
+  applicationId     String    @map("application_id")
+  redirectUri       String    @map("redirect_uri")
+  scopes            String
+  state             String?
+  codeChallenge     String    @map("code_challenge")
+  codeChallengeMethod String  @map("code_challenge_method")
+  nonce             String?
+  status            String    @default("pending")
+  expiresAt         DateTime  @map("expires_at")
+  consumedAt        DateTime? @map("consumed_at")
+  deniedAt          DateTime? @map("denied_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+
+  user        User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  session     Session?    @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, status])
+  @@index([expiresAt, status])
+  @@map("oauth_authorization_transactions")
 }
 
 /// Authenticated step-up for an already signed-in TrustID subject, requested

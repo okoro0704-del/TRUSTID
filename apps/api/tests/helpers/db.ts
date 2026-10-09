@@ -47,7 +47,15 @@ export function setupTestDatabase() {
  * generated for postgresql (PRISMA_PROVIDER=postgresql npm run db:generate).
  */
 function setupPostgresTestDatabase(url: string) {
-  if (!/^postgres(ql)?:\/\/[^@]+@(127\.0\.0\.1|localhost)[:/]/.test(url)) {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error("TRUSTID_TEST_POSTGRES_URL must be a valid local disposable database URL");
+  }
+  const database = decodeURIComponent(parsed.pathname).replace(/^\//, "");
+  if (!/^(trustid_test|trustid_s1_test(?:_[a-z0-9_]+)?)$/.test(database)
+    || !["127.0.0.1", "localhost"].includes(parsed.hostname)) {
     throw new Error("TRUSTID_TEST_POSTGRES_URL must point at a local disposable database");
   }
   process.env.DATABASE_URL = url;
@@ -93,6 +101,7 @@ export async function resetTables(prisma: PrismaClient) {
   await prisma.oAuthAccessToken.deleteMany();
   await prisma.oAuthRefreshToken.deleteMany();
   await prisma.oAuthAuthorizationCode.deleteMany();
+  await prisma.oAuthAuthorizationTransaction.deleteMany();
   await prisma.authorizationScope.deleteMany();
   await prisma.authorization.deleteMany();
   await prisma.session.deleteMany();
