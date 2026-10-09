@@ -107,10 +107,16 @@ describe.runIf(Boolean(process.env.TRUSTID_TEST_POSTGRES_URL))("S2 server-bound 
     await app.inject({ method: "POST", url: "/oauth/consent/resume", headers, cookies: { [bindingCookie]: jar[bindingCookie]! }, payload: { transaction } });
     const csrf = await app.inject({ method: "POST", url: "/oauth/consent", headers, cookies: { [bindingCookie]: jar[bindingCookie]!, [csrfCookie]: jar[csrfCookie]! }, payload: { transaction, approve: true } });
     expect(csrf.statusCode).toBe(403);
-    const approved = await app.inject({ method: "POST", url: "/oauth/consent", headers: { ...headers, "x-trustid-oauth-csrf": jar[csrfCookie]! }, cookies: { [bindingCookie]: jar[bindingCookie]!, [csrfCookie]: jar[csrfCookie]! }, payload: { transaction, approve: true } });
+    const approved = await app.inject({ method: "POST", url: "/oauth/consent", headers: { ...headers, "x-trustid-oauth-csrf": jar[csrfCookie]! }, cookies: { [bindingCookie]: jar[bindingCookie]!, [csrfCookie]: jar[csrfCookie]! }, payload: {
+      transaction, approve: true, client_id: "attacker", redirect_uri: "https://evil.example/callback",
+      scope: "openid elevated", code_challenge: "replacement", nonce: "replacement",
+    } });
     expect(approved.statusCode).toBe(200);
     expect(new URL(approved.json().redirectTo).searchParams.get("code")).toBeTruthy();
     expect(await prisma.oAuthAuthorizationCode.count()).toBe(1);
+    expect(await prisma.oAuthAuthorizationCode.findFirstOrThrow()).toMatchObject({
+      redirectUri: PORTAL.redirectUris[0], nonce: "s2-nonce", codeChallenge: (await prisma.oAuthAuthorizationTransaction.findFirstOrThrow()).codeChallenge,
+    });
 
     const denied = await start();
     const deniedHandle = new URL(denied.response.headers.location as string).searchParams.get("transaction")!;
