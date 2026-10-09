@@ -372,6 +372,7 @@ model OAuthAuthorizationCode {
 
   user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  authorizationTransaction OAuthAuthorizationTransaction?
 
   @@map("oauth_authorization_codes")
 }
@@ -394,11 +395,13 @@ model OAuthAuthorizationTransaction {
   expiresAt         DateTime  @map("expires_at")
   consumedAt        DateTime? @map("consumed_at")
   deniedAt          DateTime? @map("denied_at")
+  authorizationCodeId String? @unique @map("authorization_code_id")
   createdAt         DateTime  @default(now()) @map("created_at")
 
   user        User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
   session     Session?    @relation(fields: [sessionId], references: [id], onDelete: SetNull)
   application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  authorizationCode OAuthAuthorizationCode? @relation(fields: [authorizationCodeId], references: [id], onDelete: SetNull)
 
   @@index([sessionId, status])
   @@index([expiresAt, status])

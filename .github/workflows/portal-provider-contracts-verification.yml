@@ -82,3 +82,4 @@ jobs:
           tests/ambient-no-enroll-on-failure.test.ts tests/foundation-config.test.ts
           tests/oauth-authorization-transaction.postgres.test.ts
           tests/oauth-authorization-s2.postgres.test.ts
+          tests/oauth-authorization-s3.postgres.test.ts

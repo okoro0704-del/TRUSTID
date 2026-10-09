@@ -15,6 +15,7 @@ import {
   createAuthorizationTransaction,
   denyAuthorizationTransaction,
   getAuthorizationTransactionForBrowser,
+  issueAuthorizationCodeFromTransaction,
 } from "../modules/authorization/transaction-store.js";
 import { ID_TOKEN_SIGNING_ALGS } from "../modules/authorization/id-token.js";
 import { getIdentityForUser } from "../modules/identity/service.js";
@@ -323,9 +324,14 @@ export async function oauthRoutes(app: FastifyInstance) {
           if (row.state) url.searchParams.set("state", row.state);
           return { redirectTo: url.toString() };
         }
-        // Never issue a code here. S3 will atomically claim this row and create
-        // the authorization code in one Prisma transaction.
-        return reply.code(409).send({ error: "authorization_transaction_issuance_pending" });
+        const issued = await issueAuthorizationCodeFromTransaction({
+          handle: transaction,
+          preAuthBinding: transactionBinding(req),
+          userId: req.auth!.userId,
+          sessionId: req.auth!.sessionId!,
+          authTime: await sessionAuthTime(req.auth!.sessionId),
+        });
+        return { redirectTo: buildRedirectWithCode(issued.row.redirectUri, issued.code, issued.row.state ?? undefined) };
       } catch (err) {
         const e = err as { message?: string; statusCode?: number };
         return reply.code(e.statusCode ?? 400).send({ error: e.message ?? "invalid_request" });

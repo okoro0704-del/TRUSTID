@@ -99,7 +99,7 @@ describe.runIf(Boolean(process.env.TRUSTID_TEST_POSTGRES_URL))("S2 server-bound 
     expect(crossSession.statusCode).toBe(400);
   });
 
-  it("rejects consent CSRF, preserves denial semantics, and cannot issue a code before S3", async () => {
+  it("rejects consent CSRF, issues once after S3, and preserves denial semantics", async () => {
     const { sessionToken } = await portalUser();
     const { response, cookies: jar } = await start();
     const transaction = new URL(response.headers.location as string).searchParams.get("transaction")!;
@@ -107,9 +107,10 @@ describe.runIf(Boolean(process.env.TRUSTID_TEST_POSTGRES_URL))("S2 server-bound 
     await app.inject({ method: "POST", url: "/oauth/consent/resume", headers, cookies: { [bindingCookie]: jar[bindingCookie]! }, payload: { transaction } });
     const csrf = await app.inject({ method: "POST", url: "/oauth/consent", headers, cookies: { [bindingCookie]: jar[bindingCookie]!, [csrfCookie]: jar[csrfCookie]! }, payload: { transaction, approve: true } });
     expect(csrf.statusCode).toBe(403);
-    const pending = await app.inject({ method: "POST", url: "/oauth/consent", headers: { ...headers, "x-trustid-oauth-csrf": jar[csrfCookie]! }, cookies: { [bindingCookie]: jar[bindingCookie]!, [csrfCookie]: jar[csrfCookie]! }, payload: { transaction, approve: true } });
-    expect(pending.statusCode).toBe(409);
-    expect(await prisma.oAuthAuthorizationCode.count()).toBe(0);
+    const approved = await app.inject({ method: "POST", url: "/oauth/consent", headers: { ...headers, "x-trustid-oauth-csrf": jar[csrfCookie]! }, cookies: { [bindingCookie]: jar[bindingCookie]!, [csrfCookie]: jar[csrfCookie]! }, payload: { transaction, approve: true } });
+    expect(approved.statusCode).toBe(200);
+    expect(new URL(approved.json().redirectTo).searchParams.get("code")).toBeTruthy();
+    expect(await prisma.oAuthAuthorizationCode.count()).toBe(1);
 
     const denied = await start();
     const deniedHandle = new URL(denied.response.headers.location as string).searchParams.get("transaction")!;
@@ -117,7 +118,7 @@ describe.runIf(Boolean(process.env.TRUSTID_TEST_POSTGRES_URL))("S2 server-bound 
     const deniedResponse = await app.inject({ method: "POST", url: "/oauth/consent", headers: { ...headers, "x-trustid-oauth-csrf": denied.cookies[csrfCookie]! }, cookies: { [bindingCookie]: denied.cookies[bindingCookie]!, [csrfCookie]: denied.cookies[csrfCookie]! }, payload: { transaction: deniedHandle, approve: false } });
     expect(deniedResponse.statusCode).toBe(200);
     expect(new URL(deniedResponse.json().redirectTo).searchParams.get("error")).toBe("access_denied");
-    expect(await prisma.oAuthAuthorizationCode.count()).toBe(0);
+    expect(await prisma.oAuthAuthorizationCode.count()).toBe(1);
   });
 
   it("keeps the established OAuth behavior when the integration boundary is disabled", async () => {
