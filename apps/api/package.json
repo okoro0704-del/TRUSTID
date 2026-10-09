@@ -13,7 +13,7 @@
     "db:push:deploy": "node ../../scripts/ensure-pg-extensions.mjs && prisma db push",
     "db:push:reset": "node ../../scripts/guard-local-reset.mjs",
     "db:seed": "tsx prisma/seed.ts",
-    "test": "vitest run"
+    "test": "node scripts/run-isolated-vitest.mjs"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
