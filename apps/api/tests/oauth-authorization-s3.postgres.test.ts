@@ -1,4 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import http from "node:http";
 import { PrismaClient } from "@prisma/client";
 import { buildApp } from "../src/app.js";
 import { prisma } from "../src/db/client.js";
@@ -11,15 +12,17 @@ import { PORTAL, pkcePair } from "./helpers/portal-oauth.js";
 import { createZeroPiiUser } from "./helpers/zero-pii-user.js";
 import { resetTables } from "./helpers/db.js";
 
+process.env.OAUTH_TRANSACTION_INTEGRATION = "true";
+
 async function bound() {
   const user = await createZeroPiiUser(`s3-${crypto.randomUUID()}@example.test`);
-  const { session } = await createSession({ userId: user.id });
+  const { session, token: sessionToken } = await createSession({ userId: user.id });
   const app = await prisma.application.findUniqueOrThrow({ where: { clientId: PORTAL.clientId } });
   const { verifier, challenge } = pkcePair();
   const binding = `binding-${crypto.randomUUID()}`;
   const created = await createAuthorizationTransaction({ applicationId: app.id, redirectUri: PORTAL.redirectUris[0]!, scopes: ["openid", "identity.basic"], state: "original-state", codeChallenge: challenge, nonce: "original-nonce", preAuthBinding: binding });
   await prisma.oAuthAuthorizationTransaction.update({ where: { id: created.row.id }, data: { userId: user.id, sessionId: session.id } });
-  return { user, session, binding, verifier, ...created };
+  return { user, session, sessionToken, binding, verifier, ...created };
 }
 
 describe.runIf(Boolean(process.env.TRUSTID_TEST_POSTGRES_URL))("S3 atomic authorization-code issuance", () => {
@@ -98,5 +101,39 @@ describe.runIf(Boolean(process.env.TRUSTID_TEST_POSTGRES_URL))("S3 atomic author
     await prisma.oAuthAuthorizationTransaction.update({ where: { id: denied.row.id }, data: { status: "denied", deniedAt: new Date() } });
     await expect(issueAuthorizationCodeFromTransaction({ handle: denied.handle, preAuthBinding: denied.binding, userId: denied.user.id, sessionId: denied.session.id })).rejects.toThrow("invalid_authorization_transaction");
     expect(await prisma.oAuthAuthorizationCode.count()).toBe(0);
+  });
+
+  it("does not reissue after a real post-commit HTTP transport interruption", async () => {
+    const f = await bound();
+    let destroyOnce = true;
+    const app = await buildApp();
+    app.addHook("onSend", async (request, reply, payload) => {
+      if (destroyOnce && request.url === "/oauth/consent") {
+        destroyOnce = false;
+        reply.raw.destroy();
+      }
+      return payload;
+    });
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    const body = JSON.stringify({ transaction: f.handle, approve: true });
+    try {
+      await new Promise<void>((resolve) => {
+        const req = http.request(`${address}/oauth/consent`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json", "content-length": Buffer.byteLength(body),
+            "x-trustid-session": f.sessionToken,
+            "x-trustid-oauth-csrf": "csrf-proof",
+            cookie: `trustid_oauth_binding=${encodeURIComponent(f.binding)}; trustid_oauth_csrf=csrf-proof`,
+          },
+        });
+        req.on("error", () => resolve()); req.on("close", () => resolve()); req.end(body);
+      });
+      const row = await prisma.oAuthAuthorizationTransaction.findUniqueOrThrow({ where: { id: f.row.id } });
+      expect(row.status).toBe("consumed");
+      expect(await prisma.oAuthAuthorizationCode.count()).toBe(1);
+      await expect(issueAuthorizationCodeFromTransaction({ handle: f.handle, preAuthBinding: f.binding, userId: f.user.id, sessionId: f.session.id })).rejects.toThrow("invalid_authorization_transaction");
+      expect(await prisma.oAuthAuthorizationCode.count()).toBe(1);
+    } finally { await app.close(); }
   });
 });
