@@ -40,6 +40,34 @@ function isAllowedRedirectUri(appRedirectUrisJson: string, redirectUri: string, 
   return false;
 }
 
+/** Validate the complete OAuth request before any durable continuation exists. */
+export async function validateAuthorizationRequest(input: {
+  clientId: string;
+  redirectUri: string;
+  scopes: string[];
+  codeChallenge: string;
+  codeChallengeMethod: string;
+}) {
+  if (input.codeChallengeMethod !== "S256" || input.codeChallenge.length < 43) {
+    throw Object.assign(new Error("invalid_request"), { statusCode: 400 });
+  }
+  const app = await prisma.application.findUnique({ where: { clientId: input.clientId } });
+  if (!app || app.status !== "active") {
+    throw Object.assign(new Error("invalid_client"), { statusCode: 400 });
+  }
+  if (!isAllowedRedirectUri(app.redirectUris, input.redirectUri, app.clientId)) {
+    throw Object.assign(new Error("invalid_redirect_uri"), { statusCode: 400 });
+  }
+  const allowed = new Set(parseJsonArray(app.allowedScopes));
+  const requested = [...new Set(input.scopes)];
+  if (requested.some((scope) => !allowed.has(scope))) {
+    throw Object.assign(new Error("invalid_scope"), { statusCode: 400 });
+  }
+  if (!requested.includes(SCOPES.OPENID) && allowed.has(SCOPES.OPENID)) requested.push(SCOPES.OPENID);
+  if (!requested.length) throw Object.assign(new Error("invalid_scope"), { statusCode: 400 });
+  return { application: app, scopes: requested };
+}
+
 export async function listApplications(userId?: string) {
   const apps = await prisma.application.findMany({
     where: { status: "active" },

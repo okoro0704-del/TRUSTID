@@ -306,6 +306,14 @@ export const config = {
     return `${origin}/api`;
   },
   /**
+   * S2 is deliberately off unless an isolated environment opts in.  S3 must
+   * atomically claim the authorization transaction and create its code before
+   * this can become a production path.
+   */
+  get oauthTransactionIntegrationEnabled() {
+    return process.env.OAUTH_TRANSACTION_INTEGRATION === "true";
+  },
+  /**
    * Origins whose browser requests may carry credentials (TrustID's own apps):
    * CORS_ORIGINS, or development defaults. In production, anything that is not
    * an exact https origin (wildcards, "null", localhost, plain http) is dropped.

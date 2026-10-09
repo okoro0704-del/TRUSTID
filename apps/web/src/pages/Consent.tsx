@@ -45,6 +45,7 @@ export function ConsentPage() {
   const [params] = useSearchParams();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [transactionInfo, setTransactionInfo] = useState<{ app_name: string; scopes: string[] } | null>(null);
   /** null = connecting; true = show Allow UI; false = redirecting */
   const [needsConsent, setNeedsConsent] = useState<boolean | null>(null);
   const finishStarted = useRef(false);
@@ -62,10 +63,18 @@ export function ConsentPage() {
       app_name: params.get("app_name") ?? "Application",
       prompt: params.get("prompt") ?? "",
       ui_mode: params.get("ui_mode") ?? "",
+      transaction: params.get("transaction") ?? "",
     }),
     [params],
   );
   const silent = consent.ui_mode === "silent";
+
+  useEffect(() => {
+    if (!consent.transaction) return;
+    void api<{ application: { name: string }; scopes: string[] }>(`/oauth/consent/transaction?transaction=${encodeURIComponent(consent.transaction)}`)
+      .then((result) => setTransactionInfo({ app_name: result.application.name, scopes: result.scopes }))
+      .catch((err) => setError(err instanceof Error ? err.message : "Invalid authorization request"));
+  }, [consent.transaction]);
 
   useEffect(() => {
     if (loading || !identity) return;
@@ -83,14 +92,10 @@ export function ConsentPage() {
           "/oauth/consent/resume",
           {
             method: "POST",
-            body: JSON.stringify({
-              client_id: consent.client_id,
-              redirect_uri: consent.redirect_uri,
-              scope: consent.scope,
-              state: consent.state,
-              code_challenge: consent.code_challenge,
-              code_challenge_method: consent.code_challenge_method,
-              nonce: consent.nonce || undefined,
+            body: JSON.stringify(consent.transaction ? { transaction: consent.transaction } : {
+              client_id: consent.client_id, redirect_uri: consent.redirect_uri, scope: consent.scope,
+              state: consent.state, code_challenge: consent.code_challenge,
+              code_challenge_method: consent.code_challenge_method, nonce: consent.nonce || undefined,
               prompt: consent.prompt || undefined,
             }),
           },
@@ -103,15 +108,10 @@ export function ConsentPage() {
         // Fallback: explicit approve (should be rare)
         const approved = await api<{ redirectTo: string }>("/oauth/consent", {
           method: "POST",
-          body: JSON.stringify({
-            client_id: consent.client_id,
-            redirect_uri: consent.redirect_uri,
-            scope: consent.scope,
-            state: consent.state,
-            code_challenge: consent.code_challenge,
-            code_challenge_method: consent.code_challenge_method,
-            nonce: consent.nonce || undefined,
-            approve: true,
+          body: JSON.stringify(consent.transaction ? { transaction: consent.transaction, approve: true } : {
+            client_id: consent.client_id, redirect_uri: consent.redirect_uri, scope: consent.scope,
+            state: consent.state, code_challenge: consent.code_challenge,
+            code_challenge_method: consent.code_challenge_method, nonce: consent.nonce || undefined, approve: true,
           }),
         });
         setNeedsConsent(false);
@@ -151,15 +151,10 @@ export function ConsentPage() {
     try {
       const result = await api<{ redirectTo: string }>("/oauth/consent", {
         method: "POST",
-        body: JSON.stringify({
-          client_id: consent.client_id,
-          redirect_uri: consent.redirect_uri,
-          scope: consent.scope,
-          state: consent.state,
-          code_challenge: consent.code_challenge,
-          code_challenge_method: consent.code_challenge_method,
-          nonce: consent.nonce || undefined,
-          approve,
+        body: JSON.stringify(consent.transaction ? { transaction: consent.transaction, approve } : {
+          client_id: consent.client_id, redirect_uri: consent.redirect_uri, scope: consent.scope,
+          state: consent.state, code_challenge: consent.code_challenge,
+          code_challenge_method: consent.code_challenge_method, nonce: consent.nonce || undefined, approve,
         }),
       });
       window.location.assign(result.redirectTo);
@@ -170,14 +165,14 @@ export function ConsentPage() {
   }
 
   // Only shown for prompt=consent or if auto-finish failed.
-  const scopes = consent.scope.split(/[\s+]+/).filter(Boolean);
+  const scopes = transactionInfo?.scopes ?? consent.scope.split(/[\s+]+/).filter(Boolean);
 
   return (
     <AuthChrome title="Authorize">
       <div className="panel surface-block">
         <h1>Authorize {consent.app_name}</h1>
         <p className="lead">
-          {consent.app_name} wants scoped access to your TrustID. It will not
+          {transactionInfo?.app_name ?? consent.app_name} wants scoped access to your TrustID. It will not
           receive your passkeys or recovery secrets.
         </p>
         <p className="muted">Signed in as {identity.trustId}</p>

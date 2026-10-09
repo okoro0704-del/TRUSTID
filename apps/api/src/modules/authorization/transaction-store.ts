@@ -28,6 +28,15 @@ export async function getAuthorizationTransaction(handle: string, db: Db = prism
   return row;
 }
 
+/** Read a pending transaction only for the browser that received its opaque handle. */
+export async function getAuthorizationTransactionForBrowser(handle: string, preAuthBinding: string, db: Db = prisma) {
+  const row = await getAuthorizationTransaction(handle, db);
+  if (row.preAuthBindingHash !== hashSecret(preAuthBinding)) {
+    throw Object.assign(new Error("invalid_authorization_transaction"), { statusCode: 400 });
+  }
+  return row;
+}
+
 export async function bindAuthorizationTransaction(handle: string, preAuthBinding: string, userId: string, sessionId: string, db: Db = prisma) {
   const updated = await db.oAuthAuthorizationTransaction.updateMany({ where: {
     handleHash: hashSecret(handle), preAuthBindingHash: hashSecret(preAuthBinding), userId: null, sessionId: null, ...pending(),

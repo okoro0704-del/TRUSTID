@@ -45,6 +45,12 @@ export async function api<T>(
   if (body != null) {
     headers["Content-Type"] = headers["Content-Type"] ?? "application/json";
   }
+  // The opt-in S2 consent flow uses double-submit CSRF in addition to the
+  // HttpOnly browser-binding cookie. It is inert for the legacy OAuth path.
+  if (path.startsWith("/oauth/consent") && typeof document !== "undefined") {
+    const csrf = document.cookie.split("; ").find((part) => part.startsWith("trustid_oauth_csrf="))?.slice("trustid_oauth_csrf=".length);
+    if (csrf) headers["x-trustid-oauth-csrf"] = decodeURIComponent(csrf);
+  }
 
   let res: Response;
   try {

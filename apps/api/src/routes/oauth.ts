@@ -2,12 +2,20 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { clientMeta, requireSession, tryResolveSession } from "../lib/auth-context.js";
 import { config } from "../lib/config.js";
+import { randomToken } from "../lib/crypto.js";
 import {
   createAuthorizationCode,
   exchangeAuthorizationCode,
   parseScopeParam,
   resolveAccessToken,
+  validateAuthorizationRequest,
 } from "../modules/authorization/service.js";
+import {
+  bindAuthorizationTransaction,
+  createAuthorizationTransaction,
+  denyAuthorizationTransaction,
+  getAuthorizationTransactionForBrowser,
+} from "../modules/authorization/transaction-store.js";
 import { ID_TOKEN_SIGNING_ALGS } from "../modules/authorization/id-token.js";
 import { getIdentityForUser } from "../modules/identity/service.js";
 import { prisma } from "../db/client.js";
@@ -32,6 +40,31 @@ const authorizeQuerySchema = z.object({
   /** LifeOS silent enter — Continue suppresses status chrome and auto-starts passkey. */
   ui_mode: z.string().optional(),
 });
+
+const transactionRefSchema = z.object({ transaction: z.string().min(20).max(256) });
+const consentDecisionSchema = transactionRefSchema.extend({ approve: z.boolean() });
+const BINDING_COOKIE = "trustid_oauth_binding";
+const CSRF_COOKIE = "trustid_oauth_csrf";
+
+function setTransactionCookies(reply: import("fastify").FastifyReply, binding: string, csrf: string) {
+  const base = { path: "/", sameSite: config.isDev ? "lax" as const : "none" as const, secure: !config.isDev, maxAge: 10 * 60 };
+  reply.setCookie(BINDING_COOKIE, binding, { ...base, httpOnly: true });
+  reply.setCookie(CSRF_COOKIE, csrf, { ...base, httpOnly: false });
+}
+
+function transactionBinding(req: FastifyRequest) {
+  const binding = req.cookies[BINDING_COOKIE];
+  if (!binding) throw Object.assign(new Error("invalid_authorization_transaction"), { statusCode: 400 });
+  return binding;
+}
+
+function requireTransactionCsrf(req: FastifyRequest) {
+  const cookie = req.cookies[CSRF_COOKIE];
+  const header = req.headers["x-trustid-oauth-csrf"];
+  if (!cookie || typeof header !== "string" || header !== cookie) {
+    throw Object.assign(new Error("invalid_csrf"), { statusCode: 403 });
+  }
+}
 
 function forceConsentUi(prompt?: string | null): boolean {
   if (!prompt) return false;
@@ -131,6 +164,36 @@ export async function oauthRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: "invalid_client" });
     }
 
+    // S2 is an explicitly opt-in, non-production preparation path. S3 owns
+    // the atomic transaction claim + authorization-code issuance transition.
+    if (config.oauthTransactionIntegrationEnabled) {
+      try {
+        const validated = await validateAuthorizationRequest({
+          clientId: query.client_id,
+          redirectUri: query.redirect_uri,
+          scopes: parseScopeParam(query.scope),
+          codeChallenge: query.code_challenge,
+          codeChallengeMethod: query.code_challenge_method,
+        });
+        const binding = randomToken(32);
+        const csrf = randomToken(32);
+        const { handle } = await createAuthorizationTransaction({
+          applicationId: validated.application.id,
+          redirectUri: query.redirect_uri,
+          scopes: validated.scopes,
+          state: query.state,
+          codeChallenge: query.code_challenge,
+          nonce: query.nonce,
+          preAuthBinding: binding,
+        });
+        setTransactionCookies(reply, binding, csrf);
+        return reply.redirect(`${config.webauthn.origin}/oauth/consent?transaction=${encodeURIComponent(handle)}`);
+      } catch (err) {
+        const e = err as { message?: string; statusCode?: number };
+        return reply.code(e.statusCode ?? 400).send({ error: e.message ?? "invalid_request" });
+      }
+    }
+
     // Already signed in → issue code and return to the app (no Allow screen).
     // prompt=consent still forces the Authorize UI below.
     if (!forceConsentUi(query.prompt)) {
@@ -181,7 +244,31 @@ export async function oauthRoutes(app: FastifyInstance) {
    * After passkey / Continue, Consent UI calls this to finish OAuth without an Allow screen.
    * prompt=consent still returns needsConsent so the Authorize UI can be shown.
    */
+  app.get("/oauth/consent/transaction", async (req, reply) => {
+    if (!config.oauthTransactionIntegrationEnabled) return reply.code(404).send({ error: "not_found" });
+    try {
+      const { transaction } = transactionRefSchema.parse(req.query);
+      const row = await getAuthorizationTransactionForBrowser(transaction, transactionBinding(req));
+      const application = await prisma.application.findUnique({ where: { id: row.applicationId } });
+      if (!application || application.status !== "active") throw Object.assign(new Error("invalid_client"), { statusCode: 400 });
+      return { application: { name: application.name }, scopes: JSON.parse(row.scopes) as string[] };
+    } catch (err) {
+      const e = err as { message?: string; statusCode?: number };
+      return reply.code(e.statusCode ?? 400).send({ error: e.message ?? "invalid_request" });
+    }
+  });
+
   app.post("/oauth/consent/resume", { preHandler: requireSession }, async (req, reply) => {
+    if (config.oauthTransactionIntegrationEnabled) {
+      try {
+        const { transaction } = transactionRefSchema.parse(req.body);
+        const row = await bindAuthorizationTransaction(transaction, transactionBinding(req), req.auth!.userId, req.auth!.sessionId!);
+        return { needsConsent: true as const, transaction: row.id };
+      } catch (err) {
+        const e = err as { message?: string; statusCode?: number };
+        return reply.code(e.statusCode ?? 400).send({ error: e.message ?? "invalid_request" });
+      }
+    }
     const body = z
       .object({
         client_id: z.string(),
@@ -221,6 +308,29 @@ export async function oauthRoutes(app: FastifyInstance) {
   });
 
   app.post("/oauth/consent", { preHandler: requireSession }, async (req, reply) => {
+    if (config.oauthTransactionIntegrationEnabled) {
+      try {
+        requireTransactionCsrf(req);
+        const { transaction, approve } = consentDecisionSchema.parse(req.body);
+        const row = await getAuthorizationTransactionForBrowser(transaction, transactionBinding(req));
+        if (row.sessionId !== req.auth!.sessionId || row.userId !== req.auth!.userId) {
+          throw Object.assign(new Error("invalid_authorization_transaction"), { statusCode: 400 });
+        }
+        if (!approve) {
+          await denyAuthorizationTransaction(transaction, req.auth!.sessionId!);
+          const url = new URL(row.redirectUri);
+          url.searchParams.set("error", "access_denied");
+          if (row.state) url.searchParams.set("state", row.state);
+          return { redirectTo: url.toString() };
+        }
+        // Never issue a code here. S3 will atomically claim this row and create
+        // the authorization code in one Prisma transaction.
+        return reply.code(409).send({ error: "authorization_transaction_issuance_pending" });
+      } catch (err) {
+        const e = err as { message?: string; statusCode?: number };
+        return reply.code(e.statusCode ?? 400).send({ error: e.message ?? "invalid_request" });
+      }
+    }
     const body = z
       .object({
         client_id: z.string(),
