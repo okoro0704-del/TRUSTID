@@ -1,4 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { PrismaClient } from "@prisma/client";
+import { buildApp } from "../src/app.js";
 import { prisma } from "../src/db/client.js";
 import { createSession } from "../src/modules/sessions/service.js";
 import { createAuthorizationTransaction, issueAuthorizationCodeFromTransaction } from "../src/modules/authorization/transaction-store.js";
@@ -44,6 +46,19 @@ describe.runIf(Boolean(process.env.TRUSTID_TEST_POSTGRES_URL))("S3 atomic author
     expect(await prisma.oAuthAuthorizationCode.count()).toBe(1);
   });
 
+  it("issues exactly once through independent Prisma connection pools", async () => {
+    const f = await bound();
+    const input = { handle: f.handle, preAuthBinding: f.binding, userId: f.user.id, sessionId: f.session.id };
+    const first = new PrismaClient(); const second = new PrismaClient();
+    try {
+      const results = await Promise.allSettled([issueAuthorizationCodeFromTransaction(input, first), issueAuthorizationCodeFromTransaction(input, second)]);
+      expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+      const row = await prisma.oAuthAuthorizationTransaction.findUniqueOrThrow({ where: { id: f.row.id } });
+      expect(row.authorizationCodeId).toBeTruthy();
+      expect(await prisma.oAuthAuthorizationCode.count()).toBe(1);
+    } finally { await Promise.all([first.$disconnect(), second.$disconnect()]); }
+  });
+
   it("rolls back the actual conditional claim when PostgreSQL rejects code persistence", async () => {
     const f = await bound();
     const input = { handle: f.handle, preAuthBinding: f.binding, userId: f.user.id, sessionId: f.session.id };
@@ -66,6 +81,22 @@ describe.runIf(Boolean(process.env.TRUSTID_TEST_POSTGRES_URL))("S3 atomic author
     const tokens = await exchangeAuthorizationCode({ code: issued.code, clientId: PORTAL.clientId, redirectUri: PORTAL.redirectUris[0]!, codeVerifier: f.verifier });
     const claims = await verifyIdToken({ idToken: tokens.id_token!, clientId: PORTAL.clientId, nonce: "original-nonce" });
     expect(claims.sub).toBe(f.user.trustId);
+    const app = await buildApp();
+    try {
+      const userinfo = await app.inject({ method: "GET", url: "/oauth/userinfo", headers: { authorization: `Bearer ${tokens.access_token}` } });
+      expect(userinfo.json().sub).toBe(claims.sub);
+      expect(userinfo.json().sub).not.toBe("TD-SUBJECT-MISMATCH");
+    } finally { await app.close(); }
     await expect(exchangeAuthorizationCode({ code: issued.code, clientId: PORTAL.clientId, redirectUri: PORTAL.redirectUris[0]!, codeVerifier: f.verifier })).rejects.toThrow("invalid_grant");
+  });
+
+  it("refuses expired and denied transactions on the actual S3 issuance service", async () => {
+    const expired = await bound();
+    await prisma.oAuthAuthorizationTransaction.update({ where: { id: expired.row.id }, data: { expiresAt: new Date(Date.now() - 1) } });
+    await expect(issueAuthorizationCodeFromTransaction({ handle: expired.handle, preAuthBinding: expired.binding, userId: expired.user.id, sessionId: expired.session.id })).rejects.toThrow("invalid_authorization_transaction");
+    const denied = await bound();
+    await prisma.oAuthAuthorizationTransaction.update({ where: { id: denied.row.id }, data: { status: "denied", deniedAt: new Date() } });
+    await expect(issueAuthorizationCodeFromTransaction({ handle: denied.handle, preAuthBinding: denied.binding, userId: denied.user.id, sessionId: denied.session.id })).rejects.toThrow("invalid_authorization_transaction");
+    expect(await prisma.oAuthAuthorizationCode.count()).toBe(0);
   });
 });

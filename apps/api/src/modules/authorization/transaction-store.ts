@@ -62,8 +62,8 @@ export async function claimAuthorizationTransaction(handle: string, sessionId: s
  */
 export async function issueAuthorizationCodeFromTransaction(input: {
   handle: string; preAuthBinding: string; userId: string; sessionId: string; authTime?: Date | null;
-}) {
-  return prisma.$transaction(async (tx) => {
+}, client: typeof prisma = prisma) {
+  return client.$transaction(async (tx) => {
     const row = await getAuthorizationTransactionForBrowser(input.handle, input.preAuthBinding, tx);
     if (row.userId !== input.userId || row.sessionId !== input.sessionId) {
       throw Object.assign(new Error("invalid_authorization_transaction"), { statusCode: 400 });
