@@ -20,6 +20,7 @@ type Prefs = {
 };
 
 const LINKS = [
+  { to: "/dashboard/profile", label: "Profile" },
   { to: "/dashboard/identity", label: "Identity" },
   { to: "/dashboard/devices", label: "Devices" },
   { to: "/dashboard/passkeys", label: "Passkeys" },

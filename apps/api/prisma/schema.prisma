@@ -50,6 +50,8 @@ model User {
   masterDevices           MasterDevice[]
   masterAuthChallenges    MasterAuthChallenge[]
   devicePushTokens        DevicePushToken[]
+  humanProfile            HumanProfile?
+  identityDocumentSubmissions IdentityDocumentSubmission[]
 
   @@map("users")
 }
@@ -63,6 +65,57 @@ model Profile {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("profiles")
+}
+
+/// Self-declared human profile, keyed by the user and bound to the immutable
+/// TrustID subject. Names are sealed (AES-256-GCM) at rest and are never keys,
+/// biometric identifiers or proof of legal identity.
+model HumanProfile {
+  userId         String   @id @map("user_id")
+  /// TrustID subject (User.trustId); never caller-supplied.
+  subjectId      String   @unique @map("subject_id")
+  /// sealJson({ givenName, familyName, preferredName, displayName })
+  namesSealed    String   @map("names_sealed")
+  /// IdentityMediaObject with purpose profile_avatar; never biometric evidence.
+  avatarMediaId  String?  @unique @map("avatar_media_id")
+  profileVersion Int      @default(1) @map("profile_version")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  user   User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  avatar IdentityMediaObject? @relation("HumanProfileAvatar", fields: [avatarMediaId], references: [id], onDelete: SetNull)
+
+  @@map("human_profiles")
+}
+
+/// Identity document submitted for future verification. Submission is not
+/// verification: status stays UNVERIFIED until a registered provider's
+/// authenticated evidence moves it (none is registered in V1).
+model IdentityDocumentSubmission {
+  id                   String    @id @default(cuid())
+  userId               String    @map("user_id")
+  /// passport | national_id | drivers_licence | voters_card | residence_permit | other
+  documentType         String    @map("document_type")
+  /// IdentityMediaObject with purpose identity_document; null once deleted.
+  mediaObjectId        String?   @unique @map("media_object_id")
+  consentVersion       String    @map("consent_version")
+  consentedAt          DateTime  @map("consented_at")
+  submittedAt          DateTime  @default(now()) @map("submitted_at")
+  /// UNVERIFIED | PENDING | VERIFIED | REJECTED | EXPIRED
+  verificationStatus   String    @default("UNVERIFIED") @map("verification_status")
+  /// NONE until a registered verification provider takes the submission.
+  verificationProvider String    @default("NONE") @map("verification_provider")
+  providerReference    String?   @map("provider_reference")
+  statusChangedAt      DateTime? @map("status_changed_at")
+  deletedAt            DateTime? @map("deleted_at")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  user        User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mediaObject IdentityMediaObject? @relation("IdentityDocumentMedia", fields: [mediaObjectId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@map("identity_document_submissions")
 }
 
 model ContactMethod {
@@ -646,6 +699,8 @@ model IdentityMediaObject {
 
   user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   portraits IdentityPortrait[]
+  humanProfileAvatar HumanProfile?              @relation("HumanProfileAvatar")
+  identityDocument   IdentityDocumentSubmission? @relation("IdentityDocumentMedia")
 
   @@index([userId])
   @@map("identity_media_objects")

@@ -86,6 +86,8 @@ export async function resetTables(prisma: PrismaClient) {
   await prisma.impersonationReport.deleteMany();
   await prisma.identityVerification.deleteMany();
   await prisma.verifiedIdentityProfile.deleteMany();
+  await prisma.identityDocumentSubmission.deleteMany();
+  await prisma.humanProfile.deleteMany();
   await prisma.identityPortrait.deleteMany();
   await prisma.identityMediaObject.deleteMany();
   await prisma.webAuthnChallenge.deleteMany();

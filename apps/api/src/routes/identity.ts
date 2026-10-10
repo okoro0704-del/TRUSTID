@@ -300,7 +300,8 @@ export async function identityRoutes(app: FastifyInstance) {
         return reply.code(403).send({ error: "forbidden", message: "Token mismatch" });
       }
       const media = await prisma.identityMediaObject.findFirst({
-        where: { id: params.mediaId, userId: claims.userId, deletedAt: null },
+        // Identity documents are never served through media links.
+        where: { id: params.mediaId, userId: claims.userId, deletedAt: null, purpose: { not: "identity_document" } },
       });
       if (!media) {
         return reply.code(404).send({ error: "not_found", message: "Media not found" });

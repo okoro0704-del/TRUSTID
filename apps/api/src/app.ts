@@ -12,6 +12,7 @@ import { applicationRoutes } from "./routes/applications.js";
 import { authorizationRoutes } from "./routes/authorizations.js";
 import { oauthRoutes } from "./routes/oauth.js";
 import { stepUpRoutes } from "./routes/step-up.js";
+import { profileRoutes } from "./routes/profile.js";
 import { securityRoutes } from "./routes/security.js";
 import { trustRoutes } from "./routes/trust.js";
 import { passkeyRoutes } from "./routes/passkeys.js";
@@ -203,6 +204,7 @@ export async function buildApp() {
   await app.register(authorizationRoutes);
   await app.register(oauthRoutes);
   await app.register(stepUpRoutes);
+  await app.register(profileRoutes);
   await app.register(securityRoutes);
   await app.register(trustRoutes);
   await app.register(passkeyRoutes);

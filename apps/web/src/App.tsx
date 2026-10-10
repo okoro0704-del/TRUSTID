@@ -25,6 +25,8 @@ import { GuardiansPage } from "./pages/trust/GuardiansPage";
 import { AccountPage } from "./pages/trust/Account";
 import { IdentityPage } from "./pages/trust/Identity";
 import { ControlCenterPage } from "./pages/trust/ControlCenter";
+import { ProfilePage } from "./pages/trust/Profile";
+import { ProfileCompletePage } from "./pages/ProfileComplete";
 
 /** Development builds only; production bundles never include the lab dashboard. */
 const AssuranceLabPage = import.meta.env.DEV
@@ -46,6 +48,7 @@ export function App() {
       <Route path="/enroll" element={<EnrollPage />} />
       <Route path="/waiting-approval" element={<WaitingApprovalPage />} />
       <Route path="/oauth/consent" element={<ConsentPage />} />
+      <Route path="/profile/complete" element={<ProfileCompletePage />} />
       <Route
         path="/internal/biometric-eval"
         element={<BiometricEvalCollectorPage />}
@@ -82,6 +85,7 @@ export function App() {
         <Route path="guardians" element={<GuardiansPage />} />
         <Route path="identity" element={<IdentityPage />} />
         <Route path="account" element={<AccountPage />} />
+        <Route path="profile" element={<ProfilePage />} />
       </Route>
     </Routes>
   );

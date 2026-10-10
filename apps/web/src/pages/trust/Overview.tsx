@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../../lib/api";
+import { getOwnProfile } from "../../lib/profile";
 
 type PrimitiveBinding = {
   id: string;
@@ -15,6 +16,7 @@ type PrimitiveBinding = {
 export function OverviewPage() {
   const [bindings, setBindings] = useState<PrimitiveBinding[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [profileIncomplete, setProfileIncomplete] = useState(false);
 
   useEffect(() => {
     api<{ primitives: PrimitiveBinding[] }>("/ecosystem/status")
@@ -22,6 +24,12 @@ export function OverviewPage() {
       .catch((err) =>
         setError(err instanceof Error ? err.message : "Failed to load"),
       );
+  }, []);
+
+  useEffect(() => {
+    getOwnProfile()
+      .then((p) => setProfileIncomplete(!p.completed))
+      .catch(() => setProfileIncomplete(false));
   }, []);
 
   const boundCount = bindings.filter((b) => b.bound).length;
@@ -38,6 +46,16 @@ export function OverviewPage() {
           from ElfCom, DataZone, FinProv, Platform Job, and Master Distribution.
         </p>
       </section>
+
+      {profileIncomplete && (
+        <section className="section surface-block">
+          <h2>Complete your profile</h2>
+          <p className="sub">Add your name and picture so Digi and your apps know what to call you.</p>
+          <Link className="btn btn-primary" to="/profile/complete">
+            Complete profile
+          </Link>
+        </section>
+      )}
 
       <section className="quick-grid consumer-quick">
         <Link className="quick-tile consumer-tile" to="/dashboard/ecosystem">

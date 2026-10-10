@@ -13,6 +13,10 @@ export const SCOPES = {
   IDENTITY_BBS_STEP_UP: "identity.bbs_step_up",
   /** Request and consume authenticated step-up approvals (Master Device / biometric) */
   IDENTITY_STEP_UP: "identity.step_up",
+  /** Standard OIDC profile claims (self-declared names, avatar) via userinfo */
+  PROFILE: "profile",
+  /** Minimal addressing profile for Digi AI: subject, chosen name, avatar ref */
+  IDENTITY_ADDRESSING: "identity.addressing",
   OFFLINE_ACCESS: "offline_access",
 } as const;
 
@@ -233,6 +237,8 @@ export const SCOPE_LABELS: Record<string, string> = {
   "identity.zk_claims": "Zero-knowledge trust claims (no raw PII)",
   "identity.bbs_step_up": "Payment-bound biometric banking step-up proofs",
   "identity.portrait": "Verified identity portrait reference",
+  profile: "Your self-declared name and profile picture",
+  "identity.addressing": "The name you chose to be addressed by, and your profile picture",
   offline_access: "Stay signed in (refresh)",
   "wallet.reference": "Wallet reference (future)",
 };
@@ -244,6 +250,12 @@ export const AUDIT_EVENTS = {
   IDENTITY_VERIFICATION_FAILED: "identity.verification.failed",
   IDENTITY_VERIFICATION_REVOKED: "identity.verification.revoked",
   IDENTITY_PROFILE_CHANGED: "identity.profile.changed",
+  HUMAN_PROFILE_UPDATED: "human_profile.updated",
+  HUMAN_PROFILE_AVATAR_CHANGED: "human_profile.avatar.changed",
+  HUMAN_PROFILE_AVATAR_DELETED: "human_profile.avatar.deleted",
+  IDENTITY_DOCUMENT_SUBMITTED: "identity_document.submitted",
+  IDENTITY_DOCUMENT_DELETED: "identity_document.deleted",
+  IDENTITY_DOCUMENT_STATUS_CHANGED: "identity_document.status_changed",
   IDENTITY_SUSPENSION: "identity.suspension",
   IDENTITY_RECOVERY: "identity.recovery",
   IDENTITY_IMPERSONATION_REPORTED: "identity.impersonation.reported",

@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { SCOPES } from "@trustid/shared";
 import { clientMeta, requireSession, tryResolveSession } from "../lib/auth-context.js";
 import { config } from "../lib/config.js";
 import {
@@ -10,6 +11,7 @@ import {
 } from "../modules/authorization/service.js";
 import { ID_TOKEN_SIGNING_ALGS } from "../modules/authorization/id-token.js";
 import { getIdentityForUser } from "../modules/identity/service.js";
+import { getOidcProfileClaims } from "../modules/human-profile/service.js";
 import { prisma } from "../db/client.js";
 
 const authorizeQuerySchema = z.object({
@@ -102,7 +104,11 @@ export async function oauthRoutes(app: FastifyInstance) {
       // id_token: signed with the jwks_uri key, aud = requesting client_id.
       subject_types_supported: ["public"],
       id_token_signing_alg_values_supported: [...ID_TOKEN_SIGNING_ALGS],
-      claims_supported: ["iss", "sub", "aud", "azp", "exp", "iat", "jti", "nonce", "auth_time"],
+      claims_supported: [
+        "iss", "sub", "aud", "azp", "exp", "iat", "jti", "nonce", "auth_time",
+        // userinfo only, with the profile scope (self-declared, not verified identity)
+        "name", "given_name", "family_name", "preferred_username", "picture", "updated_at",
+      ],
       scopes_supported: [
         "openid",
         "identity.basic",
@@ -114,6 +120,8 @@ export async function oauthRoutes(app: FastifyInstance) {
         "identity.phone",
         "identity.portrait",
         "identity.step_up",
+        "profile",
+        "identity.addressing",
         "offline_access",
       ],
       jwks_uri: `${issuer}/.well-known/jwks.json`,
@@ -301,6 +309,9 @@ export async function oauthRoutes(app: FastifyInstance) {
     if (!access) {
       return reply.code(401).send({ error: "invalid_token" });
     }
-    return getIdentityForUser(access.userId, access.scopes);
+    const identity = await getIdentityForUser(access.userId, access.scopes);
+    // Standard OIDC profile claims only when this client was granted `profile`.
+    if (!identity || !access.scopes.includes(SCOPES.PROFILE)) return identity;
+    return { ...identity, ...(await getOidcProfileClaims(access.userId, access.clientId)) };
   });
 }

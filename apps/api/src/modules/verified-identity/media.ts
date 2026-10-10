@@ -39,10 +39,16 @@ export async function storePrivateBytes(input: {
   purpose: string;
   mimeType: string;
   bytes: Buffer;
+  /**
+   * Keep bytes in TrustID's encrypted private store even when DataZone is
+   * bound. Required for media the user must be able to delete: the DataZone
+   * client has no delete operation.
+   */
+  localOnly?: boolean;
 }): Promise<StoredMedia> {
   const contentHash = createHash("sha256").update(input.bytes).digest("hex");
   const dz = getDataZoneClient();
-  if (dz.bound && input.trustId) {
+  if (dz.bound && input.trustId && !input.localOnly) {
     const remote = await dz.putObject({
       userId: input.userId,
       trustId: input.trustId,
@@ -116,6 +122,25 @@ export async function deletePrivateBytes(storageKey: string): Promise<void> {
     await unlink(path.join(mediaRoot(), storageKey.replace(/^datazone:\/\//, "")));
   } catch {
     /* ignore missing */
+  }
+}
+
+/**
+ * Delete locally stored bytes and fail loudly if they may still exist. Remote
+ * (DataZone) keys are refused: there is no remote delete to guarantee removal.
+ */
+export async function deletePrivateBytesStrict(storageKey: string): Promise<void> {
+  if (storageKey.startsWith("datazone://") || storageKey.includes("..") || path.isAbsolute(storageKey)) {
+    throw Object.assign(new Error("media_delete_unsupported"), { statusCode: 500, code: "media_delete_unsupported" });
+  }
+  const target = path.resolve(mediaRoot(), storageKey);
+  if (!target.startsWith(path.resolve(mediaRoot()) + path.sep)) {
+    throw Object.assign(new Error("media_delete_unsupported"), { statusCode: 500, code: "media_delete_unsupported" });
+  }
+  try {
+    await unlink(target);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
   }
 }
 

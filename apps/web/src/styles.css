@@ -1787,3 +1787,95 @@ select {
     flex-direction: column;
   }
 }
+
+/* Human profile (completion wizard + management) */
+.profile-wizard,
+.profile-page form {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.profile-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.75rem;
+  color: var(--mist);
+}
+
+.profile-steps li {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.2rem 0.6rem;
+}
+
+.profile-steps li.done {
+  border-color: rgba(217, 181, 106, 0.55);
+  color: var(--sand);
+}
+
+.profile-preview {
+  width: 112px;
+  height: 112px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--line);
+}
+
+.profile-preview.small {
+  width: 56px;
+  height: 56px;
+}
+
+.profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.consent-check {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  font-size: 0.85rem;
+  color: var(--mist);
+}
+
+.consent-check input {
+  margin-top: 0.2rem;
+}
+
+.profile-review {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.5rem 1rem;
+  margin: 0;
+}
+
+.profile-review dt {
+  color: var(--mist);
+}
+
+.profile-review dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.profile-documents {
+  list-style: none;
+  margin: 0 0 0.75rem;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.profile-documents li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
