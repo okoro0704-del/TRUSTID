@@ -27,6 +27,11 @@ const CONTROLS = [
     blurb: "New device requests",
   },
   {
+    to: "/dashboard/master-device",
+    title: "Master Device",
+    blurb: "Approve sensitive actions requested by apps",
+  },
+  {
     to: "/dashboard/temporary",
     title: "Temporary access",
     blurb: "Short-lived device access",

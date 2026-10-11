@@ -11,6 +11,7 @@ import { OverviewPage } from "./pages/trust/Overview";
 import { DevicesPage } from "./pages/trust/Devices";
 import { DeviceDetailPage } from "./pages/trust/DeviceDetail";
 import { ApprovalsPage } from "./pages/trust/Approvals";
+import { MasterDevicePage } from "./pages/trust/MasterDevice";
 import { TemporaryDevicesPage } from "./pages/trust/TemporaryDevices";
 import { NotificationsPage } from "./pages/trust/Notifications";
 import { EcosystemPage } from "./pages/trust/Ecosystem";
@@ -71,6 +72,7 @@ export function App() {
         <Route path="devices" element={<DevicesPage />} />
         <Route path="devices/:id" element={<DeviceDetailPage />} />
         <Route path="approvals" element={<ApprovalsPage />} />
+        <Route path="master-device" element={<MasterDevicePage />} />
         <Route path="temporary" element={<TemporaryDevicesPage />} />
         <Route path="notifications" element={<NotificationsPage />} />
         <Route path="ecosystem" element={<EcosystemPage />} />

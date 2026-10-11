@@ -95,6 +95,7 @@ const TITLES: Record<string, string> = {
   "/dashboard/security": "Media Locker",
   "/dashboard/devices": "Devices",
   "/dashboard/approvals": "Approvals",
+  "/dashboard/master-device": "Master Device",
   "/dashboard/temporary": "Temporary",
   "/dashboard/applications": "Connected apps",
   "/dashboard/sessions": "Sessions",

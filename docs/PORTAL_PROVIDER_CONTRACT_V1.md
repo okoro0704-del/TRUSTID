@@ -241,10 +241,65 @@ device=<master_device_id>
 exp=<ISO-8601 expiry>
 ```
 
-verified server-side with the SPKI public key the Master Device registered.
+verified server-side with the SPKI public key the Master Device enrolled (§4.1).
 `200 {"status":"approved"}`. Errors: `400 invalid_request | wrong_method`,
 `401 invalid_signature`, `403 wrong_master_device`, `409 challenge_not_pending`,
 `410 challenge_expired`. Failed signatures/devices count; the third denies.
+
+### 4.1 Master Device enrollment — TrustID session
+
+A step-up Master Device is a `master_devices` row whose public key is an ECDSA
+P-256 SPKI. Rows written by the account/terminal binding flows carry an opaque
+placeholder; they never approve and do not count as registered (challenge
+creation answers `409 master_device_not_registered`).
+
+**`GET /v1/step-up/master-device`** → `{ registered, device: { id, enrolled_at,
+last_used_at, key_thumbprint } | null, enrollment_available_at }`.
+
+**`POST /v1/step-up/master-device/enrollment`** `{ "public_key": "<base64url SPKI, P-256>" }`
+→ `{ enrollment, signing_payload, expires_at }` (5 min). The token is HMAC-sealed
+and bound to the subject, this TrustID session, the key and the current
+enrollment state. `409 master_device_already_enrolled` while a device is
+enrolled; `409 master_device_enrollment_cooldown` after a passkey-only revoke.
+
+**`POST /v1/step-up/master-device/enrollment/complete`**
+`{ enrollment, public_key, device_fingerprint, signature, reauth }`: `signature`
+is the new key's signature over `signing_payload` (proof of possession):
+
+```
+trustid-master-device-enroll/v1
+enrollment=<nonce>
+sub=<TD-…>
+key=<BASE64URL(SHA256(spki))>
+exp=<ISO-8601>
+```
+
+`reauth` is a WebAuthn assertion from `/auth/webauthn/reauth/options` (passkey,
+local user verification, trusted non-temporary device). Errors: `400
+invalid_public_key | invalid_enrollment`, `401 invalid_signature |
+reauthentication_failed`, `403 enrollment_session_mismatch`, `409
+enrollment_stale | master_device_already_enrolled | device_bound_elsewhere`, `410
+enrollment_expired`. A completed token cannot be replayed (state changed).
+
+**`POST /v1/step-up/master-device/revoke`** `{ reauth, device_signature? }`. With
+`device_signature` over `trustid-master-device-revoke/v1
+sub=<TD-…>
+device=<id>`
+(device in hand) a new device can be enrolled at once; passkey only (device
+lost) holds enrollment for 24 h, so a stolen session plus passkey cannot
+silently swap keys. Pending challenges bound to the device are cancelled.
+
+The legacy `POST /v1/trust-id/master-device/register` and terminal binding
+flows refuse to write a P-256 key (`409 master_device_enrollment_required`) and
+never overwrite or supersede an enrolled step-up key.
+
+**Trust Center UI** (`/dashboard/master-device`): generates a non-extractable
+WebCrypto P-256 key kept in IndexedDB, enrolls it with the ceremony above,
+lists pending requests (client name, exact action, request fingerprint,
+countdown), approves only by signing — after checking the `signing_payload`
+names exactly the displayed challenge, subject, action, device and expiry —
+and denies explicitly. Expired, cancelled, already-decided, wrong-device and
+rejected-signature outcomes are shown as failures, never as approval.
 
 **`POST /v1/step-up/challenges/{challenge_id}/biometric/verify`**
 
@@ -302,10 +357,13 @@ markJtiUsed(payload.jti);
   configuration switch to bypass it.
 - **Threshold:** 0.35 cosine distance, **uncalibrated** (no authorized
   evaluation dataset). Unchanged.
-- **Master Device:** only as strong as device key protection (Android
-  Keystore EC P-256 with biometric-gated use). Nothing in the TrustID apps
-  currently calls Master Device registration or shows a step-up approval
-  screen; both are needed before any user can approve (§7).
+- **Master Device:** only as strong as device key protection. The Trust
+  Center key is a non-extractable WebCrypto key bound to that browser profile:
+  software-protected, not hardware-backed, and usable without a fresh user
+  gesture check by the server once the page is open. Enrollment and revocation
+  require a passkey; individual approvals require the key and a TrustID
+  session. A native Keystore/Secure Enclave key with biometric-gated use would
+  be stronger and is not provided.
 - The legacy routes `/v1/trust-id/challenges/issue`, `/challenges/approve`,
   `/master-device/verify` and `/verify-biometric` are **not** step-up: the first
   is unauthenticated, the approve/verify routes never check the signature, and
@@ -313,8 +371,10 @@ markJtiUsed(payload.jti);
 
 ## 7. Not provided by this change
 
-- TrustID app UI: Master Device registration and a pending step-up approval
-  screen (`GET /v1/step-up/pending` + approve/deny).
+- Native (Android Keystore / Secure Enclave) Master Device keys; the Trust
+  Center page uses WebCrypto (§4.1, §6).
+- Moving the Master Device to a new device in one step: revoke on the old
+  device (immediate) or, if it is lost, wait 24 h after a passkey-only revoke.
 - TrustID web page for biometric step-up (blocked anyway by PAD).
 - Refresh tokens for Portal (no `offline_access`); Portal re-authorizes when the
   access token (1 h) expires.

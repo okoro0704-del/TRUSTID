@@ -25,6 +25,12 @@ import {
   type ClientAccess,
 } from "../modules/step-up/service.js";
 import { biometricPayloadSchema } from "../modules/trust-id/schemas.js";
+import {
+  beginEnrollment,
+  completeEnrollment,
+  revokeStepUpDevice,
+  stepUpDeviceStatus,
+} from "../modules/step-up/master-device-enrollment.js";
 
 const challengeParams = z.object({ challengeId: z.string().regex(/^[A-Za-z0-9_-]{43}$/) });
 
@@ -34,6 +40,11 @@ function sendError(reply: FastifyReply, err: unknown) {
   }
   if (err instanceof z.ZodError) {
     return reply.code(400).send({ error: "invalid_request", message: "Request body or parameters are invalid." });
+  }
+  // Passkey re-authentication failures (verifyReauthentication) carry a 4xx statusCode.
+  const status = (err as { statusCode?: number }).statusCode;
+  if (typeof status === "number" && status >= 400 && status < 500) {
+    return reply.code(status).send({ error: "reauthentication_failed", message: (err as Error).message });
   }
   throw err;
 }
@@ -176,6 +187,61 @@ export async function stepUpRoutes(app: FastifyInstance) {
       }
     },
   );
+
+  // ---- Subject: step-up Master Device enrollment ----------------------------
+
+  app.get("/v1/step-up/master-device", { preHandler: requireSession }, async (req) => {
+    return stepUpDeviceStatus(req.auth!);
+  });
+
+  app.post("/v1/step-up/master-device/enrollment", { preHandler: requireSession }, async (req, reply) => {
+    try {
+      const body = z.object({ public_key: z.string().min(64).max(400) }).strict().parse(req.body ?? {});
+      return await beginEnrollment(req.auth!, { publicKey: body.public_key });
+    } catch (err) {
+      return sendError(reply, err);
+    }
+  });
+
+  app.post("/v1/step-up/master-device/enrollment/complete", { preHandler: requireSession }, async (req, reply) => {
+    try {
+      const body = z
+        .object({
+          enrollment: z.string().min(16).max(2048),
+          public_key: z.string().min(64).max(400),
+          device_fingerprint: z.string().min(16).max(256),
+          signature: z.string().min(8).max(512),
+          reauth: z.record(z.unknown()),
+        })
+        .strict()
+        .parse(req.body ?? {});
+      return await completeEnrollment(
+        req.auth!,
+        {
+          enrollment: body.enrollment,
+          publicKey: body.public_key,
+          deviceFingerprint: body.device_fingerprint,
+          signature: body.signature,
+          reauth: body.reauth,
+        },
+        clientMeta(req),
+      );
+    } catch (err) {
+      return sendError(reply, err);
+    }
+  });
+
+  app.post("/v1/step-up/master-device/revoke", { preHandler: requireSession }, async (req, reply) => {
+    try {
+      const body = z
+        .object({ reauth: z.record(z.unknown()), device_signature: z.string().min(8).max(512).optional() })
+        .strict()
+        .parse(req.body ?? {});
+      return await revokeStepUpDevice(req.auth!, { reauth: body.reauth, deviceSignature: body.device_signature }, clientMeta(req));
+    } catch (err) {
+      return sendError(reply, err);
+    }
+  });
 
   app.post("/v1/step-up/challenges/:challengeId/deny", { preHandler: requireSession }, async (req, reply) => {
     const challengeId = parseChallengeId(req, reply);
