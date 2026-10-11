@@ -2,6 +2,7 @@ import { AUDIT_EVENTS } from "@trustid/shared";
 import { prisma } from "../../db/client.js";
 import { deviceFingerprintHash, hashSecret } from "../../lib/crypto.js";
 import { recordAudit } from "../audit/service.js";
+import { isStepUpSigningKey } from "../step-up/master-device-keys.js";
 
 export async function registerMasterDevice(input: {
   userId: string;
@@ -14,6 +15,16 @@ export async function registerMasterDevice(input: {
   const fingerprintHash = deviceFingerprintHash(input.deviceFingerprint);
   const publicKeyBytes = Buffer.from(input.publicKey, "base64url");
 
+  // Step-up signing keys (ECDSA P-256) are enrolled only through the step-up enrollment ceremony
+  // (passkey re-authentication + proof of possession). This terminal binding path never writes one
+  // and never overwrites one.
+  if (isStepUpSigningKey(publicKeyBytes)) {
+    throw Object.assign(
+      new Error("Enroll a step-up Master Device from the Trust Center (POST /v1/step-up/master-device/enrollment)"),
+      { statusCode: 409, code: "master_device_enrollment_required" },
+    );
+  }
+
   const existing = await prisma.masterDevice.findUnique({
     where: { deviceFingerprint: fingerprintHash },
   });
@@ -21,6 +32,12 @@ export async function registerMasterDevice(input: {
     throw Object.assign(
       new Error("This device is already bound to another Trust ID"),
       { statusCode: 409 },
+    );
+  }
+  if (existing && isStepUpSigningKey(existing.publicKey)) {
+    throw Object.assign(
+      new Error("This device holds an enrolled step-up Master Device key"),
+      { statusCode: 409, code: "master_device_enrolled" },
     );
   }
 

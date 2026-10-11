@@ -38,6 +38,7 @@ import { deviceFingerprintHash } from "../../lib/crypto.js";
 import { recordAudit } from "../audit/service.js";
 import { activeSigningKey } from "../verified-identity/assertions.js";
 import { pgVectorMatcher } from "../trust-id/vector-matcher.js";
+import { activeStepUpDevice } from "./master-device-keys.js";
 import type { BiometricPayload } from "../trust-id/schemas.js";
 import { biometricStepUpPadReady, SERVER_PAD_STATUS } from "./pad-policy.js";
 
@@ -167,10 +168,8 @@ export async function createStepUpChallenge(
 
   let masterDeviceId: string | null = null;
   if (input.method === "master_device") {
-    const master = await prisma.masterDevice.findFirst({
-      where: { userId: access.userId, isMasterDevice: true, status: "active" },
-      orderBy: { updatedAt: "desc" },
-    });
+    // Only a row holding a usable ECDSA P-256 key counts; terminal placeholder bindings never approve.
+    const master = await activeStepUpDevice(access.userId);
     if (!master) fail(409, "master_device_not_registered", "This TrustID has no registered Master Device.");
     masterDeviceId = master!.id;
   } else {
