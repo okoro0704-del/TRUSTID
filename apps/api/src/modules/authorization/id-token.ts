@@ -9,7 +9,7 @@
  * routes accept only opaque access tokens looked up server-side, so a JWT
  * presented as a bearer never authorizes anything.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import * as jose from "jose";
 import { config } from "../../lib/config.js";
 import { activeSigningKey, getJwks } from "../verified-identity/assertions.js";
@@ -17,14 +17,28 @@ import { activeSigningKey, getJwks } from "../verified-identity/assertions.js";
 export const ID_TOKEN_TTL_SECONDS = 300;
 export const ID_TOKEN_SIGNING_ALGS = ["EdDSA"] as const;
 
+/**
+ * at_hash binds the access token returned in the same token response to this id_token (OIDC Core
+ * §3.1.3.6): base64url of the left half of the hash of the ASCII access token. For EdDSA/Ed25519 the
+ * hash is SHA-512. A relying party that checks it knows the opaque access token it is about to use
+ * was issued to its own client in that exchange, not substituted from another client.
+ */
+export function accessTokenHash(accessToken: string): string {
+  const digest = createHash("sha512").update(accessToken, "ascii").digest();
+  return digest.subarray(0, digest.length / 2).toString("base64url");
+}
+
 export async function issueIdToken(input: {
   trustId: string;
   clientId: string;
   nonce?: string | null;
   authTime?: Date | null;
+  /** The access token issued in the same response; adds at_hash. */
+  accessToken?: string;
 }): Promise<string> {
   const key = await activeSigningKey();
   const claims: jose.JWTPayload = { azp: input.clientId };
+  if (input.accessToken) claims.at_hash = accessTokenHash(input.accessToken);
   if (input.nonce) claims.nonce = input.nonce;
   if (input.authTime) claims.auth_time = Math.floor(input.authTime.getTime() / 1000);
   return new jose.SignJWT(claims)
@@ -44,6 +58,7 @@ export type IdTokenVerificationError =
   | "wrong_audience"
   | "wrong_azp"
   | "nonce_mismatch"
+  | "at_hash_mismatch"
   | "expired"
   | "malformed";
 
@@ -66,6 +81,8 @@ export async function verifyIdToken(input: {
   issuer?: string;
   jwks?: jose.JSONWebKeySet;
   now?: Date;
+  /** When given, the id_token must carry a matching at_hash (token substitution defence). */
+  accessToken?: string;
 }): Promise<jose.JWTPayload> {
   const jwks = jose.createLocalJWKSet(input.jwks ?? (await getJwks()));
   let payload: jose.JWTPayload;
@@ -90,5 +107,8 @@ export async function verifyIdToken(input: {
   // A token with several audiences must name this client as the authorized party.
   if (payload.azp !== undefined && payload.azp !== input.clientId) throw new IdTokenError("wrong_azp");
   if ((payload.nonce ?? null) !== input.nonce) throw new IdTokenError("nonce_mismatch");
+  if (input.accessToken !== undefined && payload.at_hash !== accessTokenHash(input.accessToken)) {
+    throw new IdTokenError("at_hash_mismatch");
+  }
   return payload;
 }

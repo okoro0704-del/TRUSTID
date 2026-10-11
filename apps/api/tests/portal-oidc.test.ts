@@ -11,7 +11,7 @@ import { config } from "../src/lib/config.js";
 import { bootstrapPortalClients } from "../src/lib/bootstrap-oauth-apps.js";
 import { PORTAL_CLIENT_SCOPES } from "../src/lib/portal-oauth-clients.js";
 import { createAuthorizationCode } from "../src/modules/authorization/service.js";
-import { IdTokenError, verifyIdToken } from "../src/modules/authorization/id-token.js";
+import { IdTokenError, accessTokenHash, verifyIdToken } from "../src/modules/authorization/id-token.js";
 import { getJwks } from "../src/modules/verified-identity/assertions.js";
 import { resetTables } from "./helpers/db.js";
 import { ADMIN, BUSINESS, PORTAL, pkcePair, portalTokens, portalUser } from "./helpers/portal-oauth.js";
@@ -196,6 +196,17 @@ describe("Gate 3: OIDC id_token", () => {
     for (const other of [ADMIN, BUSINESS]) {
       await expect(verifyIdToken({ idToken: tokens.id_token!, clientId: other.clientId, nonce: "nonce-1" })).rejects.toMatchObject({ reason: "wrong_audience" });
     }
+  });
+
+  it("binds the access token (at_hash): a token from another client cannot be substituted", async () => {
+    const { user, tokens } = await issued();
+    const ok = { idToken: tokens.id_token!, clientId: PORTAL.clientId, nonce: "nonce-1" };
+    const claims = await verifyIdToken({ ...ok, accessToken: tokens.access_token });
+    expect(claims.at_hash).toBe(accessTokenHash(tokens.access_token));
+    // Same subject, another Portal client: its access token is not the one this id_token was issued with.
+    const foreign = await portalTokens(app, user.id, { client: ADMIN, nonce: "nonce-admin" });
+    await expect(verifyIdToken({ ...ok, accessToken: foreign.access_token })).rejects.toMatchObject({ reason: "at_hash_mismatch" });
+    await expect(verifyIdToken({ ...ok, accessToken: "not-the-token" })).rejects.toMatchObject({ reason: "at_hash_mismatch" });
   });
 
   it("rejects wrong issuer, wrong nonce, missing nonce, expired, tampered, wrong key and unknown kid", async () => {

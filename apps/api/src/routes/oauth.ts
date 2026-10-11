@@ -136,7 +136,7 @@ export async function oauthRoutes(app: FastifyInstance) {
       // id_token: signed with the jwks_uri key, aud = requesting client_id.
       subject_types_supported: ["public"],
       id_token_signing_alg_values_supported: [...ID_TOKEN_SIGNING_ALGS],
-      claims_supported: ["iss", "sub", "aud", "azp", "exp", "iat", "jti", "nonce", "auth_time"],
+      claims_supported: ["iss", "sub", "aud", "azp", "exp", "iat", "jti", "nonce", "auth_time", "at_hash"],
       scopes_supported: [
         "openid",
         "identity.basic",

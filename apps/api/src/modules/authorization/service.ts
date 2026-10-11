@@ -422,6 +422,7 @@ export async function exchangeAuthorizationCode(input: {
         clientId: app.clientId,
         nonce: row.nonce,
         authTime: row.authTime,
+        accessToken,
       })
     : undefined;
 
