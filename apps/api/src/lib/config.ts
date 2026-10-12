@@ -1,3 +1,22 @@
+import { PORTAL_ORIGINS } from "./portal-oauth-clients.js";
+
+/**
+ * A production CORS origin must be an exact https origin: no wildcard, no
+ * "null", no localhost / loopback, no path.
+ */
+export function isProductionSafeOrigin(origin: string): boolean {
+  if (origin === "*" || origin === "null" || origin.includes("*")) return false;
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "https:" || url.origin !== origin) return false;
+  const host = url.hostname;
+  return !(host === "localhost" || host.endsWith(".localhost") || host === "127.0.0.1" || host === "[::1]" || host === "0.0.0.0");
+}
+
 function required(name: string, fallback?: string): string {
   const value = process.env[name] ?? fallback;
   if (!value) throw new Error(`Missing env ${name}`);
@@ -286,7 +305,12 @@ export const config = {
     }
     return `${origin}/api`;
   },
-  get corsOrigins() {
+  /**
+   * Origins whose browser requests may carry credentials (TrustID's own apps):
+   * CORS_ORIGINS, or development defaults. In production, anything that is not
+   * an exact https origin (wildcards, "null", localhost, plain http) is dropped.
+   */
+  get credentialedCorsOrigins() {
     const defaults = [
       "http://localhost:5173",
       "http://localhost:5174",
@@ -295,10 +319,16 @@ export const config = {
     ]
       .filter(Boolean)
       .join(",");
-    return (process.env.CORS_ORIGINS ?? (this.isDev ? defaults : ""))
+    const listed = (process.env.CORS_ORIGINS ?? (this.isDev ? defaults : ""))
       .split(",")
       .map((s) => s.trim())
-      .filter(Boolean);
+      .filter(Boolean)
+      .filter((o) => !PORTAL_ORIGINS.includes(o));
+    return this.isDev ? listed : listed.filter(isProductionSafeOrigin);
+  },
+  /** Every allowed browser origin: credentialed origins plus the Portal relying parties. */
+  get corsOrigins() {
+    return [...new Set([...this.credentialedCorsOrigins, ...PORTAL_ORIGINS])];
   },
   get lifeosRedirectUri() {
     return required(

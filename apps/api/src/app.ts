@@ -11,6 +11,7 @@ import { deviceRoutes } from "./routes/devices.js";
 import { applicationRoutes } from "./routes/applications.js";
 import { authorizationRoutes } from "./routes/authorizations.js";
 import { oauthRoutes } from "./routes/oauth.js";
+import { stepUpRoutes } from "./routes/step-up.js";
 import { securityRoutes } from "./routes/security.js";
 import { trustRoutes } from "./routes/trust.js";
 import { passkeyRoutes } from "./routes/passkeys.js";
@@ -87,9 +88,16 @@ export async function buildApp() {
       return reply.code(403).send({ error: "origin_not_allowed" });
     }
   });
+  // TrustID's own apps may send credentials (session cookie). Portal relying
+  // parties get CORS without credentials: they authenticate with bearer
+  // access tokens and must never ride the TrustID session cookie.
+  const credentialedOrigins = new Set(config.credentialedCorsOrigins);
   await app.register(cors, {
-    origin: allowedOrigins,
-    credentials: true,
+    delegator: (req, cb) => {
+      const origin = req.headers.origin;
+      if (!origin || !allowedOrigins.includes(origin)) return cb(null, { origin: false });
+      cb(null, { origin: [origin], credentials: credentialedOrigins.has(origin) });
+    },
   });
 
   await app.register(cookie, {
@@ -194,6 +202,7 @@ export async function buildApp() {
   await app.register(applicationRoutes);
   await app.register(authorizationRoutes);
   await app.register(oauthRoutes);
+  await app.register(stepUpRoutes);
   await app.register(securityRoutes);
   await app.register(trustRoutes);
   await app.register(passkeyRoutes);

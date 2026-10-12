@@ -43,6 +43,7 @@ model User {
   recoverySessions        RecoverySession[]
   deviceInstalls          DeviceInstall[]
   bbsStepUpChallenges     BbsStepUpChallenge[]
+  stepUpChallenges        StepUpChallenge[]
   silentDeviceKeys        SilentDeviceKey[]
   biometricTemplates      BiometricTemplate[]
   biometricEmbeddings     BiometricEmbedding[]
@@ -316,6 +317,7 @@ model Application {
   oauthRefreshTokens      OAuthRefreshToken[]
   deviceApprovalRequests  DeviceApprovalRequest[]
   bbsStepUpChallenges     BbsStepUpChallenge[]
+  stepUpChallenges        StepUpChallenge[]
 
   @@map("applications")
 }
@@ -357,6 +359,10 @@ model OAuthAuthorizationCode {
   scopes              String
   codeChallenge       String    @map("code_challenge")
   codeChallengeMethod String    @map("code_challenge_method")
+  /// OIDC nonce from the authorization request, echoed in the id_token.
+  nonce               String?
+  /// When the end user authenticated to TrustID (session start), for id_token auth_time.
+  authTime            DateTime? @map("auth_time")
   expiresAt           DateTime  @map("expires_at")
   consumedAt          DateTime? @map("consumed_at")
   createdAt           DateTime  @default(now()) @map("created_at")
@@ -365,6 +371,54 @@ model OAuthAuthorizationCode {
   application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
 
   @@map("oauth_authorization_codes")
+}
+
+/// Authenticated step-up for an already signed-in TrustID subject, requested
+/// by an OAuth client (e.g. LifeOS Portal) for one specific operation.
+/// Approved by the subject's Master Device (signature over signingPayload) or
+/// by 1:1 biometric verification of the same subject; consumed once by the
+/// same client for the same operation and client session binding.
+model StepUpChallenge {
+  id                String    @id @default(cuid())
+  /// Unpredictable public identifier (256-bit random, base64url).
+  challengeId       String    @unique @map("challenge_id")
+  userId            String    @map("user_id")
+  /// Canonical TrustID subject (TD-...) at creation.
+  trustId           String    @map("trust_id")
+  /// OAuth client that requested and alone may consume it.
+  applicationId     String    @map("application_id")
+  /// Access token the request was made with (TrustID-side session binding).
+  accessTokenId     String    @map("access_token_id")
+  /// Opaque client-session binding (e.g. SHA-256 of the Portal session id).
+  sessionBinding    String    @map("session_binding")
+  /// Operation being authorized, e.g. "domain.purchase".
+  action            String
+  /// Client-computed digest of the exact operation payload.
+  operationDigest   String    @map("operation_digest")
+  /// master_device | biometric
+  method            String
+  /// Master Device that must sign (method = master_device).
+  masterDeviceId    String?   @map("master_device_id")
+  /// Exact string the Master Device signs (binds every field above + expiry).
+  signingPayload    String    @map("signing_payload")
+  /// pending | approved | denied | cancelled | consumed (expiry is derived)
+  status            String    @default("pending")
+  /// Failed approval attempts (bad signature / biometric no-match); denied at the limit.
+  failedAttempts    Int       @default(0) @map("failed_attempts")
+  approvedAt        DateTime? @map("approved_at")
+  /// Evidence summary only (method, device id, score bucket); never biometric data.
+  approvalEvidence  String?   @map("approval_evidence")
+  resolvedAt        DateTime? @map("resolved_at")
+  consumedAt        DateTime? @map("consumed_at")
+  expiresAt         DateTime  @map("expires_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([applicationId, status])
+  @@map("step_up_challenges")
 }
 
 model OAuthAccessToken {

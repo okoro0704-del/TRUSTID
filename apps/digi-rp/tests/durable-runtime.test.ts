@@ -109,6 +109,9 @@ describe("Digi RP durable composition", () => {
         async findByIssuerSubject() {
           return null;
         },
+        async listForOwner() {
+          return [];
+        },
         async resolveOrCreate() {
           throw new Error("owner store down");
         },
@@ -194,6 +197,7 @@ describe.skipIf(!PG_URL)("Digi RP production PostgreSQL runtime", () => {
       });
       expect(me.statusCode).toBe(200);
       expect(me.json().ownerId).toBe(body.ownerId);
+      expect(me.json().subject).toBe("human-subject-1");
       const grants = await runtime.app.inject({
         method: "GET",
         url: "/authority/grants/active",
@@ -216,6 +220,7 @@ describe.skipIf(!PG_URL)("Digi RP production PostgreSQL runtime", () => {
         });
         expect(again.statusCode).toBe(200);
         expect(again.json().ownerId).toBe(body.ownerId);
+        expect(again.json().subject).toBe("human-subject-1");
       } finally {
         await restarted.close();
         await restarted.app.close();

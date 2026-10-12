@@ -57,6 +57,8 @@ export function ConsentPage() {
       state: params.get("state") ?? "",
       code_challenge: params.get("code_challenge") ?? "",
       code_challenge_method: "S256" as const,
+      /** OIDC nonce, returned in the id_token. */
+      nonce: params.get("nonce") ?? "",
       app_name: params.get("app_name") ?? "Application",
       prompt: params.get("prompt") ?? "",
       ui_mode: params.get("ui_mode") ?? "",
@@ -88,6 +90,7 @@ export function ConsentPage() {
               state: consent.state,
               code_challenge: consent.code_challenge,
               code_challenge_method: consent.code_challenge_method,
+              nonce: consent.nonce || undefined,
               prompt: consent.prompt || undefined,
             }),
           },
@@ -107,6 +110,7 @@ export function ConsentPage() {
             state: consent.state,
             code_challenge: consent.code_challenge,
             code_challenge_method: consent.code_challenge_method,
+            nonce: consent.nonce || undefined,
             approve: true,
           }),
         });
@@ -154,6 +158,7 @@ export function ConsentPage() {
           state: consent.state,
           code_challenge: consent.code_challenge,
           code_challenge_method: consent.code_challenge_method,
+          nonce: consent.nonce || undefined,
           approve,
         }),
       });

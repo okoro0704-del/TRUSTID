@@ -42,6 +42,13 @@ declare global {
         value: string;
       }): Promise<{ ok: boolean }>;
       getSecure?(options: { key: string }): Promise<{ value: string | null }>;
+      /** Class 3 biometric, then sign `payload` with the Master Device key (DER, SPKI base64). */
+      signPayload?(options: { payload: string; reason?: string }): Promise<{
+        ok: boolean;
+        method?: string;
+        signatureBase64: string;
+        publicKeyBase64: string;
+      }>;
     };
     TrustIdMediaVault?: ConstructorParameters<typeof MediaVault>[1];
     TrustIdAppLock?: ConstructorParameters<typeof AppLockController>[1];

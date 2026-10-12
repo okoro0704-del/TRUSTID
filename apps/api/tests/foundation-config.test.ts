@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { PORTAL_ORIGINS } from "../src/lib/portal-oauth-clients.js";
 import { buildApp } from "../src/app.js";
 import {
   assertCanonicalLifeOsCors,
@@ -13,7 +14,10 @@ describe("Foundation production configuration", () => {
     await expect(buildApp()).rejects.toThrow(/COOKIE_SECRET/);
   });
   it("does not implicitly allow development origins in production", () => {
-    vi.stubEnv("NODE_ENV","production"); vi.stubEnv("CORS_ORIGINS",""); expect(config.corsOrigins).toEqual([]);
+    // Only the code-registered Portal relying parties remain; no development origin is implied.
+    vi.stubEnv("NODE_ENV","production"); vi.stubEnv("CORS_ORIGINS","");
+    expect(config.credentialedCorsOrigins).toEqual([]);
+    expect(config.corsOrigins).toEqual([...PORTAL_ORIGINS]);
   });
   it("refuses production boot when the canonical LifeOS origin is omitted", async () => {
     vi.stubEnv("NODE_ENV", "production");

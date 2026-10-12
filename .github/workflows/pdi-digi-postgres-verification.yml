@@ -1,0 +1,42 @@
+name: PDI Digi PostgreSQL Verification
+
+on:
+  push:
+    branches: [pdi-canonical-subject-verification]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: pdi_test
+          POSTGRES_PASSWORD: pdi_test
+          POSTGRES_DB: pdi_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pdi_test -d pdi_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DIGI_CORE_TEST_DATABASE_URL: postgresql://pdi_test:pdi_test@127.0.0.1:5432/pdi_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build Digi dependencies
+        run: npm run build:security && npm run build -w @trustid/digi-rp
+      - name: Run PostgreSQL Digi bridge suite
+        run: npm run test -w @trustid/digi-bridge
+      - name: Run Digi RP PostgreSQL projection suite
+        run: npm run test -w @trustid/digi-rp -- --run tests/durable-runtime.test.ts tests/pdi-authority-http.test.ts

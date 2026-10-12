@@ -2,6 +2,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { config } from "./config.js";
 import { resolveSession } from "../modules/sessions/service.js";
 import { resolveAccessToken } from "../modules/authorization/service.js";
+import { PORTAL_ORIGINS } from "./portal-oauth-clients.js";
 
 export type AuthUser = {
   userId: string;
@@ -26,6 +27,16 @@ export function clientMeta(req: FastifyRequest) {
   };
 }
 
+/**
+ * Requests from a Portal relying-party origin never authenticate with the
+ * TrustID session cookie (it is SameSite=None in production, so a browser
+ * would attach it to cross-site requests). They use bearer access tokens.
+ */
+function cookieSessionAllowed(req: FastifyRequest): boolean {
+  const origin = req.headers.origin;
+  return !(typeof origin === "string" && PORTAL_ORIGINS.includes(origin));
+}
+
 function readSessionToken(req: FastifyRequest): {
   token: string | undefined;
   viaHeader: boolean;
@@ -37,7 +48,7 @@ function readSessionToken(req: FastifyRequest): {
     typeof req.headers["x-trustid-session"] === "string"
       ? req.headers["x-trustid-session"].trim()
       : undefined;
-  const cookie = req.cookies[config.sessionCookieName];
+  const cookie = cookieSessionAllowed(req) ? req.cookies[config.sessionCookieName] : undefined;
   const token = custom || bearer || cookie;
   return { token, viaHeader: Boolean(custom || bearer) };
 }
