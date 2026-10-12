@@ -823,7 +823,8 @@ describe("biometric readiness gate", () => {
       { wrapper },
     );
     await waitFor(() => expect(readiness.ensureReady).toHaveBeenCalledTimes(1));
-    expect(result.current.scanStage).toBe("models");
+    // The stage update renders after ensureReady is called; wait for it rather than racing it.
+    await waitFor(() => expect(result.current.scanStage).toBe("models"));
     expect(result.current.biometricReady).toBe(false);
     await act(async () => { await new Promise((r) => setTimeout(r, 300)); });
     expect(capturePayload).not.toHaveBeenCalled();
