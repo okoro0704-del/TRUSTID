@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../../lib/api";
 import { reauthenticate, prefetchReauth } from "../../lib/reauth";
 import { ApproveDeviceDialog } from "../../components/ApproveDeviceDialog";
+import { StepUpRequests } from "../../components/StepUpRequests";
 
 type Approval = {
   id: string;
@@ -86,6 +87,8 @@ export function ApprovalsPage() {
 
   return (
     <div className="dashboard">
+      <StepUpRequests />
+
       <section className="section">
         <h2>Device approval requests</h2>
         <p className="sub">
