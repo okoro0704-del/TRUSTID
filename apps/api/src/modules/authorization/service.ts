@@ -388,14 +388,21 @@ export async function exchangeAuthorizationCode(input: {
   }
 
   // OIDC: an id_token for the client that redeemed the code, when openid was granted.
-  const idToken = scopes.includes(SCOPES.OPENID)
-    ? await issueIdToken({
+  // A signing problem must never block sign-in for every relying party: without a signed
+  // id_token the client still gets its access token (clients that require OIDC reject the response).
+  let idToken: string | undefined;
+  if (scopes.includes(SCOPES.OPENID)) {
+    try {
+      idToken = await issueIdToken({
         trustId: row.user.trustId,
         clientId: app.clientId,
         nonce: row.nonce,
         authTime: row.authTime,
-      })
-    : undefined;
+      });
+    } catch (err) {
+      console.error("[oauth] id_token could not be signed; returning the access token without it", (err as Error)?.message);
+    }
+  }
 
   return {
     access_token: accessToken,
