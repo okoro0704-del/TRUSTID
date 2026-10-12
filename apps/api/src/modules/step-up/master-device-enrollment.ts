@@ -25,6 +25,7 @@ import { prisma } from "../../db/client.js";
 import { config } from "../../lib/config.js";
 import { deviceFingerprintHash } from "../../lib/crypto.js";
 import { recordAudit } from "../audit/service.js";
+import { createSecurityNotification } from "../notifications/service.js";
 import { verifyReauthentication } from "../authentication/webauthn.js";
 import { activeStepUpDevice, isStepUpSigningKey } from "./master-device-keys.js";
 import { StepUpError, verifyMasterDeviceSignature } from "./service.js";
@@ -250,6 +251,14 @@ export async function completeEnrollment(
     metadata: { masterDeviceId: row.id, purpose: "step_up", keyThumbprint: claims.key },
     ...meta,
   });
+  // The owner hears about every change to the device that approves sensitive actions.
+  await createSecurityNotification({
+    userId: session.userId,
+    type: "master_device_enrolled",
+    title: "New Master Device enrolled",
+    body: "A device was enrolled to approve sensitive actions for your TrustID. If this was not you, revoke it in Trust Center now.",
+    payload: { masterDeviceId: row.id },
+  });
   return { registered: true, device: { id: row.id, key_thumbprint: claims.key } };
 }
 
@@ -296,6 +305,15 @@ export async function revokeStepUpDevice(
     actorId: session.userId,
     metadata: { masterDeviceId: device!.id, proof },
     ...meta,
+  });
+  await createSecurityNotification({
+    userId: session.userId,
+    type: "master_device_revoked",
+    title: "Master Device revoked",
+    body: proof === "device_signature"
+      ? "Your Master Device was revoked from the device itself."
+      : "Your Master Device was revoked without the device. A new one can be enrolled after 24 hours. If this was not you, secure your account.",
+    payload: { masterDeviceId: device!.id, proof },
   });
   const availableAt = proof === "device_signature" ? null : new Date(Date.now() + ENROLLMENT_COOLDOWN_HOURS * 3600_000);
   return { revoked: true, enrollment_available_at: availableAt?.toISOString() ?? null };

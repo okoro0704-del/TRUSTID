@@ -3,6 +3,7 @@ import { prisma } from "../../db/client.js";
 import { deviceFingerprintHash, hashSecret } from "../../lib/crypto.js";
 import { recordAudit } from "../audit/service.js";
 import { isStepUpSigningKey } from "../step-up/master-device-keys.js";
+import { verifyMasterDeviceSignature } from "../step-up/service.js";
 
 export async function registerMasterDevice(input: {
   userId: string;
@@ -95,6 +96,10 @@ export async function verifyMasterDeviceBinding(input: {
     throw Object.assign(new Error("Device is not a registered Master Device"), {
       statusCode: 403,
     });
+  }
+  // "verified" means the device signed the challenge id with its enrolled step-up key.
+  if (!isStepUpSigningKey(master.publicKey) || !verifyMasterDeviceSignature(master.publicKey, input.challengeId, input.signature)) {
+    throw Object.assign(new Error("Master Device signature is invalid"), { statusCode: 401 });
   }
 
   const sigHash = hashSecret(input.signature);

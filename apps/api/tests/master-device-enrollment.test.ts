@@ -271,6 +271,8 @@ describe("revocation", () => {
     const res = await revoke(s.session, { reauth: PASSKEY });
     expect(res.statusCode).toBe(200);
     expect(res.json().enrollment_available_at).toBeTruthy();
+    const alerts = await prisma.securityNotification.findMany({ where: { userId: s.user.id }, select: { type: true } });
+    expect(alerts.map((n) => n.type)).toEqual(expect.arrayContaining(["master_device_enrolled", "master_device_revoked"]));
     const key = await generateDeviceKey();
     const blocked = await begin(s.session, key.publicKeySpki);
     expect(blocked.statusCode).toBe(409);
@@ -332,5 +334,51 @@ describe("Trust Center payload check", () => {
     expect(() => assertStepUpPayloadMatches(payload, { ...shown, method: "biometric" }, expected)).toThrow(/method/);
     expect(() => assertStepUpPayloadMatches(payload, shown, expected, new Date(Date.now() + 120_000))).toThrow(/expired/);
     expect(() => assertStepUpPayloadMatches(`${payload}\naction=portal.post.y`, shown, expected)).toThrow(/Malformed/);
+  });
+});
+
+describe("legacy challenge routes", () => {
+  it("issuing a challenge needs a session, and only for yourself", async () => {
+    const s = await signedIn();
+    const other = await signedIn();
+    const body = { userId: other.user.id, action: "wallet_transfer", payload: { amountMinor: 1 } };
+    const anonymous = await app.inject({ method: "POST", url: "/v1/trust-id/challenges/issue", payload: body });
+    expect(anonymous.statusCode).toBe(401);
+    const forSomeoneElse = await app.inject({ method: "POST", url: "/v1/trust-id/challenges/issue", cookies: s.session, payload: body });
+    expect(forSomeoneElse.statusCode).toBe(403);
+    expect(await prisma.masterAuthChallenge.count()).toBe(0);
+    const own = await app.inject({ method: "POST", url: "/v1/trust-id/challenges/issue", cookies: other.session, payload: body });
+    expect(own.statusCode).toBe(200);
+  });
+
+  it("approving needs the enrolled device's signature over the challenge; a bare request does nothing", async () => {
+    const s = await signedIn();
+    const { key, deviceFingerprint } = await enroll(s.session);
+    const issued = (
+      await app.inject({
+        method: "POST",
+        url: "/v1/trust-id/challenges/issue",
+        cookies: s.session,
+        payload: { userId: s.user.id, action: "wallet_transfer", payload: { amountMinor: 5 } },
+      })
+    ).json() as { challengeId: string; signingPayload: string };
+    const approve = (body: Record<string, unknown>) =>
+      app.inject({ method: "POST", url: "/v1/trust-id/challenges/approve", cookies: s.session, payload: { challengeId: issued.challengeId, ...body } });
+    expect((await approve({ deviceFingerprint, signature: "not-a-real-signature-at-all" })).statusCode).toBe(401);
+    expect((await approve({ deviceFingerprint: "some-other-device-fp", signature: await signPayload(key.privateKey, issued.signingPayload) })).statusCode).toBe(403);
+    const ok = await approve({ deviceFingerprint, signature: await signPayload(key.privateKey, issued.signingPayload) });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json()).toMatchObject({ status: "approved" });
+  });
+
+  it("/master-device/verify reports verified only for a valid signature by the enrolled key", async () => {
+    const s = await signedIn();
+    const { key, deviceFingerprint } = await enroll(s.session);
+    const verify = (signature: string) =>
+      app.inject({ method: "POST", url: "/v1/trust-id/master-device/verify", cookies: s.session, payload: { deviceFingerprint, challengeId: "legacy-challenge-1", signature } });
+    expect((await verify("not-a-real-signature-at-all")).statusCode).toBe(401);
+    const ok = await verify(await signPayload(key.privateKey, "legacy-challenge-1"));
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json()).toMatchObject({ verified: true });
   });
 });
