@@ -34,6 +34,15 @@ type Outcome = { id: string; action: string; client: string; result: string; ok:
 
 const POLL_MS = 3000;
 
+/** Inside a frame another site could overlay the Approve button (clickjacking): refuse to act. */
+function isFramed() {
+  try {
+    return window.top !== window.self;
+  } catch {
+    return true;
+  }
+}
+
 function secondsLeft(iso: string, now: number) {
   return Math.max(0, Math.floor((Date.parse(iso) - now) / 1000));
 }
@@ -70,6 +79,7 @@ export function MasterDevicePage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const handled = useRef(new Set<string>());
+  const framed = isFramed();
 
   const refresh = useCallback(async () => {
     const [s, p, stored] = await Promise.all([
@@ -208,6 +218,19 @@ export function MasterDevicePage() {
     } finally {
       setBusy(null);
     }
+  }
+
+  if (framed) {
+    return (
+      <div className="dashboard">
+        <section className="section">
+          <h2>Master Device</h2>
+          <p className="error" role="alert">
+            For your safety, Master Device approvals only work when TrustID is open directly, not inside another site.
+          </p>
+        </section>
+      </div>
+    );
   }
 
   const cooldown = status?.enrollment_available_at && Date.parse(status.enrollment_available_at) > now ? status.enrollment_available_at : null;

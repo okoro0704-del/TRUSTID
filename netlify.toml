@@ -17,6 +17,13 @@
 # version bump changes the URL and they can be cached immutably.
 # The SDK keeps verified copies of every biometric asset in Cache Storage and
 # fetches with cache: "no-store", so a cached error page is never replayed.
+# The Master Device page approves sensitive actions with a click that signs: never framed.
+[[headers]]
+  for = "/dashboard/master-device"
+  [headers.values]
+    Content-Security-Policy = "frame-ancestors 'none'"
+    X-Frame-Options = "DENY"
+
 [[headers]]
   for = "/mediapipe/*"
   [headers.values]
