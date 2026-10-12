@@ -57,6 +57,16 @@ describe("Gate 1: Portal public OAuth clients", () => {
     expect(JSON.parse(row!.redirectUris)).toContain("https://getlifeos.app/alt");
   });
 
+  it("is safe when several instances boot at once, and audits each creation", async () => {
+    await prisma.application.deleteMany({ where: { clientId: { startsWith: "lifeos_" } } });
+    await prisma.auditEvent.deleteMany({ where: { type: "oauth.client_bootstrapped" } });
+    const runs = await Promise.all([1, 2, 3].map(() => bootstrapPortalClients(() => undefined)));
+    expect(await prisma.application.count({ where: { clientId: { startsWith: "lifeos_" } } })).toBe(3);
+    for (const run of runs) expect(run.every((r) => r.action === "created" || r.action === "unchanged")).toBe(true);
+    const audits = await prisma.auditEvent.findMany({ where: { type: "oauth.client_bootstrapped" } });
+    expect(audits.map((e) => JSON.parse(e.metadata).clientId).sort()).toEqual([ADMIN.clientId, BUSINESS.clientId, PORTAL.clientId].sort());
+  });
+
   it("matches redirect URIs exactly (no prefix, trailing slash, other client or TrustID-origin shortcut)", async () => {
     const { user } = await portalUser();
     const { challenge } = pkcePair();

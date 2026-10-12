@@ -1,5 +1,6 @@
 import { DEFAULT_APP_SCOPES } from "@trustid/shared";
 import { prisma } from "../db/client.js";
+import { recordAudit } from "../modules/audit/service.js";
 import { PORTAL_CLIENT_SCOPES, PORTAL_OAUTH_CLIENTS } from "./portal-oauth-clients.js";
 
 const ELFCOM_CLIENT_ID = "elfcom_web";
@@ -27,24 +28,39 @@ function configuredRedirects(defaults: string[], envName: string): string[] {
  * Create the LifeOS Portal public clients if they do not exist. Create-only:
  * an existing client (e.g. registered by hand) is never modified here; a
  * registration that differs from the code is reported, not overwritten.
+ * Safe when several instances boot at once: losing the create race is "unchanged".
+ * Every creation is logged and written to the audit log.
  */
 export async function bootstrapPortalClients(log: (msg: string) => void = console.warn) {
   const results: Array<{ clientId: string; action: "created" | "unchanged" | "differs" }> = [];
   for (const client of PORTAL_OAUTH_CLIENTS) {
     const existing = await prisma.application.findUnique({ where: { clientId: client.clientId } });
     if (!existing) {
-      await prisma.application.create({
-        data: {
-          name: client.name,
-          clientId: client.clientId,
-          type: "public",
-          clientSecretHash: null,
-          redirectUris: JSON.stringify(client.redirectUris),
-          allowedScopes: JSON.stringify(PORTAL_CLIENT_SCOPES),
-          status: "active",
-        },
-      });
-      results.push({ clientId: client.clientId, action: "created" });
+      try {
+        const created = await prisma.application.create({
+          data: {
+            name: client.name,
+            clientId: client.clientId,
+            type: "public",
+            clientSecretHash: null,
+            redirectUris: JSON.stringify(client.redirectUris),
+            allowedScopes: JSON.stringify(PORTAL_CLIENT_SCOPES),
+            status: "active",
+          },
+        });
+        log(`[oauth] created Portal client ${client.clientId} (redirect ${client.redirectUris.join(", ")})`);
+        await recordAudit({
+          type: "oauth.client_bootstrapped",
+          actorType: "system",
+          actorId: "bootstrap",
+          metadata: { applicationId: created.id, clientId: client.clientId, redirectUris: client.redirectUris, scopes: PORTAL_CLIENT_SCOPES },
+        });
+        results.push({ clientId: client.clientId, action: "created" });
+      } catch (err) {
+        // Another instance created it between findUnique and create.
+        if ((err as { code?: string }).code !== "P2002") throw err;
+        results.push({ clientId: client.clientId, action: "unchanged" });
+      }
       continue;
     }
     const same =
