@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { Pool } from "pg";
 import { afterAll, describe, expect, it } from "vitest";
@@ -11,9 +12,12 @@ import { buildDigiRp } from "../src/app.js";
 const databaseUrl = process.env.DDI_TEST_DATABASE_URL ?? "";
 const ISSUER = "https://trustedid.netlify.app/api";
 const AUDIENCE = "digiconomy:digi";
-const ddiRoot = "C:/Users/Hp/Desktop/DDI";
+// Acceptance against a local checkout of the separate DDI repository. Runs only where that
+// checkout exists (DDI_ROOT); clean CI runners do not have it.
+const ddiRoot = process.env.DDI_ROOT ?? "C:/Users/Hp/Desktop/DDI";
+const trustIdRoot = fileURLToPath(new URL("../../../", import.meta.url));
 
-describe("real HTTP DDI authority acceptance", () => {
+describe.runIf(Boolean(databaseUrl) && existsSync(join(ddiRoot, "packages/service/src/runtime.ts")))("real HTTP DDI authority acceptance", () => {
   const closers: Array<() => Promise<void>> = [];
   afterAll(async () => {
     await Promise.all(closers.splice(0).map(close => close()));
@@ -90,7 +94,7 @@ describe("real HTTP DDI authority acceptance", () => {
     await postgresModule.migrate(pool, join(ddiRoot, "migrations/003_pdi_connections.sql"));
     const repository = new repositoryModule.PostgresDdiRepository(pool);
     const grants = new digiModule.HttpDigiAuthorityGrantClient(base);
-    const consume = new digiModule.HttpDigiAuthorityClient({ consumeUrl: `${base}/v1/authority/consume`, jwksUrl: `${base}/.well-known/authority-jwks.json`, verifierModuleUrl: pathToFileURL(join("C:/Users/Hp/Desktop/TRUST ID", "packages/authority-verifier/dist/index.js")).href });
+    const consume = new digiModule.HttpDigiAuthorityClient({ consumeUrl: `${base}/v1/authority/consume`, jwksUrl: `${base}/.well-known/authority-jwks.json`, verifierModuleUrl: pathToFileURL(join(trustIdRoot, "packages/authority-verifier/dist/index.js")).href });
     const service = new ddi.DurableDdiService(repository, ddi.authorityVerifier(consume), ddi.defaultAdapters(async () => ({ subject: "subject-pdi-contract" })), new digiModule.HttpDigiSessionClient(base), grants);
     const actor = await service.authenticate(session.sessionToken);
     expect(actor?.ownerId).toBe(session.ownerId);

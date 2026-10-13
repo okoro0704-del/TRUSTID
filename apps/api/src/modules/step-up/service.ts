@@ -38,6 +38,7 @@ import { deviceFingerprintHash } from "../../lib/crypto.js";
 import { recordAudit } from "../audit/service.js";
 import { activeSigningKey } from "../verified-identity/assertions.js";
 import { pgVectorMatcher } from "../trust-id/vector-matcher.js";
+import { activeStepUpDevice } from "./master-device-keys.js";
 import type { BiometricPayload } from "../trust-id/schemas.js";
 import { biometricStepUpPadReady, SERVER_PAD_STATUS } from "./pad-policy.js";
 
@@ -56,6 +57,8 @@ export const STEP_UP_STATUS = {
 export const STEP_UP_TTL = { DEFAULT: 120, MIN: 30, MAX: 300 } as const;
 export const STEP_UP_APPROVAL_TTL_SECONDS = 60;
 export const STEP_UP_MAX_FAILED_ATTEMPTS = 3;
+/** Open (pending, unexpired) challenges one client may hold for one subject. */
+export const STEP_UP_MAX_PENDING_PER_CLIENT = 10;
 export const STEP_UP_APPROVAL_TYP = "trustid-step-up+jwt";
 export const STEP_UP_SIGNING_VERSION = "trustid-step-up/v1";
 
@@ -165,12 +168,17 @@ export async function createStepUpChallenge(
     fail(400, "invalid_request", `ttl_seconds must be ${STEP_UP_TTL.MIN}-${STEP_UP_TTL.MAX}.`);
   }
 
+  const open = await prisma.stepUpChallenge.count({
+    where: { userId: access.userId, applicationId: access.applicationId, status: STEP_UP_STATUS.PENDING, expiresAt: { gt: new Date() } },
+  });
+  if (open >= STEP_UP_MAX_PENDING_PER_CLIENT) {
+    fail(429, "too_many_pending_challenges", "Too many pending step-up challenges for this subject.");
+  }
+
   let masterDeviceId: string | null = null;
   if (input.method === "master_device") {
-    const master = await prisma.masterDevice.findFirst({
-      where: { userId: access.userId, isMasterDevice: true, status: "active" },
-      orderBy: { updatedAt: "desc" },
-    });
+    // Only a row holding a usable ECDSA P-256 key counts; terminal placeholder bindings never approve.
+    const master = await activeStepUpDevice(access.userId);
     if (!master) fail(409, "master_device_not_registered", "This TrustID has no registered Master Device.");
     masterDeviceId = master!.id;
   } else {

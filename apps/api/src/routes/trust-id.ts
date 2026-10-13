@@ -594,7 +594,14 @@ export async function trustIdRoutes(app: FastifyInstance) {
    * initiated on a secondary/unrecognized terminal.
    */
   app.post("/v1/trust-id/challenges/issue", async (req, reply) => {
+    // Signed-in subjects only, and only for themselves: unauthenticated callers could otherwise
+    // push "Approve sensitive action" notifications to any account.
+    await requireSession(req, reply);
+    if (!req.auth) return;
     const body = issueMasterChallengeSchema.parse(req.body ?? {});
+    if (body.userId !== req.auth.userId) {
+      return reply.code(403).send({ error: "forbidden", message: "Challenges can only be issued for your own TrustID." });
+    }
     try {
       return await issueMasterChallenge({
         userId: body.userId,

@@ -315,7 +315,12 @@ describe("Gate 4: challenge binding and lifecycle", () => {
     const s = await subject();
     await withMasterDevice(s.user.id);
     const ids = new Set<string>();
-    for (let i = 0; i < 20; i++) ids.add(((await create(s.accessToken)).json() as { challenge_id: string }).challenge_id);
+    // Cancel each one so the per-client pending limit (STEP_UP_MAX_PENDING_PER_CLIENT) is not the subject here.
+    for (let i = 0; i < 20; i++) {
+      const id = ((await create(s.accessToken)).json() as { challenge_id: string }).challenge_id;
+      ids.add(id);
+      await app.inject({ method: "POST", url: `/v1/step-up/challenges/${id}/cancel`, headers: bearer(s.accessToken), payload: {} });
+    }
     expect(ids.size).toBe(20);
   });
 });

@@ -9,6 +9,7 @@ import { getDashboardIdentity } from "../identity/service.js";
 import { createSession } from "../sessions/service.js";
 import { autoEnrollFromBiometrics, type MultiModalPayload } from "./fusion.js";
 import { registerMasterDevice } from "./master-device.js";
+import { terminalMasterRowIds } from "../step-up/master-device-keys.js";
 
 function placeholderMasterPublicKey(seed: string): string {
   return createHash("sha256")
@@ -97,7 +98,8 @@ export async function registerTrustIdWithMasterDevice(input: {
     created.deviceId;
 
   await prisma.masterDevice.updateMany({
-    where: { userId: created.userId, isMasterDevice: true },
+    // Terminal bindings only: an enrolled step-up Master Device key is revoked explicitly, never here.
+    where: { id: { in: await terminalMasterRowIds(created.userId) } },
     data: { isMasterDevice: false, status: "superseded" },
   });
 
@@ -168,7 +170,8 @@ export async function bindMasterDeviceForUser(input: {
   userAgent?: string;
 }) {
   await prisma.masterDevice.updateMany({
-    where: { userId: input.userId, isMasterDevice: true },
+    // Terminal bindings only: an enrolled step-up Master Device key is revoked explicitly, never here.
+    where: { id: { in: await terminalMasterRowIds(input.userId) } },
     data: { isMasterDevice: false, status: "superseded" },
   });
 
