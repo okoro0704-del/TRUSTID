@@ -36,6 +36,8 @@ class BiometricGatePlugin : Plugin() {
     private const val KEYSTORE = "AndroidKeyStore"
     private const val FP_KEY_ALIAS = "trustid_fp_backup_v1"
     private const val AUTH_KEY_ALIAS = "trustid_bio_auth_v1"
+    /** Master Device key: signs step-up approvals; usable only right after a Class 3 biometric. */
+    private const val MASTER_KEY_ALIAS = "trustid_master_device_v1"
     private const val SIGN_ALG = "SHA256withECDSA"
   }
 
@@ -102,7 +104,7 @@ class BiometricGatePlugin : Plugin() {
       call = call,
       reason = reason,
       keyAlias = AUTH_KEY_ALIAS,
-      onSuccess = { method, publicKey ->
+      onSuccess = { method, publicKey, _ ->
         val ret = JSObject()
         ret.put("ok", true)
         ret.put("method", method)
@@ -127,7 +129,7 @@ class BiometricGatePlugin : Plugin() {
       call = call,
       reason = reason,
       keyAlias = FP_KEY_ALIAS,
-      onSuccess = { method, publicKey ->
+      onSuccess = { method, publicKey, _ ->
         val ret = JSObject()
         ret.put("ok", true)
         ret.put("method", method)
@@ -136,6 +138,35 @@ class BiometricGatePlugin : Plugin() {
           Base64.encodeToString(publicKey.encoded, Base64.NO_WRAP),
         )
         ret.put("keyAlias", FP_KEY_ALIAS)
+        call.resolve(ret)
+      },
+    )
+  }
+
+  /**
+   * Step-up approval: prompt a Class 3 biometric (no PIN, no 2D face), then sign the exact UTF-8
+   * payload with the Master Device key (SHA256withECDSA, DER). Returns the signature and the key's
+   * SPKI public key (base64). The key never leaves the Keystore.
+   */
+  @PluginMethod
+  fun signPayload(call: PluginCall) {
+    val payload = call.getString("payload")
+    if (payload.isNullOrEmpty() || payload.length > 4096) {
+      call.reject("payload is required (max 4096 chars)")
+      return
+    }
+    val reason = call.getString("reason") ?: "Approve this request"
+    runCryptoBiometricPrompt(
+      call = call,
+      reason = reason,
+      keyAlias = MASTER_KEY_ALIAS,
+      onSuccess = { method, publicKey, signature ->
+        signature.update(payload.toByteArray(Charsets.UTF_8))
+        val ret = JSObject()
+        ret.put("ok", true)
+        ret.put("method", method)
+        ret.put("signatureBase64", Base64.encodeToString(signature.sign(), Base64.NO_WRAP))
+        ret.put("publicKeyBase64", Base64.encodeToString(publicKey.encoded, Base64.NO_WRAP))
         call.resolve(ret)
       },
     )
@@ -193,7 +224,7 @@ class BiometricGatePlugin : Plugin() {
     call: PluginCall,
     reason: String,
     keyAlias: String,
-    onSuccess: (method: String, publicKey: PublicKey) -> Unit,
+    onSuccess: (method: String, publicKey: PublicKey, signature: Signature) -> Unit,
   ) {
     val activity = activity as? FragmentActivity
     if (activity == null) {
@@ -246,7 +277,7 @@ class BiometricGatePlugin : Plugin() {
               }
               else -> "biometric_strong"
             }
-            onSuccess(type, publicKey)
+            onSuccess(type, publicKey, result.cryptoObject!!.signature!!)
           } catch (e: Exception) {
             call.reject(e.message ?: "Biometric success handler failed")
           }

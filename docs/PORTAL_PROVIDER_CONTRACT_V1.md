@@ -293,6 +293,12 @@ The legacy `POST /v1/trust-id/master-device/register` and terminal binding
 flows refuse to write a P-256 key (`409 master_device_enrollment_required`) and
 never overwrite or supersede an enrolled step-up key.
 
+**Phone app (Approvals → Requests from apps)** enrolls its Android Keystore key
+(Class 3 biometric-bound, `SHA256withECDSA`, DER) through the same ceremony:
+one biometric signature to read the key, one over `signing_payload` (proof of
+possession), then the passkey re-authentication. Both surfaces approve with the
+same `master-device/approve` contract.
+
 **Trust Center UI** (`/dashboard/master-device`): generates a non-extractable
 WebCrypto P-256 key kept in IndexedDB, enrolls it with the ceremony above,
 lists pending requests (client name, exact action, request fingerprint,

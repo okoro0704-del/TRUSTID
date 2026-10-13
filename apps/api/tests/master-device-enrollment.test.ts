@@ -382,3 +382,24 @@ describe("legacy challenge routes", () => {
     expect(ok.json()).toMatchObject({ verified: true });
   });
 });
+
+describe("phone (Android Keystore) enrollment format", () => {
+  it("accepts the phone's DER signatures and SPKI, exactly as StepUpRequests sends them", async () => {
+    const s = await signedIn();
+    // Keystore SHA256withECDSA: DER signature, SPKI public key, both standard base64 from the plugin.
+    const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+    const toBase64Url = (b64: string) => b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const spki = toBase64Url(publicKey.export({ format: "der", type: "spki" }).toString("base64"));
+    const begun = (await begin(s.session, spki)).json() as { enrollment: string; signing_payload: string };
+    const der = (await import("node:crypto")).sign("sha256", Buffer.from(begun.signing_payload, "utf8"), privateKey).toString("base64");
+    const res = await complete(s.session, {
+      enrollment: begun.enrollment,
+      public_key: spki,
+      device_fingerprint: "trustid-device-2b0c5e1e-1111-4a8f-9c0a-000000000001",
+      signature: toBase64Url(der),
+      reauth: PASSKEY,
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect((await status(s.session)).json()).toMatchObject({ registered: true });
+  });
+});

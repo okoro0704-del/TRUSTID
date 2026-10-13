@@ -1,4 +1,4 @@
-import { DEFAULT_APP_SCOPES } from "@trustid/shared";
+import { DEFAULT_APP_SCOPES, SCOPES } from "@trustid/shared";
 import { prisma } from "../db/client.js";
 import { recordAudit } from "../modules/audit/service.js";
 import { PORTAL_CLIENT_SCOPES, PORTAL_OAUTH_CLIENTS } from "./portal-oauth-clients.js";
@@ -10,6 +10,12 @@ const DEFAULT_ELFCOM_REDIRECTS = [
   "https://elfcom.netlify.app/auth/callback",
   "http://localhost:5180/auth/callback",
 ];
+
+/**
+ * mybrandOS may additionally request identity.step_up: each Digi Twin request and each AI
+ * likeness consent is authorized by the person through a Trust ID step-up challenge.
+ */
+export const MYBRANDOS_SCOPES: readonly string[] = [...new Set([...DEFAULT_APP_SCOPES, SCOPES.IDENTITY_STEP_UP])];
 
 const DEFAULT_MYBRANDOS_REDIRECTS = [
   "http://localhost:5176/auth/callback",
@@ -112,7 +118,7 @@ export async function bootstrapOAuthApplications() {
     update: {
       name: "mybrandOS",
       redirectUris: JSON.stringify(mybrandRedirects),
-      allowedScopes: JSON.stringify(DEFAULT_APP_SCOPES),
+      allowedScopes: JSON.stringify(MYBRANDOS_SCOPES),
       status: "active",
       type: "public",
     },
@@ -121,7 +127,7 @@ export async function bootstrapOAuthApplications() {
       clientId: MYBRANDOS_CLIENT_ID,
       type: "public",
       redirectUris: JSON.stringify(mybrandRedirects),
-      allowedScopes: JSON.stringify(DEFAULT_APP_SCOPES),
+      allowedScopes: JSON.stringify(MYBRANDOS_SCOPES),
       status: "active",
     },
   });
