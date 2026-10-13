@@ -307,9 +307,14 @@ markJtiUsed(payload.jti);
   currently calls Master Device registration or shows a step-up approval
   screen; both are needed before any user can approve (§7).
 - The legacy routes `/v1/trust-id/challenges/issue`, `/challenges/approve`,
-  `/master-device/verify` and `/verify-biometric` are **not** step-up: the first
-  is unauthenticated, the approve/verify routes never check the signature, and
-  `verify-biometric` is 1:N and mints a session. Portal must not use them.
+  `/master-device/verify` and `/verify-biometric` are **not** step-up and Portal
+  must not use them. Hardened: `issue` needs a TrustID session and issues only
+  for that subject; `approve` needs the enrolled step-up Master Device's
+  signature over `signingPayload` (returned by `issue`:
+  `trustid-master-challenge/v1`, challenge, action, payload hash, exp);
+  `master-device/verify` needs that key's signature over the `challengeId`.
+  `verify-biometric` is 1:N and mints a session.
+- Enrolling or revoking a Master Device sends the owner a security notification.
 
 ## 7. Not provided by this change
 

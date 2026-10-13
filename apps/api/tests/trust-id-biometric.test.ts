@@ -1,3 +1,4 @@
+import { generateKeyPairSync, sign as cryptoSign } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
   AUDIT_EVENTS,
@@ -15,7 +16,7 @@ import {
   approveMasterChallenge,
 } from "../src/modules/trust-id/challenges.js";
 import { registerMasterDevice } from "../src/modules/trust-id/master-device.js";
-import { newTrustId, commitName } from "../src/lib/crypto.js";
+import { deviceFingerprintHash, newTrustId, commitName } from "../src/lib/crypto.js";
 import { __clearHotVectorCacheForTests } from "../src/modules/trust-id/vector-hot-cache.js";
 
 async function seedUser(trustId: string, seed: number) {
@@ -90,11 +91,16 @@ describe("Trust ID identity-first biometric engine", () => {
   it("issues and approves Master Device step-up for sensitive action", async () => {
     const user = await seedUser(newTrustId(), 99);
     const masterFp = "master-device-for-stepup";
-
-    await registerMasterDevice({
-      userId: user.id,
-      deviceFingerprint: masterFp,
-      publicKey: Buffer.from("stepup-pubkey").toString("base64url"),
+    // An enrolled step-up Master Device (ECDSA P-256), as the enrollment ceremony stores it.
+    const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+    await prisma.masterDevice.create({
+      data: {
+        userId: user.id,
+        deviceFingerprint: deviceFingerprintHash(masterFp),
+        publicKey: new Uint8Array(publicKey.export({ format: "der", type: "spki" })),
+        isMasterDevice: true,
+        status: "active",
+      },
     });
 
     const issued = await issueMasterChallenge({
@@ -111,7 +117,7 @@ describe("Trust ID identity-first biometric engine", () => {
       userId: user.id,
       challengeId: issued.challengeId,
       deviceFingerprint: masterFp,
-      signature: "mock-master-signature-base64url",
+      signature: cryptoSign("sha256", Buffer.from(issued.signingPayload, "utf8"), privateKey).toString("base64url"),
     });
 
     expect(approved.status).toBe(MASTER_AUTH_CHALLENGE_STATUS.APPROVED);

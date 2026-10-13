@@ -7,8 +7,26 @@ import { prisma } from "../../db/client.js";
 import { hashMasterActionPayload, hashSecret, randomToken } from "../../lib/crypto.js";
 import { recordAudit } from "../audit/service.js";
 import { createSecurityNotification } from "../notifications/service.js";
+import { deviceFingerprintHash } from "../../lib/crypto.js";
+import { activeStepUpDevice } from "../step-up/master-device-keys.js";
+import { verifyMasterDeviceSignature } from "../step-up/service.js";
+
+export const LEGACY_CHALLENGE_SIGNING_VERSION = "trustid-master-challenge/v1";
+
+/** Exact bytes the Master Device signs to approve a legacy challenge (ECDSA P-256 / SHA-256). */
+export function legacyChallengeSigningPayload(row: { challengeId: string; action: string; payloadHash: string; expiresAt: Date }) {
+  return [
+    LEGACY_CHALLENGE_SIGNING_VERSION,
+    `challenge=${row.challengeId}`,
+    `action=${row.action}`,
+    `payload=${row.payloadHash}`,
+    `exp=${row.expiresAt.toISOString()}`,
+  ].join("\n");
+}
 
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
+/** Open (pending, unexpired) legacy challenges a subject may have at once. */
+export const LEGACY_MAX_PENDING_CHALLENGES = 5;
 
 export async function issueMasterChallenge(input: {
   userId: string;
@@ -19,6 +37,12 @@ export async function issueMasterChallenge(input: {
   userAgent?: string;
 }) {
   const payloadHash = hashMasterActionPayload(input.action, input.payload ?? {});
+  const open = await prisma.masterAuthChallenge.count({
+    where: { userId: input.userId, status: MASTER_AUTH_CHALLENGE_STATUS.PENDING, expiresAt: { gt: new Date() } },
+  });
+  if (open >= LEGACY_MAX_PENDING_CHALLENGES) {
+    throw Object.assign(new Error("Too many pending approval requests"), { statusCode: 429, code: "too_many_pending_challenges" });
+  }
   const challengeId = randomToken(16);
   const expiresAt = new Date(Date.now() + CHALLENGE_TTL_MS);
 
@@ -65,6 +89,7 @@ export async function issueMasterChallenge(input: {
     payloadHash: row.payloadHash,
     expiresAt: expiresAt.toISOString(),
     status: row.status,
+    signingPayload: legacyChallengeSigningPayload(row),
   };
 }
 
@@ -110,15 +135,35 @@ export async function approveMasterChallenge(input: {
     throw Object.assign(new Error("Challenge already resolved"), { statusCode: 409 });
   }
 
+  // Approval is the enrolled step-up Master Device's signature over the challenge, nothing less.
+  const master = await activeStepUpDevice(input.userId);
+  let fingerprint = "";
+  try {
+    fingerprint = deviceFingerprintHash(input.deviceFingerprint);
+  } catch {
+    /* rejected below */
+  }
+  if (!master || master.deviceFingerprint !== fingerprint) {
+    throw Object.assign(new Error("This device is not your enrolled Master Device"), { statusCode: 403 });
+  }
+  if (!verifyMasterDeviceSignature(master.publicKey, legacyChallengeSigningPayload(row), input.signature)) {
+    throw Object.assign(new Error("Master Device signature is invalid"), { statusCode: 401 });
+  }
+
   const sigHash = hashSecret(input.signature);
-  const updated = await prisma.masterAuthChallenge.update({
-    where: { challengeId: row.challengeId },
+  // Single transition: of two concurrent approvals exactly one wins.
+  const won = await prisma.masterAuthChallenge.updateMany({
+    where: { challengeId: row.challengeId, status: MASTER_AUTH_CHALLENGE_STATUS.PENDING, expiresAt: { gt: new Date() } },
     data: {
       status: MASTER_AUTH_CHALLENGE_STATUS.APPROVED,
       approvalSignatureHash: sigHash,
       approvedAt: new Date(),
     },
   });
+  if (won.count !== 1) {
+    throw Object.assign(new Error("Challenge already resolved"), { statusCode: 409 });
+  }
+  const updated = { ...row, status: MASTER_AUTH_CHALLENGE_STATUS.APPROVED };
 
   await recordAudit({
     type: AUDIT_EVENTS.MASTER_AUTH_CHALLENGE_APPROVED,
