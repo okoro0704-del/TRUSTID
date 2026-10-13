@@ -57,6 +57,8 @@ export const STEP_UP_STATUS = {
 export const STEP_UP_TTL = { DEFAULT: 120, MIN: 30, MAX: 300 } as const;
 export const STEP_UP_APPROVAL_TTL_SECONDS = 60;
 export const STEP_UP_MAX_FAILED_ATTEMPTS = 3;
+/** Open (pending, unexpired) challenges one client may hold for one subject. */
+export const STEP_UP_MAX_PENDING_PER_CLIENT = 10;
 export const STEP_UP_APPROVAL_TYP = "trustid-step-up+jwt";
 export const STEP_UP_SIGNING_VERSION = "trustid-step-up/v1";
 
@@ -164,6 +166,13 @@ export async function createStepUpChallenge(
   const ttl = input.ttlSeconds ?? STEP_UP_TTL.DEFAULT;
   if (!Number.isInteger(ttl) || ttl < STEP_UP_TTL.MIN || ttl > STEP_UP_TTL.MAX) {
     fail(400, "invalid_request", `ttl_seconds must be ${STEP_UP_TTL.MIN}-${STEP_UP_TTL.MAX}.`);
+  }
+
+  const open = await prisma.stepUpChallenge.count({
+    where: { userId: access.userId, applicationId: access.applicationId, status: STEP_UP_STATUS.PENDING, expiresAt: { gt: new Date() } },
+  });
+  if (open >= STEP_UP_MAX_PENDING_PER_CLIENT) {
+    fail(429, "too_many_pending_challenges", "Too many pending step-up challenges for this subject.");
   }
 
   let masterDeviceId: string | null = null;
