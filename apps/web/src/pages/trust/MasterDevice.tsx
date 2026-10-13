@@ -34,6 +34,12 @@ type Outcome = { id: string; action: string; client: string; result: string; ok:
 
 const POLL_MS = 3000;
 
+// Long actions and ids must wrap inside the phone-width shell, or the Approve/Deny buttons slide off-screen.
+const WRAP = { overflowWrap: "anywhere", wordBreak: "break-word", minWidth: 0 } as const;
+// No flex-wrap: on phones .row is a column, where wrapping would push the buttons into an off-screen column.
+const ROW = { alignItems: "flex-start", gap: 12 } as const;
+const ACTIONS = { display: "flex", flexWrap: "wrap", gap: 8 } as const;
+
 /** Inside a frame another site could overlay the Approve button (clickjacking): refuse to act. */
 function isFramed() {
   try {
@@ -236,7 +242,7 @@ export function MasterDevicePage() {
   const cooldown = status?.enrollment_available_at && Date.parse(status.enrollment_available_at) > now ? status.enrollment_available_at : null;
 
   return (
-    <div className="dashboard">
+    <div className="dashboard" style={WRAP}>
       <section className="section">
         <h2>Master Device</h2>
         <p className="sub">
@@ -286,8 +292,8 @@ export function MasterDevicePage() {
               const left = secondsLeft(req.expires_at, now);
               const canSign = req.method === "master_device" && localMatches && Boolean(req.signing_payload);
               return (
-                <li key={req.challenge_id} className="row">
-                  <div className="row-main">
+                <li key={req.challenge_id} className="row" style={ROW}>
+                  <div className="row-main" style={{ ...WRAP, flex: "1 1 auto", width: "100%" }}>
                     <strong>{req.client_name ?? "Unknown app"}</strong>
                     <span>
                       wants to: <code>{req.action}</code>
@@ -302,7 +308,7 @@ export function MasterDevicePage() {
                       <span className="muted small">Open TrustID on your Master Device to approve.</span>
                     ) : null}
                   </div>
-                  <div className="actions">
+                  <div className="actions" style={ACTIONS}>
                     <button
                       className="btn btn-primary"
                       type="button"
@@ -327,8 +333,8 @@ export function MasterDevicePage() {
           <h2>Just now</h2>
           <ul className="list">
             {outcomes.map((o) => (
-              <li key={`${o.id}-${o.at}`} className="row">
-                <div className="row-main">
+              <li key={`${o.id}-${o.at}`} className="row" style={ROW}>
+                <div className="row-main" style={{ ...WRAP, flex: "1 1 auto", width: "100%" }}>
                   <strong>{o.client}</strong>
                   <span className="muted">
                     <code>{o.action}</code> · {o.result}
