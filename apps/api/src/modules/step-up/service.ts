@@ -282,6 +282,7 @@ export async function consumeStepUpChallenge(
   if (row.operationDigest !== input.operationDigest) {
     fail(403, "operation_mismatch", "Challenge was approved for a different operation.");
   }
+  await noteExpiry(row);
   const status = effectiveStatus(row);
   if (status !== STEP_UP_STATUS.APPROVED) {
     fail(409, status === STEP_UP_STATUS.CONSUMED ? "challenge_already_consumed" : "challenge_not_approved", `Challenge is ${status}.`);
@@ -338,6 +339,23 @@ async function subjectChallenge(session: SubjectSession, challengeId: string): P
   return row!;
 }
 
+/** Persist and audit an expiry the first time it is observed (expiry is otherwise computed lazily). */
+async function noteExpiry(row: ChallengeRow) {
+  if (row.status !== STEP_UP_STATUS.PENDING || effectiveStatus(row) !== STEP_UP_STATUS.EXPIRED) return;
+  const done = await prisma.stepUpChallenge.updateMany({
+    where: { id: row.id, status: STEP_UP_STATUS.PENDING, expiresAt: { lte: new Date() } },
+    data: { status: STEP_UP_STATUS.EXPIRED, resolvedAt: new Date() },
+  });
+  if (done.count === 1) {
+    await recordAudit({
+      type: "step_up.challenge_expired",
+      userId: row.userId,
+      actorType: "system",
+      metadata: { challengeId: hashId(row.challengeId), action: row.action, method: row.method, applicationId: row.applicationId },
+    });
+  }
+}
+
 function requirePending(row: ChallengeRow) {
   const status = effectiveStatus(row);
   if (status !== STEP_UP_STATUS.PENDING) {
@@ -359,7 +377,14 @@ export async function listPendingStepUps(session: SubjectSession) {
   }));
 }
 
-async function recordFailedAttempt(row: ChallengeRow) {
+async function recordFailedAttempt(row: ChallengeRow, reason: string) {
+  await recordAudit({
+    type: "step_up.approval_failed",
+    userId: row.userId,
+    actorType: "user",
+    actorId: row.userId,
+    metadata: { challengeId: hashId(row.challengeId), action: row.action, method: row.method, applicationId: row.applicationId, reason },
+  });
   await prisma.stepUpChallenge.updateMany({
     where: { id: row.id, status: STEP_UP_STATUS.PENDING },
     data: { failedAttempts: { increment: 1 } },
@@ -427,6 +452,7 @@ export async function approveWithMasterDevice(
 ) {
   const row = await subjectChallenge(session, challengeId);
   if (row.method !== "master_device") fail(400, "wrong_method", "This challenge is not a Master Device challenge.");
+  await noteExpiry(row);
   requirePending(row);
 
   let fingerprint: string;
@@ -439,11 +465,11 @@ export async function approveWithMasterDevice(
     where: { id: row.masterDeviceId ?? "", userId: row.userId, isMasterDevice: true, status: "active" },
   });
   if (!master || master.deviceFingerprint !== fingerprint) {
-    await recordFailedAttempt(row);
+    await recordFailedAttempt(row, "wrong_master_device");
     fail(403, "wrong_master_device", "This device is not the Master Device for this challenge.");
   }
   if (!verifyMasterDeviceSignature(master!.publicKey, row.signingPayload, input.signature)) {
-    await recordFailedAttempt(row);
+    await recordFailedAttempt(row, "invalid_signature");
     fail(401, "invalid_signature", "Master Device signature is invalid.");
   }
   await prisma.masterDevice.update({ where: { id: master!.id }, data: { lastVerifiedAt: new Date() } });
@@ -463,6 +489,7 @@ export async function approveWithBiometric(
 ) {
   const row = await subjectChallenge(session, challengeId);
   if (row.method !== "biometric") fail(400, "wrong_method", "This challenge is not a biometric challenge.");
+  await noteExpiry(row);
   requirePending(row);
   if (!biometricStepUpPadReady()) {
     fail(503, "step_up_pad_unavailable", `Biometric step-up is unavailable: presentation-attack detection is ${SERVER_PAD_STATUS}.`);
@@ -483,11 +510,11 @@ export async function approveWithBiometric(
       // Model/template/threshold/service problems are not a "no match" and do not count as attempts.
       fail(code === BIOMETRIC_ERROR_CODES.BIOMETRIC_SERVICE_UNAVAILABLE ? 503 : 422, code.toLowerCase(), "Biometric verification could not be performed.");
     }
-    await recordFailedAttempt(row);
+    await recordFailedAttempt(row, "biometric_no_match");
     fail(401, "biometric_no_match", "The face does not match this TrustID.");
   }
   if (result.userId && result.userId !== row.userId) {
-    await recordFailedAttempt(row);
+    await recordFailedAttempt(row, "biometric_no_match");
     fail(401, "biometric_no_match", "The face does not match this TrustID.");
   }
   return markApproved(row, {
@@ -499,11 +526,19 @@ export async function approveWithBiometric(
 /** Subject: refuse a pending challenge. */
 export async function denyStepUp(session: SubjectSession, challengeId: string) {
   const row = await subjectChallenge(session, challengeId);
+  await noteExpiry(row);
   requirePending(row);
   const done = await prisma.stepUpChallenge.updateMany({
     where: { id: row.id, status: STEP_UP_STATUS.PENDING },
     data: { status: STEP_UP_STATUS.DENIED, resolvedAt: new Date() },
   });
   if (done.count !== 1) fail(409, "challenge_not_pending", "Challenge is no longer pending.");
+  await recordAudit({
+    type: "step_up.challenge_denied",
+    userId: row.userId,
+    actorType: "user",
+    actorId: row.userId,
+    metadata: { challengeId: hashId(row.challengeId), action: row.action, method: row.method, applicationId: row.applicationId },
+  });
   return { challenge_id: row.challengeId, status: STEP_UP_STATUS.DENIED };
 }
