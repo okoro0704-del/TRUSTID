@@ -50,6 +50,10 @@ declare global {
         publicKeyBase64: string;
       }>;
     };
+    /** Master Device key in Android Keystore (attested, per-use Class 3 biometric). */
+    TrustIdMasterDevice?: import("../masterDeviceNative").MasterDeviceNative;
+    /** Native passkeys through Android Credential Manager. */
+    TrustIdPasskey?: import("../masterDeviceNative").PasskeyNative;
     TrustIdMediaVault?: ConstructorParameters<typeof MediaVault>[1];
     TrustIdAppLock?: ConstructorParameters<typeof AppLockController>[1];
     Capacitor?: { isNativePlatform?: () => boolean };

@@ -17,6 +17,15 @@
 # version bump changes the URL and they can be cached immutably.
 # The SDK keeps verified copies of every biometric asset in Cache Storage and
 # fetches with cache: "no-store", so a cached error page is never replayed.
+# Digital Asset Links: served as the static JSON file (the SPA fallback is not forced), never cached long,
+# so a change of app signing certificate takes effect promptly.
+[[headers]]
+  for = "/.well-known/assetlinks.json"
+  [headers.values]
+    Content-Type = "application/json"
+    Cache-Control = "public, max-age=300"
+    Access-Control-Allow-Origin = "*"
+
 [[headers]]
   for = "/mediapipe/*"
   [headers.values]

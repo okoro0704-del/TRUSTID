@@ -51,3 +51,24 @@ export async function reauthenticate(): Promise<unknown> {
     throw err;
   }
 }
+
+/**
+ * Passkey assertion WITH user verification, for Master Device enrollment and revocation.
+ * Inside the TrustID Android app it uses the native Credential Manager (the WebView's own WebAuthn
+ * support varies by device); in a browser it uses WebAuthn. The server enforces UV either way.
+ */
+export async function reauthenticateWithUserVerification(): Promise<unknown> {
+  const raw = await api<AuthOptions & { challengeId?: string; purpose?: string }>("/auth/webauthn/reauth/options", {
+    method: "POST",
+    body: JSON.stringify({ userVerification: "required" }),
+  });
+  const { challengeId: _c, purpose: _p, ...optionsJSON } = raw;
+  void _c;
+  void _p;
+  const native = typeof window !== "undefined" ? window.TrustIdPasskey : undefined;
+  if (native) {
+    const { responseJson } = await native.getAssertion({ requestJson: JSON.stringify({ ...optionsJSON, userVerification: "required" }) });
+    return JSON.parse(responseJson) as unknown;
+  }
+  return startAuthentication({ optionsJSON: { ...optionsJSON, userVerification: "required" } });
+}
