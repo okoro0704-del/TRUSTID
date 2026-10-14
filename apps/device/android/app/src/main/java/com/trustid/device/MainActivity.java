@@ -14,7 +14,9 @@ import com.trustid.device.plugins.AppUpdatePlugin;
 import com.trustid.device.plugins.BiometricAssetsPlugin;
 import com.trustid.device.plugins.BiometricGatePlugin;
 import com.trustid.device.plugins.HeadsUpNotificationPlugin;
+import com.trustid.device.plugins.MasterDevicePlugin;
 import com.trustid.device.plugins.MediaVaultPlugin;
+import com.trustid.device.plugins.PasskeyPlugin;
 import com.trustid.device.plugins.SilentAuthPlugin;
 import com.trustid.device.plugins.SilentFaceCapturePlugin;
 
@@ -32,6 +34,8 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(HeadsUpNotificationPlugin.class);
         registerPlugin(AppUpdatePlugin.class);
         registerPlugin(BiometricAssetsPlugin.class);
+        registerPlugin(MasterDevicePlugin.class);
+        registerPlugin(PasskeyPlugin.class);
         super.onCreate(savedInstanceState);
         // Face-recognition runtimes and models ship in the APK; serve them locally.
         BiometricAssetInterceptor.INSTANCE.install(getBridge());

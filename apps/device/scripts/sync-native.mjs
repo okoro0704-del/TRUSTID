@@ -233,6 +233,8 @@ function syncAndroid() {
   const resValues = join(androidRoot, "app", "src", "main", "res", "values");
 
   copyFile(join(nativeAndroid, "BiometricGatePlugin.kt"), join(javaPlugins, "BiometricGatePlugin.kt"));
+  copyFile(join(nativeAndroid, "MasterDevicePlugin.kt"), join(javaPlugins, "MasterDevicePlugin.kt"));
+  copyFile(join(nativeAndroid, "PasskeyPlugin.kt"), join(javaPlugins, "PasskeyPlugin.kt"));
   copyFile(join(nativeAndroid, "MediaVaultPlugin.kt"), join(javaPlugins, "MediaVaultPlugin.kt"));
   copyFile(join(nativeAndroid, "AppLockPlugin.kt"), join(javaPlugins, "AppLockPlugin.kt"));
   copyFile(join(nativeAndroid, "SilentFaceCapturePlugin.kt"), join(javaPlugins, "SilentFaceCapturePlugin.kt"));
