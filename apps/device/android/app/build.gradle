@@ -36,10 +36,32 @@ android {
     kotlinOptions {
         jvmTarget = '17'
     }
+    // Release signing comes only from the environment of a protected build (never from the repo):
+    // TRUSTID_RELEASE_KEYSTORE (path), TRUSTID_RELEASE_KEYSTORE_PASSWORD, TRUSTID_RELEASE_KEY_ALIAS,
+    // TRUSTID_RELEASE_KEY_PASSWORD. Without all four the release APK is left unsigned; it is never
+    // signed with the debug key. See docs/security/android-master-device-release-signing.md.
+    def releaseSigning = ['TRUSTID_RELEASE_KEYSTORE', 'TRUSTID_RELEASE_KEYSTORE_PASSWORD', 'TRUSTID_RELEASE_KEY_ALIAS', 'TRUSTID_RELEASE_KEY_PASSWORD']
+        .collectEntries { [(it): System.getenv(it)] }
+    def releaseSigningConfigured = releaseSigning.values().every { it }
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            release {
+                storeFile file(releaseSigning.TRUSTID_RELEASE_KEYSTORE)
+                storePassword releaseSigning.TRUSTID_RELEASE_KEYSTORE_PASSWORD
+                keyAlias releaseSigning.TRUSTID_RELEASE_KEY_ALIAS
+                keyPassword releaseSigning.TRUSTID_RELEASE_KEY_PASSWORD
+                enableV2Signing true
+                enableV3Signing true
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            // Release builds are never debuggable (no run-as, no WebView inspection, BuildConfig.DEBUG false).
+            debuggable false
+            signingConfig releaseSigningConfigured ? signingConfigs.release : null
         }
     }
 }

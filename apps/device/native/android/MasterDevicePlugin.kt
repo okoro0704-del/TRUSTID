@@ -182,12 +182,16 @@ class MasterDevicePlugin : Plugin() {
   }
 
   /**
-   * Sign exactly `payload` with the Master Device key after a fresh Class 3 biometric prompt
-   * showing `title` / `subtitle` (what is being approved). Uses `alias`, else the active key.
+   * Sign exactly `payload` with the Master Device key after a fresh Class 3 biometric prompt.
+   * Only TrustID's own payload formats are signed, and the prompt is built from the payload's
+   * fields (action, requesting app, TrustID), never from text supplied by the web page, so web
+   * content cannot get an approval signed under a misleading prompt. Uses `alias`, else the active key.
    */
   @PluginMethod
   fun sign(call: PluginCall) {
     val payload = call.getString("payload") ?: return call.reject("payload is required", "invalid_request")
+    val shown = MasterDevicePrompt.describe(payload)
+      ?: return call.reject("This request cannot be signed by the Master Device", "unsupported_payload")
     val alias = call.getString("alias") ?: prefs().getString(PREF_ACTIVE_ALIAS, null)
       ?: return call.reject("No Master Device key on this phone", "no_key")
     val signature = try {
@@ -219,8 +223,9 @@ class MasterDevicePlugin : Plugin() {
         }
       })
       val info = BiometricPrompt.PromptInfo.Builder()
-        .setTitle(call.getString("title") ?: "Approve with your Master Device")
-        .setSubtitle(call.getString("subtitle") ?: "")
+        .setTitle(shown.title)
+        .setSubtitle(shown.subtitle)
+        .setDescription(shown.description)
         .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
         .setNegativeButtonText("Cancel")
         .setConfirmationRequired(true)
@@ -236,6 +241,50 @@ class MasterDevicePlugin : Plugin() {
     try {
       keyStore().deleteEntry(alias)
     } catch (_: Exception) {
+    }
+  }
+}
+
+/**
+ * What the biometric prompt shows, derived only from the bytes being signed. Accepts exactly the
+ * payloads the TrustID API issues for the Master Device (fields in their fixed order); anything
+ * else is refused, so the key is not a general-purpose signing oracle for the WebView.
+ */
+object MasterDevicePrompt {
+  data class Prompt(val title: String, val subtitle: String, val description: String)
+
+  private const val MAX_PAYLOAD = 2048
+  private val ACTION = Regex("^[a-z][a-z0-9_.:-]{1,99}$")
+  private val TOKEN = Regex("^[A-Za-z0-9_.:@+/=-]{1,200}$")
+
+  private val FORMATS = mapOf(
+    "trustid-step-up/v1" to listOf("challenge", "sub", "client", "action", "operation", "session", "device", "exp"),
+    "trustid-master-device-enroll/v1" to listOf("enrollment", "sub", "key", "exp"),
+    "trustid-master-device-revoke/v1" to listOf("sub", "device"),
+  )
+
+  fun describe(payload: String): Prompt? {
+    if (payload.isEmpty() || payload.length > MAX_PAYLOAD) return null
+    val lines = payload.split("\n")
+    val keys = FORMATS[lines[0]] ?: return null
+    if (lines.size != keys.size + 1) return null
+    val fields = LinkedHashMap<String, String>()
+    for ((i, key) in keys.withIndex()) {
+      val line = lines[i + 1]
+      if (!line.startsWith("$key=")) return null
+      val value = line.substring(key.length + 1)
+      if (!TOKEN.matches(value)) return null
+      fields[key] = value
+    }
+    val sub = fields.getValue("sub")
+    return when (lines[0]) {
+      "trustid-step-up/v1" -> {
+        val action = fields.getValue("action")
+        if (!ACTION.matches(action)) return null
+        Prompt("Approve: $action", "Requested by ${fields.getValue("client")}", "TrustID $sub")
+      }
+      "trustid-master-device-enroll/v1" -> Prompt("Make this phone your Master Device", "TrustID $sub", "This phone will approve sensitive requests for your TrustID.")
+      else -> Prompt("Remove this Master Device", "TrustID $sub", "This phone will no longer approve requests for your TrustID.")
     }
   }
 }
