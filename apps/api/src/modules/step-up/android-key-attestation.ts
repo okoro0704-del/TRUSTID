@@ -32,6 +32,7 @@ const KM = {
   DIGEST_SHA256: 4,
   AUTH_BIOMETRIC: 2, // HardwareAuthenticatorType.FINGERPRINT (any Class 3 biometric)
   BOOT_VERIFIED: 0,
+  ORIGIN_GENERATED: 0, // KeyOrigin: created inside the secure hardware (not imported / derived)
 } as const;
 
 /** AuthorizationList tags (context-specific, explicit). */
@@ -44,6 +45,7 @@ const TAG = {
   noAuthRequired: 503,
   userAuthType: 504,
   authTimeout: 505,
+  origin: 702,
   rootOfTrust: 704,
   attestationApplicationId: 709,
 } as const;
@@ -289,6 +291,8 @@ export function verifyAndroidKeyAttestation(
   if (!hw.get(TAG.algorithm) || asInteger(hw.get(TAG.algorithm)!) !== KM.ALGORITHM_EC) reject("not_ec");
   if (!hw.get(TAG.ecCurve) || asInteger(hw.get(TAG.ecCurve)!) !== KM.EC_CURVE_P256) reject("not_p256");
   if (!intSet(hw.get(TAG.digest)).includes(KM.DIGEST_SHA256)) reject("no_sha256");
+  // Generated in the hardware: an imported key existed outside it, so it may exist elsewhere too.
+  if (!hw.get(TAG.origin) || asInteger(hw.get(TAG.origin)!) !== KM.ORIGIN_GENERATED) reject("key_not_generated_in_hardware");
   if (hw.has(TAG.noAuthRequired) || kd.softwareEnforced.has(TAG.noAuthRequired)) reject("no_user_auth");
   const authType = hw.get(TAG.userAuthType) ?? reject("not_biometric_bound");
   if ((asInteger(authType) & KM.AUTH_BIOMETRIC) === 0) reject("not_biometric_bound");
@@ -339,12 +343,17 @@ export async function fetchRevokedAttestationSerials(fetchImpl: typeof fetch = f
   if (revocationCache && Date.now() - revocationCache.at < 3600_000) return revocationCache.serials;
   const res = await fetchImpl("https://android.googleapis.com/attestation/status", { signal: AbortSignal.timeout(8000) });
   if (!res.ok) throw new AttestationRejected("revocation_list_unavailable");
-  const body = (await res.json()) as { entries?: Record<string, { status?: string }> };
-  const serials = new Set(
-    Object.entries(body.entries ?? {})
-      .filter(([, v]) => (v.status ?? "").toUpperCase() === "REVOKED")
-      .map(([k]) => normalizeSerial(k)),
-  );
+  const serials = revokedSerialsFromStatusList(await res.json());
   revocationCache = { at: Date.now(), serials };
   return serials;
+}
+
+/**
+ * Every serial the status list names is untrusted, whatever its status: REVOKED, SUSPENDED
+ * (temporarily distrusted) or a status added later. The list only names certificates in trouble.
+ */
+export function revokedSerialsFromStatusList(body: unknown): Set<string> {
+  const entries = (body as { entries?: Record<string, unknown> } | null)?.entries;
+  if (!entries || typeof entries !== "object") throw new AttestationRejected("revocation_list_unavailable");
+  return new Set(Object.keys(entries).map(normalizeSerial));
 }

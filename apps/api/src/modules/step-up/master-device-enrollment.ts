@@ -41,6 +41,7 @@ export const ENROLLMENT_SIGNING_VERSION = "trustid-master-device-enroll/v1";
 export const ATTESTATION_CHALLENGE_VERSION = "trustid-master-device-attest/v1";
 export const REVOKE_SIGNING_VERSION = "trustid-master-device-revoke/v1";
 export const ENROLLMENT_TTL_SECONDS = 300;
+const ENROLLMENT_CLAIM_PURPOSE = "master_device_enrollment";
 
 const MASTER_STATUS = { ACTIVE: "active", REVOKED: "revoked" } as const;
 const REVOKED_EVENT = "step_up.master_device_revoked";
@@ -334,14 +335,26 @@ export async function completeEnrollment(
   }
   const existing = await prisma.masterDevice.findUnique({ where: { deviceFingerprint: fingerprint } });
   if (existing && existing.userId !== session.userId) fail(409, "device_bound_elsewhere", "This device is bound to another TrustID.");
-  const row = existing
-    ? await prisma.masterDevice.update({
-        where: { id: existing.id },
-        data: { publicKey: new Uint8Array(spki), isMasterDevice: true, status: MASTER_STATUS.ACTIVE, lastVerifiedAt: new Date() },
-      })
-    : await prisma.masterDevice.create({
-        data: { userId: session.userId, deviceFingerprint: fingerprint, publicKey: new Uint8Array(spki), isMasterDevice: true, status: MASTER_STATUS.ACTIVE, lastVerifiedAt: new Date() },
-      });
+
+  // One enrollment per enrollment state: concurrent completions (same token, or two ceremonies
+  // begun from the same state) would otherwise each pass the checks above and leave two active
+  // Master Devices, one of which a later revoke would miss.
+  const claim = await claimEnrollmentState(session.userId, claims);
+  let row;
+  try {
+    row = existing
+      ? await prisma.masterDevice.update({
+          where: { id: existing.id },
+          data: { publicKey: new Uint8Array(spki), isMasterDevice: true, status: MASTER_STATUS.ACTIVE, lastVerifiedAt: new Date() },
+        })
+      : await prisma.masterDevice.create({
+          data: { userId: session.userId, deviceFingerprint: fingerprint, publicKey: new Uint8Array(spki), isMasterDevice: true, status: MASTER_STATUS.ACTIVE, lastVerifiedAt: new Date() },
+        });
+  } catch (err) {
+    // The state did not change: release the claim so the subject can try again.
+    await prisma.webAuthnChallenge.delete({ where: { id: claim } }).catch(() => undefined);
+    throw err;
+  }
 
   await recordAudit({
     type: AUDIT_EVENTS.MASTER_DEVICE_REGISTERED,
@@ -368,6 +381,29 @@ export async function completeEnrollment(
     payload: { masterDeviceId: row.id },
   });
   return { registered: true, device: { id: row.id, key_thumbprint: claims.key, security_level: attestation?.securityLevel ?? null } };
+}
+
+/**
+ * Claim the enrollment state the token was issued in (unique row; a second claim fails). Stored with
+ * WebAuthn challenges under a purpose no WebAuthn ceremony accepts, so it can never be consumed as one.
+ */
+async function claimEnrollmentState(userId: string, claims: EnrollmentClaims): Promise<string> {
+  try {
+    const row = await prisma.webAuthnChallenge.create({
+      data: {
+        userId,
+        type: ENROLLMENT_CLAIM_PURPOSE,
+        purpose: ENROLLMENT_CLAIM_PURPOSE,
+        challenge: `${ENROLLMENT_CLAIM_PURPOSE}:${sha256(`${userId}:${claims.state}`)}`,
+        expiresAt: new Date(claims.exp * 1000),
+        consumedAt: new Date(),
+      },
+      select: { id: true },
+    });
+    return row.id;
+  } catch {
+    return fail(409, "enrollment_stale", "Master Device enrollment changed. Start again.");
+  }
 }
 
 async function auditFailure(session: EnrollmentSession, reason: string, meta: Meta) {
@@ -477,8 +513,9 @@ export async function revokeStepUpDevice(session: EnrollmentSession, input: { re
     data: { status: MASTER_STATUS.REVOKED, isMasterDevice: false },
   });
   if (done.count !== 1) fail(409, "master_device_not_registered", "The Master Device was already revoked.");
+  // Pending requests, and approvals no app has consumed yet, die with the device.
   await prisma.stepUpChallenge.updateMany({
-    where: { userId: session.userId, masterDeviceId: device!.id, status: "pending" },
+    where: { userId: session.userId, masterDeviceId: device!.id, status: { in: ["pending", "approved"] }, consumedAt: null },
     data: { status: "cancelled", resolvedAt: new Date() },
   });
   await recordAudit({

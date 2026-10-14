@@ -116,6 +116,7 @@ export type KeyDescriptionInput = {
   authTimeout?: number | null;
   deviceLocked?: boolean;
   verifiedBootState?: number;
+  origin?: number | null; // 0 generated in hardware, 2 imported; null = absent
   packageName?: string;
   signingCertSha256?: string;
 };
@@ -137,6 +138,7 @@ export function keyDescription(i: KeyDescriptionInput): Buffer {
   if (i.noAuthRequired) hardware.push(ctx(503, nul()));
   if (i.userAuthType !== null) hardware.push(ctx(504, int(i.userAuthType ?? 2)));
   if (i.authTimeout !== null && i.authTimeout !== undefined) hardware.push(ctx(505, int(i.authTimeout)));
+  if (i.origin !== null) hardware.push(ctx(702, int(i.origin ?? 0)));
   hardware.push(ctx(704, seq(octets(randomBytes(32)), bool(i.deviceLocked ?? true), enumerated(i.verifiedBootState ?? 0), octets(randomBytes(32)))));
   return seq(int(300), enumerated(level), int(300), enumerated(level), octets(i.challenge), octets(Buffer.alloc(0)), software, seq(...hardware));
 }

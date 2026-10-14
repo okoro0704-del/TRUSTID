@@ -10,6 +10,8 @@ import { prisma } from "../src/db/client.js";
 import { config } from "../src/lib/config.js";
 import { createSession } from "../src/modules/sessions/service.js";
 import { setAttestationRootsForTests } from "../src/modules/step-up/master-device-enrollment.js";
+import { normalizeSerial, revokedSerialsFromStatusList } from "../src/modules/step-up/android-key-attestation.js";
+import { consumeWebAuthnChallenge } from "../src/modules/authentication/challenges.js";
 import { resetTables } from "./helpers/db.js";
 import { attestationChain, assertion, seedPasskey, testAttestationRoot, type KeyDescriptionInput, type SoftwarePasskey } from "./helpers/android-attestation.js";
 import { createZeroPiiUser } from "./helpers/zero-pii-user.js";
@@ -231,6 +233,8 @@ describe("13. hardware and per-use biometric policy (Android Key Attestation)", 
     ["authentication valid for a time window, not per use", { authTimeout: 30 }, null, /auth_not_per_use/],
     ["not a signing key", { purposes: [0] }, null, /not_a_signing_key/],
     ["not P-256", { ecCurve: 2 }, null, /not_p256/],
+    ["key imported into the hardware, not generated there", { origin: 2 }, null, /key_not_generated_in_hardware/],
+    ["key origin not attested by the hardware", { origin: null }, null, /key_not_generated_in_hardware/],
     ["unlocked bootloader", { deviceLocked: false }, null, /unverified_boot/],
     ["unverified boot", { verifiedBootState: 2 }, null, /unverified_boot/],
     ["another app package", { packageName: "com.attacker.app" }, null, /wrong_package/],
@@ -361,6 +365,128 @@ describe("approvals with an enrolled Android Master Device", () => {
     expect(again.statusCode).toBe(409);
     expect(again.json()).toMatchObject({ error: "master_device_recovery_required" });
     expect((await status(o)).json()).toMatchObject({ registered: false, recovery_required: true });
+  });
+});
+
+describe("release-candidate hardening", () => {
+  it("an approval no app has consumed yet dies with the revoked device", async () => {
+    const o = await owner();
+    const r = await enroll(o);
+    expect(r.done!.statusCode).toBe(200);
+    const phone = r.phone!;
+    const tokens = await portalTokens(app, o.userId);
+    const action = "mybrandos.likeness.approve";
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/step-up/challenges",
+      headers: { authorization: `Bearer ${tokens.access_token}` },
+      payload: { method: "master_device", action, operation_digest: digest(`op-${action}`), session_binding: digest("rp-session") },
+    });
+    const id = created.json().challenge_id as string;
+    const list = (await app.inject({ method: "GET", url: "/v1/step-up/pending", cookies: o.session })).json() as { challenges: Array<{ challenge_id: string; signing_payload: string }> };
+    const payload = list.challenges.find((c) => c.challenge_id === id)!.signing_payload;
+    const approved = await post(`/v1/step-up/challenges/${id}/master-device/approve`, o.session, {
+      device_fingerprint: phone.fingerprint,
+      signature: cryptoSign("sha256", Buffer.from(payload), phone.privateKey).toString("base64url"),
+    });
+    expect(approved.statusCode).toBe(200);
+    // The owner revokes before the app consumed the approval (e.g. the phone was taken).
+    expect((await post("/v1/step-up/master-device/revoke", o.session, { reauth: await passkeyAssertion(o) })).statusCode).toBe(200);
+    const consume = await app.inject({
+      method: "POST",
+      url: `/v1/step-up/challenges/${id}/consume`,
+      headers: { authorization: `Bearer ${tokens.access_token}` },
+      payload: { session_binding: digest("rp-session"), operation_digest: digest(`op-${action}`) },
+    });
+    expect(consume.statusCode).toBe(409);
+    expect((await prisma.stepUpChallenge.findUniqueOrThrow({ where: { challengeId: id } })).status).toBe("cancelled");
+  });
+
+  it("concurrent completions enroll at most one Master Device (same token, or two ceremonies from the same state)", async () => {
+    const o = await owner();
+    async function prepared() {
+      const begun = await post("/v1/step-up/master-device/enrollment", o.session, {});
+      const key = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+      const spki = key.publicKey.export({ format: "der", type: "spki" }).toString("base64url");
+      const bound = await post("/v1/step-up/master-device/enrollment/key", o.session, { enrollment: begun.json().enrollment, public_key: spki });
+      expect(bound.statusCode).toBe(200);
+      const chain = attestationChain(root, key.publicKey, { challenge: Buffer.from(begun.json().attestation_challenge, "base64url"), signingCertSha256: APP_CERT });
+      return (fingerprint: string, reauth: unknown) => ({
+        enrollment: bound.json().enrollment,
+        public_key: spki,
+        device_fingerprint: fingerprint,
+        signature: cryptoSign("sha256", Buffer.from(bound.json().signing_payload, "utf8"), key.privateKey).toString("base64url"),
+        reauth,
+        attestation: chain,
+      });
+    }
+    const a = await prepared();
+    const b = await prepared();
+    const bodies = [
+      a("trustid-device-race-a1", await passkeyAssertion(o)),
+      a("trustid-device-race-a2", await passkeyAssertion(o)),
+      b("trustid-device-race-b1", await passkeyAssertion(o)),
+    ];
+    const results = await Promise.all(bodies.map((body) => post("/v1/step-up/master-device/enrollment/complete", o.session, body)));
+    expect(results.map((r) => r.statusCode).filter((c) => c === 200)).toHaveLength(1);
+    for (const r of results.filter((x) => x.statusCode !== 200)) expect(r.statusCode).toBe(409);
+    expect(await prisma.masterDevice.count({ where: { userId: o.userId, status: "active", isMasterDevice: true } })).toBe(1);
+    // After revoking it, nothing is left that could still approve.
+    expect((await post("/v1/step-up/master-device/revoke", o.session, { reauth: await passkeyAssertion(o) })).statusCode).toBe(200);
+    expect((await status(o)).json().registered).toBe(false);
+  });
+
+  it("every payload the server asks the phone to sign fits the native signer's strict grammar (MasterDevicePrompt.kt)", async () => {
+    // Mirror of apps/device/native/android/MasterDevicePlugin.kt MasterDevicePrompt: the plugin refuses anything else.
+    const FORMATS: Record<string, string[]> = {
+      "trustid-step-up/v1": ["challenge", "sub", "client", "action", "operation", "session", "device", "exp"],
+      "trustid-master-device-enroll/v1": ["enrollment", "sub", "key", "exp"],
+      "trustid-master-device-revoke/v1": ["sub", "device"],
+    };
+    const signable = (payload: string) => {
+      const lines = payload.split("\n");
+      const keys = FORMATS[lines[0]!];
+      return Boolean(keys) && payload.length <= 2048 && lines.length === keys!.length + 1 &&
+        keys!.every((k, i) => lines[i + 1]!.startsWith(`${k}=`) && /^[A-Za-z0-9_.:@+/=-]{1,200}$/.test(lines[i + 1]!.slice(k.length + 1)));
+    };
+    const o = await owner();
+    const begun = await post("/v1/step-up/master-device/enrollment", o.session, {});
+    const key = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+    const bound = await post("/v1/step-up/master-device/enrollment/key", o.session, { enrollment: begun.json().enrollment, public_key: key.publicKey.export({ format: "der", type: "spki" }).toString("base64url") });
+    expect(signable(bound.json().signing_payload)).toBe(true);
+    const o2 = await owner();
+    expect((await enroll(o2)).done!.statusCode).toBe(200);
+    const tokens = await portalTokens(app, o2.userId);
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/step-up/challenges",
+      headers: { authorization: `Bearer ${tokens.access_token}` },
+      payload: { method: "master_device", action: "users.role:write", operation_digest: digest("op"), session_binding: digest("rp-session") },
+    });
+    const list = (await app.inject({ method: "GET", url: "/v1/step-up/pending", cookies: o2.session })).json() as { challenges: Array<{ challenge_id: string; signing_payload: string }> };
+    const stepUp = list.challenges.find((c) => c.challenge_id === created.json().challenge_id)!.signing_payload;
+    expect(signable(stepUp)).toBe(true);
+    const st = (await status(o2)).json();
+    expect(signable(["trustid-master-device-revoke/v1", `sub=${o2.trustId}`, `device=${st.device.id}`].join("\n"))).toBe(true);
+    expect(signable("anything else")).toBe(false);
+  });
+
+  it("a WebAuthn challenge is consumed once even by concurrent requests", async () => {
+    const o = await owner();
+    const options = await post("/auth/webauthn/reauth/options", o.session, { userVerification: "required" });
+    const challenge = options.json().challenge as string;
+    const results = await Promise.all([1, 2, 3, 4, 5].map(() => consumeWebAuthnChallenge({ challenge, purpose: "reauthentication", userId: o.userId })));
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+  });
+
+  it("the attestation status list: every listed serial is untrusted (REVOKED and SUSPENDED); a malformed list fails closed", () => {
+    const serials = revokedSerialsFromStatusList({
+      entries: { "0A1b": { status: "REVOKED", reason: "KEY_COMPROMISE" }, c0ffee: { status: "SUSPENDED", reason: "SOFTWARE_FLAW" } },
+    });
+    expect(serials.has(normalizeSerial("0a1b"))).toBe(true);
+    expect(serials.has("c0ffee")).toBe(true);
+    expect(() => revokedSerialsFromStatusList({})).toThrow(/revocation_list_unavailable/);
+    expect(() => revokedSerialsFromStatusList(null)).toThrow(/revocation_list_unavailable/);
   });
 });
 

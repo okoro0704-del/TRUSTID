@@ -57,11 +57,16 @@ export async function consumeWebAuthnChallenge(input: {
     return { ok: false as const, reason: "user_mismatch" as const };
   }
 
-  const updated = await prisma.webAuthnChallenge.update({
-    where: { id: row.id },
-    data: { consumedAt: new Date() },
+  // Single use under concurrency: only the request that flips consumedAt wins.
+  const consumedAt = new Date();
+  const won = await prisma.webAuthnChallenge.updateMany({
+    where: { id: row.id, consumedAt: null },
+    data: { consumedAt },
   });
-  return { ok: true as const, challenge: updated };
+  if (won.count !== 1) {
+    return { ok: false as const, reason: "consumed" as const };
+  }
+  return { ok: true as const, challenge: { ...row, consumedAt } };
 }
 
 /** Extract base64url challenge from a WebAuthn clientDataJSON string. */
