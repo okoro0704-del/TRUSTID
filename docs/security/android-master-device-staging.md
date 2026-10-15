@@ -27,7 +27,7 @@ Railway: staging PostgreSQL + pgvector (disposable)       Staging Portal → sta
 | Web origin / RP ID | new Netlify site, e.g. `trustid-staging.netlify.app` (name is the owner's choice) | `trustedid.netlify.app` |
 | API | separate Railway service/environment running the reviewed commit | `lucid-integrity` (project LifeOS) |
 | Database | its own Postgres + pgvector, disposable | `pgvector` service |
-| Secrets | fresh: `COOKIE_SECRET`, `SESSION_SECRET`, `TRUSTID_TOKEN_KEYS`, `PII_PEPPER`, `SEAL_KEY`, OAuth client secrets | never copied |
+| Secrets | fresh: `COOKIE_SECRET`, `SESSION_SECRET`, `PII_PEPPER`, `SEAL_KEY`, `MEDIA_SIGNING_SECRET`, `WIPE_SECRET`; OIDC signing keys generated on first boot (sealed with `SEAL_KEY`) | never copied |
 | OIDC issuer / JWKS | `https://<staging>/api`, its own `kid` | `https://trustedid.netlify.app/api`, kid `263c1076162e8c26` |
 | Android app | `com.trustid.device.staging`, staging key, live shell = staging origin, OTA from the staging origin | `com.trustid.device` |
 | Digital Asset Links | staging site → staging package + staging cert | release cert only (after release signing) |
@@ -35,6 +35,7 @@ Railway: staging PostgreSQL + pgvector (disposable)       Staging Portal → sta
 | Audit | staging database `audit_events`; reviewed per test run | — |
 
 API settings: `deploy/staging/trustid-api-staging.env.example` (names and policy, no values).
+Provisioning plan, preflight findings and approval checkpoint: `android-master-device-staging-provisioning.md`.
 
 ## What is implemented (local, tested)
 
