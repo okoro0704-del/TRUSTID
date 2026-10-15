@@ -171,6 +171,14 @@
   to = "/404.html"
   status = 404
 
+# Android release artifacts (APK, OTA manifest) exist only in production builds. Anywhere they are
+# absent (staging, previews) the path must fail as 404, never answer with the SPA page under the
+# release headers above. Not forced: a published production release file is always served as-is.
+[[redirects]]
+  from = "/releases/*"
+  to = "/404.html"
+  status = 404
+
 # SPA fallback
 [[redirects]]
   from = "/*"
