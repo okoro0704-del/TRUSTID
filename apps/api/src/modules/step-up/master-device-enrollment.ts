@@ -12,7 +12,13 @@
  * Ceremony (all calls in one TrustID session):
  *   POST /enrollment                → enrollment token + attestation_challenge   (key generated next)
  *   POST /enrollment/key            → enrollment token bound to the key + signing_payload
+ *   POST /enrollment/reauth         → passkey options bound to THIS enrollment (nonce + key)
  *   POST /enrollment/complete       → attestation + signature + passkey(UV)      → enrolled
+ * Removal: POST /revoke/begin (single-use, expiring payload + bound passkey options) → POST /revoke.
+ *
+ * Passkey challenges for these ceremonies are bound to the operation and its context (HMAC over
+ * subject, session, nonce and key / device) and stored under their own purpose: an assertion made
+ * for one enrollment or removal cannot be spent on another, nor on any other Trust Center action.
  *
  * Tokens are HMAC-sealed, short-lived and bound to subject, TrustID session, key and the current
  * enrollment state; any enrollment or revocation changes that state, so a token is single-use.
@@ -26,7 +32,7 @@ import { config } from "../../lib/config.js";
 import { deviceFingerprintHash } from "../../lib/crypto.js";
 import { recordAudit } from "../audit/service.js";
 import { createSecurityNotification } from "../notifications/service.js";
-import { verifyReauthentication } from "../authentication/webauthn.js";
+import { reauthenticationOptions, verifyReauthentication } from "../authentication/webauthn.js";
 import {
   AttestationRejected,
   fetchRevokedAttestationSerials,
@@ -39,9 +45,13 @@ import { StepUpError, verifyMasterDeviceSignature } from "./service.js";
 
 export const ENROLLMENT_SIGNING_VERSION = "trustid-master-device-enroll/v1";
 export const ATTESTATION_CHALLENGE_VERSION = "trustid-master-device-attest/v1";
-export const REVOKE_SIGNING_VERSION = "trustid-master-device-revoke/v1";
+export const REVOKE_SIGNING_VERSION = "trustid-master-device-revoke/v2";
 export const ENROLLMENT_TTL_SECONDS = 300;
-const ENROLLMENT_CLAIM_PURPOSE = "master_device_enrollment";
+export const REVOKE_TTL_SECONDS = 300;
+/** WebAuthn challenge purposes no other ceremony accepts. */
+const CLAIM_PURPOSE = "master_device_claim";
+const REAUTH_PURPOSE = "master_device_reauth";
+const REAUTH_BINDING_VERSION = "trustid-master-device-reauth/v1";
 
 const MASTER_STATUS = { ACTIVE: "active", REVOKED: "revoked" } as const;
 const REVOKED_EVENT = "step_up.master_device_revoked";
@@ -70,6 +80,9 @@ export const enrollmentConfig = {
       signingCertSha256: (process.env.ANDROID_APP_SIGNING_SHA256 ?? "").split(",").map((s) => s.trim()).filter(Boolean),
       minSecurityLevel: process.env.ANDROID_ATTESTATION_MIN_LEVEL === "strongbox" ? "strongbox" : "tee",
       requireVerifiedBoot: process.env.ANDROID_ATTESTATION_REQUIRE_VERIFIED_BOOT !== "false",
+      // Can only be raised above the built-in floor (attestation version 3, Keymaster 4).
+      minAttestationVersion: Number(process.env.ANDROID_ATTESTATION_MIN_VERSION) || undefined,
+      clockSkewSeconds: process.env.ANDROID_ATTESTATION_CLOCK_SKEW_SECONDS ? Number(process.env.ANDROID_ATTESTATION_CLOCK_SKEW_SECONDS) : undefined,
       trustedRootsPem: testRootsPem ?? undefined,
     };
   },
@@ -170,33 +183,85 @@ export function attestationChallengeFor(nonce: string): Buffer {
   return createHash("sha256").update(`${ATTESTATION_CHALLENGE_VERSION}:${nonce}`).digest();
 }
 
-export function revokeSigningPayload(input: { trustId: string; masterDeviceId: string }) {
-  return [REVOKE_SIGNING_VERSION, `sub=${input.trustId}`, `device=${input.masterDeviceId}`].join("\n");
+/** Removal signed by the device itself: single-use (nonce) and short-lived (exp). */
+export function revokeSigningPayload(input: { trustId: string; masterDeviceId: string; nonce: string; expiresAt: Date }) {
+  return [
+    REVOKE_SIGNING_VERSION,
+    `sub=${input.trustId}`,
+    `device=${input.masterDeviceId}`,
+    `nonce=${input.nonce}`,
+    `exp=${input.expiresAt.toISOString()}`,
+  ].join("\n");
 }
 
 /* ---------------------------------------------------------------- tokens */
 
 type EnrollmentClaims = { v: 2; uid: string; sid: string; nonce: string; key: string | null; state: string; exp: number };
+type RevocationClaims = { v: 3; uid: string; sid: string; device: string; nonce: string; exp: number };
 
-function sealToken(claims: EnrollmentClaims) {
+function sealToken(claims: EnrollmentClaims | RevocationClaims) {
   const body = b64url(JSON.stringify(claims));
   return `${body}.${b64url(createHmac("sha256", sealKey()).update(body).digest())}`;
 }
 
-function openToken(token: string): EnrollmentClaims {
+function openSealed(token: string, code: string, label: string): Record<string, unknown> {
   const [body, mac] = token.split(".");
-  if (!body || !mac) return fail(400, "invalid_enrollment", "Enrollment token is malformed.");
+  if (!body || !mac) return fail(400, code, `${label} token is malformed.`);
   const expected = createHmac("sha256", sealKey()).update(body).digest();
   const given = Buffer.from(mac, "base64url");
-  if (given.length !== expected.length || !timingSafeEqual(given, expected)) fail(400, "invalid_enrollment", "Enrollment token is invalid.");
-  let claims: EnrollmentClaims;
+  if (given.length !== expected.length || !timingSafeEqual(given, expected)) fail(400, code, `${label} token is invalid.`);
   try {
-    claims = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as EnrollmentClaims;
+    return JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as Record<string, unknown>;
   } catch {
-    return fail(400, "invalid_enrollment", "Enrollment token is malformed.");
+    return fail(400, code, `${label} token is malformed.`);
   }
+}
+
+function openToken(token: string): EnrollmentClaims {
+  const claims = openSealed(token, "invalid_enrollment", "Enrollment");
   if (claims.v !== 2) fail(400, "invalid_enrollment", "Enrollment token is not valid for this ceremony.");
-  return claims;
+  return claims as EnrollmentClaims;
+}
+
+function openRevocation(token: string): RevocationClaims {
+  const claims = openSealed(token, "invalid_revocation", "Removal");
+  if (claims.v !== 3) fail(400, "invalid_revocation", "Removal token is not valid for this ceremony.");
+  return claims as RevocationClaims;
+}
+
+/* ---------------------------------------------------------------- operation-bound passkey challenges */
+
+/** 16 random bytes + 16-byte HMAC over the operation context: the challenge itself names the operation. */
+function boundChallenge(context: string, nonce: Buffer = randomBytes(16)) {
+  const mac = createHmac("sha256", sealKey()).update(`${REAUTH_BINDING_VERSION}|${context}|`).update(nonce).digest().subarray(0, 16);
+  return Buffer.concat([nonce, mac]).toString("base64url");
+}
+
+function challengeBoundTo(context: string) {
+  return (challenge: string) => {
+    const raw = Buffer.from(challenge, "base64url");
+    if (raw.length !== 32) return false;
+    return timingSafeEqual(raw, Buffer.from(boundChallenge(context, raw.subarray(0, 16)), "base64url"));
+  };
+}
+
+const enrollContext = (s: EnrollmentSession, c: EnrollmentClaims) => `enroll|${s.userId}|${s.sessionId}|${c.nonce}|${c.key}`;
+const revokeContext = (s: EnrollmentSession, c: RevocationClaims) => `revoke|${s.userId}|${s.sessionId}|${c.nonce}|${c.device}`;
+
+/** Passkey request options (user verification required) whose challenge is bound to `context`. */
+function passkeyOptionsFor(session: EnrollmentSession, context: string) {
+  return reauthenticationOptions(session.userId, session.deviceId, "required", { purpose: REAUTH_PURPOSE, challenge: boundChallenge(context) });
+}
+
+function verifyBoundPasskey(session: EnrollmentSession, response: unknown, context: string, meta: Meta) {
+  return verifyReauthentication({
+    userId: session.userId,
+    deviceId: session.deviceId ?? undefined,
+    response: response as AuthenticationResponseJSON,
+    requireUserVerification: true,
+    binding: { purpose: REAUTH_PURPOSE, matches: challengeBoundTo(context) },
+    ...meta,
+  });
 }
 
 /** Token checks shared by every step after begin: same subject, same TrustID session, live, state unchanged. */
@@ -264,6 +329,14 @@ async function bindKey(session: EnrollmentSession, claims: EnrollmentClaims, pub
   };
 }
 
+/** Passkey options for completing THIS enrollment (after the key is bound). */
+export async function enrollmentReauthOptions(session: EnrollmentSession, input: { enrollment: string }) {
+  requireEnabled();
+  const claims = await checkToken(session, input.enrollment);
+  if (!claims.key) fail(409, "enrollment_key_not_bound", "Bind the device key before confirming with a passkey.");
+  return passkeyOptionsFor(session, enrollContext(session, claims));
+}
+
 /** Second step for keys generated after begin (Android: the key is attested with the challenge). */
 export async function bindEnrollmentKey(session: EnrollmentSession, input: { enrollment: string; publicKey: string }) {
   requireEnabled();
@@ -304,7 +377,15 @@ export async function completeEnrollment(
     }
     try {
       const revokedSerials = enrollmentConfig.revocationCheck ? await fetchRevokedAttestationSerials() : new Set<string>();
-      attestation = verifyAndroidKeyAttestation(input.attestation!, { publicKeySpki: spki, challenge: attestationChallengeFor(claims.nonce) }, { ...policy, revokedSerials });
+      attestation = verifyAndroidKeyAttestation(
+        input.attestation!,
+        {
+          publicKeySpki: spki,
+          challenge: attestationChallengeFor(claims.nonce),
+          keyCreatedNotBefore: new Date((claims.exp - ENROLLMENT_TTL_SECONDS) * 1000),
+        },
+        { ...policy, revokedSerials },
+      );
     } catch (err) {
       const reason = err instanceof AttestationRejected ? err.reason : "attestation_error";
       await auditFailure(session, `attestation:${reason}`, meta);
@@ -313,15 +394,9 @@ export async function completeEnrollment(
     }
   }
 
-  // The person, freshly: passkey assertion with user verification on a trusted device.
+  // The person, freshly: passkey assertion with user verification on a trusted device, made for THIS enrollment.
   try {
-    await verifyReauthentication({
-      userId: session.userId,
-      deviceId: session.deviceId ?? undefined,
-      response: input.reauth as AuthenticationResponseJSON,
-      requireUserVerification: true,
-      ...meta,
-    });
+    await verifyBoundPasskey(session, input.reauth, enrollContext(session, claims), meta);
   } catch (err) {
     await auditFailure(session, "reauthentication_failed", meta);
     throw err;
@@ -339,7 +414,10 @@ export async function completeEnrollment(
   // One enrollment per enrollment state: concurrent completions (same token, or two ceremonies
   // begun from the same state) would otherwise each pass the checks above and leave two active
   // Master Devices, one of which a later revoke would miss.
-  const claim = await claimEnrollmentState(session.userId, claims);
+  const claim = await claimOnce(session.userId, "enroll-state", `${session.userId}:${claims.state}`, new Date(claims.exp * 1000), [
+    "enrollment_stale",
+    "Master Device enrollment changed. Start again.",
+  ]);
   let row;
   try {
     row = existing
@@ -384,25 +462,25 @@ export async function completeEnrollment(
 }
 
 /**
- * Claim the enrollment state the token was issued in (unique row; a second claim fails). Stored with
+ * Single use: claim `scope`/`value` with a unique row (a second claim fails with `taken`). Stored with
  * WebAuthn challenges under a purpose no WebAuthn ceremony accepts, so it can never be consumed as one.
  */
-async function claimEnrollmentState(userId: string, claims: EnrollmentClaims): Promise<string> {
+async function claimOnce(userId: string, scope: string, value: string, expiresAt: Date, taken: [string, string]): Promise<string> {
   try {
     const row = await prisma.webAuthnChallenge.create({
       data: {
         userId,
-        type: ENROLLMENT_CLAIM_PURPOSE,
-        purpose: ENROLLMENT_CLAIM_PURPOSE,
-        challenge: `${ENROLLMENT_CLAIM_PURPOSE}:${sha256(`${userId}:${claims.state}`)}`,
-        expiresAt: new Date(claims.exp * 1000),
+        type: CLAIM_PURPOSE,
+        purpose: CLAIM_PURPOSE,
+        challenge: `${CLAIM_PURPOSE}:${scope}:${sha256(value)}`,
+        expiresAt,
         consumedAt: new Date(),
       },
       select: { id: true },
     });
     return row.id;
   } catch {
-    return fail(409, "enrollment_stale", "Master Device enrollment changed. Start again.");
+    return fail(409, taken[0], taken[1]);
   }
 }
 
@@ -486,28 +564,60 @@ export async function stepUpDeviceActivity(session: EnrollmentSession) {
 }
 
 /**
- * Subject: revoke the step-up Master Device. Always needs a passkey with user verification. With
- * the device's own signature (device in hand) a new device may be enrolled at once; without it
- * (device lost) a new enrollment needs account recovery (see recoveryHold).
+ * Subject: start removing the step-up Master Device. Returns a single-use removal token, the
+ * expiring bytes the device signs (device in hand) and passkey options bound to this removal.
  */
-export async function revokeStepUpDevice(session: EnrollmentSession, input: { reauth: unknown; deviceSignature?: string }, meta: Meta = {}) {
+export async function beginRevocation(session: EnrollmentSession) {
+  if (!session.sessionId) fail(401, "session_required", "A TrustID session is required.");
   const device = await activeStepUpDevice(session.userId);
   if (!device) fail(404, "master_device_not_registered", "This TrustID has no registered Master Device.");
-  await verifyReauthentication({
-    userId: session.userId,
-    deviceId: session.deviceId ?? undefined,
-    response: input.reauth as AuthenticationResponseJSON,
-    requireUserVerification: true,
-    ...meta,
-  });
+  const { trustId } = await subject(session.userId);
+  const expiresAt = new Date(Math.floor(Date.now() / 1000 + REVOKE_TTL_SECONDS) * 1000);
+  const claims: RevocationClaims = {
+    v: 3,
+    uid: session.userId,
+    sid: session.sessionId!,
+    device: device!.id,
+    nonce: randomBytes(32).toString("base64url"),
+    exp: expiresAt.getTime() / 1000,
+  };
+  return {
+    revocation: sealToken(claims),
+    signing_payload: revokeSigningPayload({ trustId, masterDeviceId: device!.id, nonce: claims.nonce, expiresAt }),
+    passkey_options: await passkeyOptionsFor(session, revokeContext(session, claims)),
+    expires_at: expiresAt.toISOString(),
+  };
+}
+
+/**
+ * Subject: revoke the step-up Master Device. Always needs a passkey with user verification made for
+ * THIS removal. With the device signature over the removal bytes (device in hand) a new device may be
+ * enrolled at once; without it (device lost) a new enrollment needs account recovery (recoveryHold).
+ */
+export async function revokeStepUpDevice(
+  session: EnrollmentSession,
+  input: { revocation: string; reauth: unknown; deviceSignature?: string },
+  meta: Meta = {},
+) {
+  const claims = openRevocation(input.revocation);
+  if (claims.uid !== session.userId || claims.sid !== session.sessionId) {
+    fail(403, "revocation_session_mismatch", "This removal belongs to another session.");
+  }
+  if (claims.exp * 1000 <= Date.now()) fail(410, "revocation_expired", "Removal expired. Start again.");
+  const device = await activeStepUpDevice(session.userId);
+  if (!device) fail(404, "master_device_not_registered", "This TrustID has no registered Master Device.");
+  if (device!.id !== claims.device) fail(409, "revocation_stale", "The Master Device changed. Start again.");
+  await verifyBoundPasskey(session, input.reauth, revokeContext(session, claims), meta);
   const { trustId } = await subject(session.userId);
   let proof: "device_signature" | "passkey_only" = "passkey_only";
   if (input.deviceSignature) {
-    if (!verifyMasterDeviceSignature(device!.publicKey, revokeSigningPayload({ trustId, masterDeviceId: device!.id }), input.deviceSignature)) {
+    const payload = revokeSigningPayload({ trustId, masterDeviceId: device!.id, nonce: claims.nonce, expiresAt: new Date(claims.exp * 1000) });
+    if (!verifyMasterDeviceSignature(device!.publicKey, payload, input.deviceSignature)) {
       fail(401, "invalid_signature", "Master Device signature is invalid.");
     }
     proof = "device_signature";
   }
+  await claimOnce(session.userId, "revoke", claims.nonce, new Date(claims.exp * 1000), ["revocation_used", "This removal was already used. Start again."]);
   const done = await prisma.masterDevice.updateMany({
     where: { id: device!.id, status: MASTER_STATUS.ACTIVE },
     data: { status: MASTER_STATUS.REVOKED, isMasterDevice: false },

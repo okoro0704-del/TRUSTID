@@ -27,8 +27,10 @@ import {
 import { biometricPayloadSchema } from "../modules/trust-id/schemas.js";
 import {
   beginEnrollment,
+  beginRevocation,
   bindEnrollmentKey,
   completeEnrollment,
+  enrollmentReauthOptions,
   revokeStepUpDevice,
   stepUpDeviceActivity,
   stepUpDeviceStatus,
@@ -217,6 +219,16 @@ export async function stepUpRoutes(app: FastifyInstance) {
     }
   });
 
+  // Passkey options bound to this enrollment (nonce + key): an assertion for anything else is refused.
+  app.post("/v1/step-up/master-device/enrollment/reauth", { preHandler: requireSession }, async (req, reply) => {
+    try {
+      const body = z.object({ enrollment: enrollmentToken }).strict().parse(req.body ?? {});
+      return await enrollmentReauthOptions(req.auth!, { enrollment: body.enrollment });
+    } catch (err) {
+      return sendError(reply, err);
+    }
+  });
+
   app.post("/v1/step-up/master-device/enrollment/complete", { preHandler: requireSession }, async (req, reply) => {
     try {
       const body = z
@@ -247,13 +259,27 @@ export async function stepUpRoutes(app: FastifyInstance) {
     }
   });
 
+  // Removal: begin returns a single-use, expiring token + device signing bytes + bound passkey options.
+  app.post("/v1/step-up/master-device/revoke/begin", { preHandler: requireSession }, async (req, reply) => {
+    try {
+      z.object({}).strict().parse(req.body ?? {});
+      return await beginRevocation(req.auth!);
+    } catch (err) {
+      return sendError(reply, err);
+    }
+  });
+
   app.post("/v1/step-up/master-device/revoke", { preHandler: requireSession }, async (req, reply) => {
     try {
       const body = z
-        .object({ reauth: z.record(z.unknown()), device_signature: z.string().min(8).max(512).optional() })
+        .object({ revocation: enrollmentToken, reauth: z.record(z.unknown()), device_signature: z.string().min(8).max(512).optional() })
         .strict()
         .parse(req.body ?? {});
-      return await revokeStepUpDevice(req.auth!, { reauth: body.reauth, deviceSignature: body.device_signature }, clientMeta(req));
+      return await revokeStepUpDevice(
+        req.auth!,
+        { revocation: body.revocation, reauth: body.reauth, deviceSignature: body.device_signature },
+        clientMeta(req),
+      );
     } catch (err) {
       return sendError(reply, err);
     }

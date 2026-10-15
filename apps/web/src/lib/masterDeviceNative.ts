@@ -4,8 +4,11 @@
  *
  * Enrollment: begin (server attestation challenge) → Keystore key generated WITH that challenge →
  * bind key (server returns the exact bytes to sign) → biometric signature over those bytes →
- * passkey with user verification → complete (attestation + signature + passkey). The key is only
- * kept if the server accepts it; any failure deletes it.
+ * passkey with user verification for THIS enrollment → complete (attestation + signature + passkey).
+ * The key is only kept if the server accepts it; any failure deletes it.
+ *
+ * Removal: begin (single-use, expiring bytes + passkey options for THIS removal) → device signature →
+ * passkey → revoke.
  */
 
 export type MasterDeviceNative = {
@@ -51,7 +54,8 @@ export async function assertEnrollmentPayload(payload: string, expected: { trust
 export async function enrollAndroidMasterDevice(deps: {
   api: ApiFn;
   native: MasterDeviceNative;
-  passkey: () => Promise<unknown>;
+  /** Answers the passkey request options the server issued for this operation. */
+  passkey: (options: unknown) => Promise<unknown>;
   trustId: string;
   deviceFingerprint: string;
 }) {
@@ -73,7 +77,11 @@ export async function enrollAndroidMasterDevice(deps: {
       title: "Make this phone your Master Device",
       subtitle: "Confirms this phone approves sensitive TrustID requests",
     });
-    const reauth = await deps.passkey();
+    const options = await deps.api<unknown>("/v1/step-up/master-device/enrollment/reauth", {
+      method: "POST",
+      body: JSON.stringify({ enrollment: bound.enrollment }),
+    });
+    const reauth = await deps.passkey(options);
     const done = await deps.api<{ registered: boolean; device: { id: string; security_level: string | null } }>("/v1/step-up/master-device/enrollment/complete", {
       method: "POST",
       body: JSON.stringify({
@@ -93,16 +101,33 @@ export async function enrollAndroidMasterDevice(deps: {
   }
 }
 
-/** Revoke from this phone: device signature (immediate re-enrollment) + passkey with UV. */
-export async function revokeFromThisPhone(deps: { api: ApiFn; native: MasterDeviceNative; passkey: () => Promise<unknown>; trustId: string; masterDeviceId: string }) {
-  const { signature } = await deps.native.sign({
-    payload: ["trustid-master-device-revoke/v1", `sub=${deps.trustId}`, `device=${deps.masterDeviceId}`].join("\n"),
-    title: "Remove this Master Device",
+/** Refuse to sign removal bytes that do not name this subject and this device. */
+export function assertRevokePayload(payload: string, expected: { trustId: string; masterDeviceId: string }) {
+  const lines = payload.split("\n");
+  const fields = Object.fromEntries(lines.slice(1).map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
+  if (lines[0] !== "trustid-master-device-revoke/v2" || fields.sub !== expected.trustId || fields.device !== expected.masterDeviceId || !fields.nonce || !fields.exp) {
+    throw new MasterDeviceError("payload_mismatch", "The removal request does not match this Master Device.");
+  }
+}
+
+/** Revoke from this phone: device signature over single-use removal bytes (immediate re-enrollment) + passkey with UV. */
+export async function revokeFromThisPhone(deps: {
+  api: ApiFn;
+  native: MasterDeviceNative;
+  passkey: (options: unknown) => Promise<unknown>;
+  trustId: string;
+  masterDeviceId: string;
+}) {
+  const begun = await deps.api<{ revocation: string; signing_payload: string; passkey_options: unknown }>("/v1/step-up/master-device/revoke/begin", {
+    method: "POST",
+    body: "{}",
   });
-  const reauth = await deps.passkey();
+  assertRevokePayload(begun.signing_payload, { trustId: deps.trustId, masterDeviceId: deps.masterDeviceId });
+  const { signature } = await deps.native.sign({ payload: begun.signing_payload });
+  const reauth = await deps.passkey(begun.passkey_options);
   const result = await deps.api<{ revoked: boolean }>("/v1/step-up/master-device/revoke", {
     method: "POST",
-    body: JSON.stringify({ reauth, device_signature: signature }),
+    body: JSON.stringify({ revocation: begun.revocation, reauth, device_signature: signature }),
   });
   await deps.native.deleteKey({});
   return result;

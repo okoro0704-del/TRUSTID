@@ -13,6 +13,7 @@ import {
   DEVICE_TRUST_LEVELS,
   WEBAUTHN_PURPOSES,
   isDeviceCredentialActive,
+  type WebAuthnPurpose,
 } from "@trustid/shared";
 import { prisma } from "../../db/client.js";
 import { config } from "../../lib/config.js";
@@ -729,6 +730,8 @@ export async function reauthenticationOptions(
   userId: string,
   deviceId?: string | null,
   userVerification: "preferred" | "required" = "preferred",
+  /** Operation-bound ceremonies supply their own challenge and a purpose only they accept. */
+  binding?: { purpose: string; challenge: string },
 ) {
   const creds = await prisma.credential.findMany({
     where: {
@@ -750,6 +753,7 @@ export async function reauthenticationOptions(
   const options = await generateAuthenticationOptions({
     rpID: config.webauthn.rpID,
     userVerification,
+    ...(binding ? { challenge: new Uint8Array(Buffer.from(binding.challenge, "base64url")) } : {}),
     timeout: 120_000,
     allowCredentials: creds.map((c) =>
       allowCredentialDescriptor(c.credentialId, c.transports),
@@ -757,7 +761,7 @@ export async function reauthenticationOptions(
   });
 
   await storeWebAuthnChallenge({
-    purpose: WEBAUTHN_PURPOSES.REAUTHENTICATION,
+    purpose: (binding?.purpose ?? WEBAUTHN_PURPOSES.REAUTHENTICATION) as WebAuthnPurpose,
     challenge: options.challenge,
     userId,
   });
@@ -777,6 +781,11 @@ export async function verifyReauthentication(input: {
   userAgent?: string;
   /** Fail unless the assertion proves user verification (UV), not merely presence (UP). */
   requireUserVerification?: boolean;
+  /**
+   * Operation-bound ceremony: the challenge must have been issued under `purpose` and must match the
+   * operation (`matches`). Without a binding only generic re-authentication challenges are accepted.
+   */
+  binding?: { purpose: string; matches: (challenge: string) => boolean };
 }) {
   const cred = await prisma.credential.findUnique({
     where: { credentialId: input.response.id },
@@ -804,9 +813,13 @@ export async function verifyReauthentication(input: {
   if (!clientChallenge) {
     throw Object.assign(new Error("Invalid credential response"), { statusCode: 400 });
   }
+  if (input.binding && !input.binding.matches(clientChallenge)) {
+    await failAuthentication(input.userId, "reauth_wrong_operation", input);
+    throw Object.assign(new Error("This passkey confirmation was made for another action"), { statusCode: 401 });
+  }
   const consumed = await consumeWebAuthnChallenge({
     challenge: clientChallenge,
-    purpose: [WEBAUTHN_PURPOSES.REAUTHENTICATION],
+    purpose: [(input.binding?.purpose ?? WEBAUTHN_PURPOSES.REAUTHENTICATION) as WebAuthnPurpose],
     userId: input.userId,
   });
   if (!consumed.ok) {

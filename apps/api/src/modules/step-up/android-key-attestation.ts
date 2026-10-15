@@ -43,6 +43,7 @@ const TAG = {
   digest: 5,
   ecCurve: 10,
   noAuthRequired: 503,
+  creationDateTime: 701,
   userAuthType: 504,
   authTimeout: 505,
   origin: 702,
@@ -207,7 +208,18 @@ function parseRootOfTrust(t: Tlv): RootOfTrust {
   return { deviceLocked: content(f[1]!)[0] !== 0, verifiedBootState: asInteger(f[2]!) };
 }
 
+/** The KeyDescription of an attestation certificate (DER), or null. Diagnostics and tests. */
+export function readKeyDescription(certDer: Buffer): KeyDescription | null {
+  const ext = findExtension(certDer, KEY_DESCRIPTION_OID);
+  return ext ? parseKeyDescription(ext) : null;
+}
+
 /* ---------------------------------------------------------------- policy */
+
+/** Attestation version 3 = Keymaster 4 (Android 9), the oldest that can hold a per-use biometric key. */
+export const MIN_ATTESTATION_VERSION = 3;
+/** Default tolerance between the server clock and certificate / key timestamps. */
+export const DEFAULT_CLOCK_SKEW_SECONDS = 300;
 
 export type AttestationPolicy = {
   /** Pinned roots (PEM). Defaults to Google's. Tests inject their own. */
@@ -222,6 +234,10 @@ export type AttestationPolicy = {
   requireVerifiedBoot?: boolean;
   /** Serial numbers (lowercase hex) of revoked attestation certificates. */
   revokedSerials?: ReadonlySet<string>;
+  /** Minimum KeyDescription attestationVersion (never below MIN_ATTESTATION_VERSION). */
+  minAttestationVersion?: number;
+  /** Allowed clock difference for certificate validity and key creation time (default 300 s). */
+  clockSkewSeconds?: number;
   now?: Date;
 };
 
@@ -243,7 +259,7 @@ const spkiOf = (cert: X509Certificate) => cert.publicKey.export({ format: "der",
  */
 export function verifyAndroidKeyAttestation(
   chainBase64: readonly string[],
-  expect: { publicKeySpki: Buffer; challenge: Buffer },
+  expect: { publicKeySpki: Buffer; challenge: Buffer; /** The key must have been created after this (enrollment start). */ keyCreatedNotBefore?: Date },
   policy: AttestationPolicy,
 ): AttestationResult {
   if (!Array.isArray(chainBase64) || chainBase64.length < 2 || chainBase64.length > 10) reject("chain_length");
@@ -254,11 +270,16 @@ export function verifyAndroidKeyAttestation(
     return reject("chain_unparseable");
   }
   const now = policy.now ?? new Date();
+  const skewMs = Math.min(Math.max(policy.clockSkewSeconds ?? DEFAULT_CLOCK_SKEW_SECONDS, 0), 900) * 1000;
 
-  // Chain: each certificate signed by the next, all currently valid, ending at a pinned root.
+  // Chain: each certificate signed by the next, all valid now (within the clock skew), ending at a pinned root.
   for (let i = 0; i < certs.length; i++) {
     const cert = certs[i]!;
-    if (new Date(cert.validFrom) > now || new Date(cert.validTo) < now) reject(`certificate_validity_${i}`);
+    const from = Date.parse(cert.validFrom);
+    const to = Date.parse(cert.validTo);
+    if (!Number.isFinite(from) || !Number.isFinite(to) || from > now.getTime() + skewMs || to < now.getTime() - skewMs) {
+      reject(`certificate_validity_${i}`);
+    }
     const issuer = certs[i + 1] ?? cert;
     if (!cert.verify(issuer.publicKey)) reject(`chain_signature_${i}`);
     // Every certificate above the leaf must be a CA (signature checks alone do not enforce this).
@@ -279,6 +300,15 @@ export function verifyAndroidKeyAttestation(
   const kd = parseKeyDescription(ext);
 
   if (!kd.attestationChallenge.equals(expect.challenge)) reject("challenge_mismatch");
+  const minVersion = Math.max(policy.minAttestationVersion ?? MIN_ATTESTATION_VERSION, MIN_ATTESTATION_VERSION);
+  if (kd.attestationVersion < minVersion) reject("attestation_version_too_old");
+
+  // The key was created for this enrollment: after it began and not in the future (bounded skew).
+  const createdTlv = kd.softwareEnforced.get(TAG.creationDateTime) ?? kd.hardwareEnforced.get(TAG.creationDateTime);
+  if (!createdTlv) return reject("no_creation_time");
+  const created = asInteger(createdTlv);
+  if (created > now.getTime() + skewMs) reject("key_created_in_future");
+  if (expect.keyCreatedNotBefore && created < expect.keyCreatedNotBefore.getTime() - skewMs) reject("key_older_than_enrollment");
 
   const minLevel = policy.minSecurityLevel === "strongbox" ? SECURITY_LEVEL.STRONG_BOX : SECURITY_LEVEL.TRUSTED_ENVIRONMENT;
   if (kd.attestationSecurityLevel < minLevel || kd.keyMintSecurityLevel < minLevel) {

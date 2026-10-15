@@ -12,6 +12,7 @@ import { createSession } from "../src/modules/sessions/service.js";
 import { setAttestationRootsForTests } from "../src/modules/step-up/master-device-enrollment.js";
 import { normalizeSerial, revokedSerialsFromStatusList } from "../src/modules/step-up/android-key-attestation.js";
 import { consumeWebAuthnChallenge } from "../src/modules/authentication/challenges.js";
+import { verifyReauthentication } from "../src/modules/authentication/webauthn.js";
 import { resetTables } from "./helpers/db.js";
 import { attestationChain, assertion, seedPasskey, testAttestationRoot, type KeyDescriptionInput, type SoftwarePasskey } from "./helpers/android-attestation.js";
 import { createZeroPiiUser } from "./helpers/zero-pii-user.js";
@@ -61,18 +62,35 @@ async function owner(): Promise<Owner> {
 const post = (url: string, session: Record<string, string> | undefined, payload: unknown) =>
   app.inject({ method: "POST", url, ...(session ? { cookies: session } : {}), payload: payload as Record<string, unknown> });
 
-/** Native Credential Manager passkey assertion (Android origin), user verification by default. */
-async function passkeyAssertion(o: Owner, opts: { uv?: boolean; origin?: string } = {}) {
-  const options = await post("/auth/webauthn/reauth/options", o.session, { userVerification: "required" });
-  expect(options.statusCode).toBe(200);
+/** Native Credential Manager passkey assertion (Android origin) answering `options`; user verification by default. */
+function answer(o: Owner, options: { challenge: string }, opts: { uv?: boolean; origin?: string } = {}) {
+  return assertion(o.passkey, { challenge: options.challenge, rpId: RP_ID, origin: opts.origin ?? ANDROID_ORIGIN, uv: opts.uv });
+}
+
+/** Passkey assertion for THIS enrollment (options bound to its nonce and key). */
+async function enrollPasskey(o: Owner, enrollment: string, opts: { uv?: boolean; origin?: string } = {}) {
+  const options = await post("/v1/step-up/master-device/enrollment/reauth", o.session, { enrollment });
+  expect(options.statusCode, options.body).toBe(200);
   expect(options.json().userVerification).toBe("required");
-  return assertion(o.passkey, { challenge: options.json().challenge, rpId: RP_ID, origin: opts.origin ?? ANDROID_ORIGIN, uv: opts.uv });
+  return answer(o, options.json(), opts);
+}
+
+/** Remove the Master Device: begin → device signature (optional) → passkey for THIS removal → revoke. */
+async function revoke(o: Owner, opts: { deviceKey?: KeyObject; uv?: boolean } = {}) {
+  const begun = await post("/v1/step-up/master-device/revoke/begin", o.session, {});
+  if (begun.statusCode !== 200) return begun;
+  const b = begun.json() as { revocation: string; signing_payload: string; passkey_options: { challenge: string } };
+  return post("/v1/step-up/master-device/revoke", o.session, {
+    revocation: b.revocation,
+    reauth: answer(o, b.passkey_options, { uv: opts.uv }),
+    ...(opts.deviceKey ? { device_signature: cryptoSign("sha256", Buffer.from(b.signing_payload), opts.deviceKey).toString("base64url") } : {}),
+  });
 }
 
 type Phone = { privateKey: KeyObject; spki: string; fingerprint: string };
 
 /** The Android app's side of the ceremony, step by step, with knobs for each negative test. */
-async function enroll(o: Owner, opts: { kd?: Partial<KeyDescriptionInput>; uv?: boolean; signWith?: KeyObject; chain?: (c: string[]) => string[]; skipAttestation?: boolean; otherKeyInAttestation?: boolean } = {}) {
+async function enroll(o: Owner, opts: { kd?: Partial<KeyDescriptionInput>; uv?: boolean; signWith?: KeyObject; chain?: (c: string[]) => string[]; skipAttestation?: boolean; otherKeyInAttestation?: boolean; leafNotBefore?: Date } = {}) {
   const begun = await post("/v1/step-up/master-device/enrollment", o.session, {});
   if (begun.statusCode !== 200) return { begun };
   const { enrollment, attestation_challenge } = begun.json() as { enrollment: string; attestation_challenge: string };
@@ -82,14 +100,14 @@ async function enroll(o: Owner, opts: { kd?: Partial<KeyDescriptionInput>; uv?: 
   const bound = await post("/v1/step-up/master-device/enrollment/key", o.session, { enrollment, public_key: phone.spki });
   if (bound.statusCode !== 200) return { begun, bound };
   const attestedKey = opts.otherKeyInAttestation ? generateKeyPairSync("ec", { namedCurve: "prime256v1" }).publicKey : key.publicKey;
-  let chain = attestationChain(root, attestedKey, { challenge: Buffer.from(attestation_challenge, "base64url"), signingCertSha256: APP_CERT, ...opts.kd });
+  let chain = attestationChain(root, attestedKey, { challenge: Buffer.from(attestation_challenge, "base64url"), signingCertSha256: APP_CERT, ...opts.kd }, { leafNotBefore: opts.leafNotBefore });
   if (opts.chain) chain = opts.chain(chain);
   const body = {
     enrollment: bound.json().enrollment,
     public_key: phone.spki,
     device_fingerprint: phone.fingerprint,
     signature: cryptoSign("sha256", Buffer.from(bound.json().signing_payload, "utf8"), opts.signWith ?? key.privateKey).toString("base64url"),
-    reauth: await passkeyAssertion(o, { uv: opts.uv }),
+    reauth: await enrollPasskey(o, bound.json().enrollment, { uv: opts.uv }),
     ...(opts.skipAttestation ? {} : { attestation: chain }),
   };
   const done = await post("/v1/step-up/master-device/enrollment/complete", o.session, body);
@@ -151,7 +169,7 @@ describe("enrollment ceremony", () => {
       public_key: spki,
       device_fingerprint: "trustid-device-foreign-origin",
       signature: cryptoSign("sha256", Buffer.from(bound.json().signing_payload), key.privateKey).toString("base64url"),
-      reauth: await passkeyAssertion(o2, { origin: foreign }),
+      reauth: await enrollPasskey(o2, bound.json().enrollment, { origin: foreign }),
       attestation: attestationChain(root, key.publicKey, { challenge: Buffer.from(b2.json().attestation_challenge, "base64url"), signingCertSha256: APP_CERT }),
     });
     expect(res.statusCode).toBe(401);
@@ -173,8 +191,10 @@ describe("enrollment ceremony", () => {
     const o = await owner();
     const { done, body } = await enroll(o);
     expect(done!.statusCode).toBe(200);
-    const replay = await post("/v1/step-up/master-device/enrollment/complete", o.session, { ...body, reauth: await passkeyAssertion(o) });
+    const replay = await post("/v1/step-up/master-device/enrollment/complete", o.session, body);
     expect(replay.statusCode).toBe(409);
+    // and no fresh passkey request can be obtained for it either
+    expect((await post("/v1/step-up/master-device/enrollment/reauth", o.session, { enrollment: body!.enrollment })).statusCode).toBe(409);
   });
 
   it("6. proof of possession is required (signature by another key fails)", async () => {
@@ -235,6 +255,10 @@ describe("13. hardware and per-use biometric policy (Android Key Attestation)", 
     ["not P-256", { ecCurve: 2 }, null, /not_p256/],
     ["key imported into the hardware, not generated there", { origin: 2 }, null, /key_not_generated_in_hardware/],
     ["key origin not attested by the hardware", { origin: null }, null, /key_not_generated_in_hardware/],
+    ["attestation version older than Keymaster 4", { attestationVersion: 2 }, null, /attestation_version_too_old/],
+    ["key created long before this enrollment began", { createdAt: Date.now() - 3600_000 }, null, /key_older_than_enrollment/],
+    ["key creation time in the future", { createdAt: Date.now() + 3600_000 }, null, /key_created_in_future/],
+    ["no key creation time", { createdAt: null }, null, /no_creation_time/],
     ["unlocked bootloader", { deviceLocked: false }, null, /unverified_boot/],
     ["unverified boot", { verifiedBootState: 2 }, null, /unverified_boot/],
     ["another app package", { packageName: "com.attacker.app" }, null, /wrong_package/],
@@ -271,7 +295,7 @@ describe("13. hardware and per-use biometric policy (Android Key Attestation)", 
     for (const opts of [{ brokenSignature: true }, { intermediateNotCa: true }]) {
       const res = await post("/v1/step-up/master-device/enrollment/complete", o.session, {
         ...base,
-        reauth: await passkeyAssertion(o),
+        reauth: await enrollPasskey(o, bound.json().enrollment),
         attestation: attestationChain(root, key.publicKey, { challenge, signingCertSha256: APP_CERT }, opts),
       });
       expect(res.statusCode).toBe(403);
@@ -345,10 +369,8 @@ describe("approvals with an enrolled Android Master Device", () => {
     const tokens = await portalTokens(app, o.userId);
     const id = (await create(tokens.access_token)).json().challenge_id as string;
     const payload = await pendingPayload(o, id);
-    expect((await post("/v1/step-up/master-device/revoke", o.session, { reauth: await passkeyAssertion(o, { uv: false }) })).statusCode).toBe(401);
-    const st = (await status(o)).json();
-    const revokeSig = cryptoSign("sha256", Buffer.from(["trustid-master-device-revoke/v1", `sub=${o.trustId}`, `device=${st.device.id}`].join("\n")), phone.privateKey).toString("base64url");
-    expect((await post("/v1/step-up/master-device/revoke", o.session, { reauth: await passkeyAssertion(o), device_signature: revokeSig })).statusCode).toBe(200);
+    expect((await revoke(o, { uv: false })).statusCode).toBe(401);
+    expect((await revoke(o, { deviceKey: phone.privateKey })).statusCode).toBe(200);
     const res = await post(`/v1/step-up/challenges/${id}/master-device/approve`, o.session, { device_fingerprint: phone.fingerprint, signature: cryptoSign("sha256", Buffer.from(payload), phone.privateKey).toString("base64url") });
     expect([403, 409]).toContain(res.statusCode);
     expect((await prisma.stepUpChallenge.findUniqueOrThrow({ where: { challengeId: id } })).status).toBe("cancelled");
@@ -358,7 +380,7 @@ describe("approvals with an enrolled Android Master Device", () => {
 
   it("replacing a lost device needs recovery: a passkey-only revoke blocks re-enrollment", async () => {
     const { o } = await enrolled();
-    const res = await post("/v1/step-up/master-device/revoke", o.session, { reauth: await passkeyAssertion(o) });
+    const res = await revoke(o);
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ revoked: true, recovery_required: true });
     const again = await post("/v1/step-up/master-device/enrollment", o.session, {});
@@ -391,7 +413,7 @@ describe("release-candidate hardening", () => {
     });
     expect(approved.statusCode).toBe(200);
     // The owner revokes before the app consumed the approval (e.g. the phone was taken).
-    expect((await post("/v1/step-up/master-device/revoke", o.session, { reauth: await passkeyAssertion(o) })).statusCode).toBe(200);
+    expect((await revoke(o)).statusCode).toBe(200);
     const consume = await app.inject({
       method: "POST",
       url: `/v1/step-up/challenges/${id}/consume`,
@@ -411,7 +433,7 @@ describe("release-candidate hardening", () => {
       const bound = await post("/v1/step-up/master-device/enrollment/key", o.session, { enrollment: begun.json().enrollment, public_key: spki });
       expect(bound.statusCode).toBe(200);
       const chain = attestationChain(root, key.publicKey, { challenge: Buffer.from(begun.json().attestation_challenge, "base64url"), signingCertSha256: APP_CERT });
-      return (fingerprint: string, reauth: unknown) => ({
+      const make = (fingerprint: string, reauth: unknown) => ({
         enrollment: bound.json().enrollment,
         public_key: spki,
         device_fingerprint: fingerprint,
@@ -419,20 +441,21 @@ describe("release-candidate hardening", () => {
         reauth,
         attestation: chain,
       });
+      return Object.assign(make, { enrollment: bound.json().enrollment as string });
     }
     const a = await prepared();
     const b = await prepared();
     const bodies = [
-      a("trustid-device-race-a1", await passkeyAssertion(o)),
-      a("trustid-device-race-a2", await passkeyAssertion(o)),
-      b("trustid-device-race-b1", await passkeyAssertion(o)),
+      a("trustid-device-race-a1", await enrollPasskey(o, a.enrollment)),
+      a("trustid-device-race-a2", await enrollPasskey(o, a.enrollment)),
+      b("trustid-device-race-b1", await enrollPasskey(o, b.enrollment)),
     ];
     const results = await Promise.all(bodies.map((body) => post("/v1/step-up/master-device/enrollment/complete", o.session, body)));
     expect(results.map((r) => r.statusCode).filter((c) => c === 200)).toHaveLength(1);
     for (const r of results.filter((x) => x.statusCode !== 200)) expect(r.statusCode).toBe(409);
     expect(await prisma.masterDevice.count({ where: { userId: o.userId, status: "active", isMasterDevice: true } })).toBe(1);
     // After revoking it, nothing is left that could still approve.
-    expect((await post("/v1/step-up/master-device/revoke", o.session, { reauth: await passkeyAssertion(o) })).statusCode).toBe(200);
+    expect((await revoke(o)).statusCode).toBe(200);
     expect((await status(o)).json().registered).toBe(false);
   });
 
@@ -441,7 +464,7 @@ describe("release-candidate hardening", () => {
     const FORMATS: Record<string, string[]> = {
       "trustid-step-up/v1": ["challenge", "sub", "client", "action", "operation", "session", "device", "exp"],
       "trustid-master-device-enroll/v1": ["enrollment", "sub", "key", "exp"],
-      "trustid-master-device-revoke/v1": ["sub", "device"],
+      "trustid-master-device-revoke/v2": ["sub", "device", "nonce", "exp"],
     };
     const signable = (payload: string) => {
       const lines = payload.split("\n");
@@ -466,8 +489,8 @@ describe("release-candidate hardening", () => {
     const list = (await app.inject({ method: "GET", url: "/v1/step-up/pending", cookies: o2.session })).json() as { challenges: Array<{ challenge_id: string; signing_payload: string }> };
     const stepUp = list.challenges.find((c) => c.challenge_id === created.json().challenge_id)!.signing_payload;
     expect(signable(stepUp)).toBe(true);
-    const st = (await status(o2)).json();
-    expect(signable(["trustid-master-device-revoke/v1", `sub=${o2.trustId}`, `device=${st.device.id}`].join("\n"))).toBe(true);
+    const removal = await post("/v1/step-up/master-device/revoke/begin", o2.session, {});
+    expect(signable(removal.json().signing_payload)).toBe(true);
     expect(signable("anything else")).toBe(false);
   });
 
@@ -487,6 +510,107 @@ describe("release-candidate hardening", () => {
     expect(serials.has("c0ffee")).toBe(true);
     expect(() => revokedSerialsFromStatusList({})).toThrow(/revocation_list_unavailable/);
     expect(() => revokedSerialsFromStatusList(null)).toThrow(/revocation_list_unavailable/);
+  });
+});
+
+describe("operation-bound passkeys, single-use removal and attestation clocks", () => {
+  async function prepared(o: Owner) {
+    const begun = await post("/v1/step-up/master-device/enrollment", o.session, {});
+    const key = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+    const spki = key.publicKey.export({ format: "der", type: "spki" }).toString("base64url");
+    const bound = await post("/v1/step-up/master-device/enrollment/key", o.session, { enrollment: begun.json().enrollment, public_key: spki });
+    return {
+      key,
+      enrollment: bound.json().enrollment as string,
+      body: (reauth: unknown) => ({
+        enrollment: bound.json().enrollment,
+        public_key: spki,
+        device_fingerprint: `trustid-device-${Math.random().toString(36).slice(2, 12)}`,
+        signature: cryptoSign("sha256", Buffer.from(bound.json().signing_payload, "utf8"), key.privateKey).toString("base64url"),
+        reauth,
+        attestation: attestationChain(root, key.publicKey, { challenge: Buffer.from(begun.json().attestation_challenge, "base64url"), signingCertSha256: APP_CERT }),
+      }),
+    };
+  }
+  const complete = (o: Owner, body: unknown) => post("/v1/step-up/master-device/enrollment/complete", o.session, body);
+
+  it("a generic Trust Center re-authentication cannot enroll or remove a Master Device", async () => {
+    const o = await owner();
+    const generic = async () => answer(o, (await post("/auth/webauthn/reauth/options", o.session, { userVerification: "required" })).json());
+    const p = await prepared(o);
+    const res = await complete(o, p.body(await generic()));
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ error: "reauthentication_failed" });
+    expect((await complete(o, p.body(await enrollPasskey(o, p.enrollment)))).statusCode).toBe(200);
+    const begun = (await post("/v1/step-up/master-device/revoke/begin", o.session, {})).json();
+    const removal = await post("/v1/step-up/master-device/revoke", o.session, { revocation: begun.revocation, reauth: await generic() });
+    expect(removal.statusCode).toBe(401);
+    expect((await status(o)).json().registered).toBe(true);
+  });
+
+  it("a passkey made for one enrollment or removal is refused for another, and is not a generic re-authentication", async () => {
+    const o = await owner();
+    const a = await prepared(o);
+    const b = await prepared(o);
+    const forA = await enrollPasskey(o, a.enrollment);
+    expect((await complete(o, b.body(forA))).statusCode).toBe(401);
+    expect((await complete(o, a.body(forA))).statusCode).toBe(200);
+
+    const r1 = (await post("/v1/step-up/master-device/revoke/begin", o.session, {})).json();
+    const r2 = (await post("/v1/step-up/master-device/revoke/begin", o.session, {})).json();
+    const forR1 = answer(o, r1.passkey_options);
+    expect((await post("/v1/step-up/master-device/revoke", o.session, { revocation: r2.revocation, reauth: forR1 })).statusCode).toBe(401);
+    // Bound challenges are never accepted by the generic re-authentication used elsewhere.
+    await expect(verifyReauthentication({ userId: o.userId, response: forR1 as never })).rejects.toMatchObject({ statusCode: 400 });
+    expect((await post("/v1/step-up/master-device/revoke", o.session, { revocation: r1.revocation, reauth: forR1 })).statusCode).toBe(200);
+  });
+
+  it("device removal signatures are single-use and expire; the old static payload is refused", async () => {
+    const o = await owner();
+    const r = await enroll(o);
+    expect(r.done!.statusCode).toBe(200);
+    const phone = r.phone!;
+    const st = (await status(o)).json();
+
+    const legacy = (await post("/v1/step-up/master-device/revoke/begin", o.session, {})).json();
+    const staticSig = cryptoSign("sha256", Buffer.from(["trustid-master-device-revoke/v1", `sub=${o.trustId}`, `device=${st.device.id}`].join("\n")), phone.privateKey).toString("base64url");
+    const refused = await post("/v1/step-up/master-device/revoke", o.session, { revocation: legacy.revocation, reauth: answer(o, legacy.passkey_options), device_signature: staticSig });
+    expect(refused.statusCode).toBe(401);
+    expect(refused.json()).toMatchObject({ error: "invalid_signature" });
+
+    const expiring = (await post("/v1/step-up/master-device/revoke/begin", o.session, {})).json();
+    expect(expiring.signing_payload).toMatch(/^trustid-master-device-revoke\/v2\nsub=.+\ndevice=.+\nnonce=[A-Za-z0-9_-]{43}\nexp=\d{4}-/);
+    const realNow = Date.now;
+    Date.now = () => realNow() + 301_000;
+    try {
+      const late = await post("/v1/step-up/master-device/revoke", o.session, {
+        revocation: expiring.revocation,
+        reauth: answer(o, expiring.passkey_options),
+        device_signature: cryptoSign("sha256", Buffer.from(expiring.signing_payload), phone.privateKey).toString("base64url"),
+      });
+      expect(late.statusCode).toBe(410);
+      expect(late.json()).toMatchObject({ error: "revocation_expired" });
+    } finally {
+      Date.now = realNow;
+    }
+
+    const fresh = (await post("/v1/step-up/master-device/revoke/begin", o.session, {})).json();
+    const body = {
+      revocation: fresh.revocation,
+      reauth: answer(o, fresh.passkey_options),
+      device_signature: cryptoSign("sha256", Buffer.from(fresh.signing_payload), phone.privateKey).toString("base64url"),
+    };
+    expect((await post("/v1/step-up/master-device/revoke", o.session, body)).statusCode).toBe(200);
+    expect((await post("/v1/step-up/master-device/revoke", o.session, body)).statusCode).not.toBe(200);
+    const audit = await prisma.auditEvent.findFirstOrThrow({ where: { userId: o.userId, type: "step_up.master_device_revoked" } });
+    expect(JSON.parse(audit.metadata)).toMatchObject({ proof: "device_signature" });
+  });
+
+  it("certificate validity allows a bounded clock skew only", async () => {
+    expect((await enroll(await owner(), { leafNotBefore: new Date(Date.now() + 120_000) })).done!.statusCode).toBe(200);
+    const late = await enroll(await owner(), { leafNotBefore: new Date(Date.now() + 3600_000) });
+    expect(late.done!.statusCode).toBe(403);
+    expect(late.done!.json().message).toMatch(/certificate_validity_0/);
   });
 });
 
@@ -538,7 +662,7 @@ describe("web orchestration (apps/web/src/lib/masterDeviceNative.ts) against the
     const result = enrollAndroidMasterDevice({
       api: apiFn,
       native,
-      passkey: () => passkeyAssertion(o),
+      passkey: async (options: unknown) => answer(o, options as { challenge: string }),
       trustId: o.trustId,
       deviceFingerprint: `trustid-device-${Math.random().toString(36).slice(2, 12)}`,
     });

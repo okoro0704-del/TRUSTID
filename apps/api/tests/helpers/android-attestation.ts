@@ -117,6 +117,8 @@ export type KeyDescriptionInput = {
   deviceLocked?: boolean;
   verifiedBootState?: number;
   origin?: number | null; // 0 generated in hardware, 2 imported; null = absent
+  attestationVersion?: number; // default 300 (KeyMint 3)
+  createdAt?: number | null; // key creation time (ms); default now; null = absent
   packageName?: string;
   signingCertSha256?: string;
 };
@@ -127,7 +129,7 @@ export function keyDescription(i: KeyDescriptionInput): Buffer {
     set(seq(octets(Buffer.from(i.packageName ?? "com.trustid.device")), int(3))),
     set(octets(Buffer.from(i.signingCertSha256 ?? "11".repeat(32), "hex"))),
   );
-  const software = seq(ctx(709, octets(appId)));
+  const software = seq(...(i.createdAt === null ? [] : [ctx(701, int(i.createdAt ?? Date.now()))]), ctx(709, octets(appId)));
   const hardware: Buffer[] = [
     ctx(1, set(...(i.purposes ?? [2]).map(int))),
     ctx(2, int(i.algorithm ?? 3)),
@@ -140,7 +142,7 @@ export function keyDescription(i: KeyDescriptionInput): Buffer {
   if (i.authTimeout !== null && i.authTimeout !== undefined) hardware.push(ctx(505, int(i.authTimeout)));
   if (i.origin !== null) hardware.push(ctx(702, int(i.origin ?? 0)));
   hardware.push(ctx(704, seq(octets(randomBytes(32)), bool(i.deviceLocked ?? true), enumerated(i.verifiedBootState ?? 0), octets(randomBytes(32)))));
-  return seq(int(300), enumerated(level), int(300), enumerated(level), octets(i.challenge), octets(Buffer.alloc(0)), software, seq(...hardware));
+  return seq(int(i.attestationVersion ?? 300), enumerated(level), int(300), enumerated(level), octets(i.challenge), octets(Buffer.alloc(0)), software, seq(...hardware));
 }
 
 /** A complete attestation for `deviceKey` (public key): leaf, intermediate, root (base64 DER). */
@@ -148,7 +150,7 @@ export function attestationChain(
   root: { key: KeyObject; publicKey: KeyObject },
   deviceKey: KeyObject,
   kd: KeyDescriptionInput,
-  opts: { brokenSignature?: boolean; intermediateNotCa?: boolean } = {},
+  opts: { brokenSignature?: boolean; intermediateNotCa?: boolean; leafNotBefore?: Date } = {},
 ): string[] {
   const intermediate = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
   const rootCert = makeCert({ subject: "Test Attestation Root", issuer: "Test Attestation Root", subjectKey: root.publicKey, issuerKey: root.key, ca: true });
@@ -166,6 +168,7 @@ export function attestationChain(
     subjectKey: deviceKey,
     issuerKey: leafSigner,
     ca: false,
+    notBefore: opts.leafNotBefore,
     extensions: [seq(oid(KEY_DESCRIPTION_OID), octets(keyDescription(kd)))],
   });
   return [leaf, intermediateCert, rootCert].map((c) => c.toString("base64"));
