@@ -16,6 +16,9 @@ Generating, uploading or activating one needs the owner's explicit approval.
 | Emulator software-key override | needs `BuildConfig.DEBUG` (false in release) |
 | OTA updater | refuses an update whose signer differs from the installed app (`SIGNER_MISMATCH`), so moving from debug to release signing cannot happen over OTA |
 | Secrets in Git | none. `*.jks`, `*.keystore`, `*.p12`, `*.pk8`, `keystore.properties` and `signing.properties` are ignored (`apps/device/android/.gitignore`) |
+| Backup / device transfer | disabled for all app data (`allowBackup=false`, `dataExtractionRules`) |
+| Staging identity | `-PtrustidEnv=staging -PtrustidStagingOrigin=…` → `com.trustid.device.staging`, staging origin and OTA only; signed with a separate **staging** key through the same `TRUSTID_RELEASE_*` variables |
+| APK check | `scripts/verify-android-apk.mjs` (package, not debuggable, backup off, web origin, signer); runs in CI for the staging build |
 
 ## Decisions for the owner
 

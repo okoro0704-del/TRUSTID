@@ -50,8 +50,9 @@ Run every case on D1 and D2 unless marked. "Expected" is the pass criterion.
 | D2f | Failed biometric | Wrong finger ×N | No signature after any failure; lockout handled; nothing signed |
 | D3k | New fingerprint enrolled | Add a fingerprint in Settings, then approve | `key_invalidated`; re-enrollment required (device-signed revoke unavailable; passkey revoke → recovery hold, by design) |
 | E1 | Restart persistence | Force-stop and reboot; approve | Same key; approval works |
-| F1 | Revocation from the phone | Remove this Master Device (fingerprint + passkey) | Device revoked; pending **and approved-unconsumed** challenges cancelled; immediate re-enrollment allowed |
-| F2 | Revoked key use | After F1, replay an old approval signature | Refused (`403`/`409`) |
+| F1 | Revocation from the phone | Remove this Master Device (fingerprint + passkey) | Prompt reads "Remove this Master Device"; device revoked; pending **and approved-unconsumed** challenges cancelled; immediate re-enrollment allowed |
+| F2 | Revoked key use | After F1, replay an old approval signature, and replay the F1 removal request | Both refused (`403`/`409`/`404`) |
+| F4 | Removal expiry | Start a removal; wait more than 5 minutes; confirm | `410 revocation_expired`; device still active |
 | F3 | Lost-device revoke | Revoke from another session with passkey only | Revoked; `recovery_required`; new enrollment blocked |
 | G1 | Offline | Airplane mode during approval | Clean error; key intact; no partial state |
 | G2 | Network recovery | Re-enable network; retry | Approval succeeds if not expired |
