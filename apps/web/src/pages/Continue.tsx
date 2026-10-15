@@ -157,7 +157,7 @@ export function ContinuePage() {
           setRemembered(null);
           setSwitchAccount(true);
           setError(
-            "This phone’s old passkey is gone from TrustID. Create TrustID again on this phone. You can delete the old passkey for trustedid.netlify.app in your device settings.",
+            `This phone’s old passkey is gone from TrustID. Create TrustID again on this phone. You can delete the old passkey for ${window.location.hostname} in your device settings.`,
           );
           return;
         }
@@ -221,7 +221,7 @@ export function ContinuePage() {
 
   function onResetPhoneBinding() {
     const ok = window.confirm(
-      "Reset this phone’s TrustID binding?\n\nThis unlocks Create TrustID on this phone after a server wipe. If your account still exists, sign in with your passkey instead.\n\nAlso delete the old trustedid.netlify.app passkey in your device settings if Face ID keeps offering it.",
+      `Reset this phone’s TrustID binding?\n\nThis unlocks Create TrustID on this phone after a server wipe. If your account still exists, sign in with your passkey instead.\n\nAlso delete the old ${window.location.hostname} passkey in your device settings if Face ID keeps offering it.`,
     );
     if (!ok) return;
     resetPhoneTrustBinding();

@@ -5,6 +5,7 @@ import {
   type StepUpPolicy,
 } from "@trustid/vault-sdk";
 import { getTier1Gate } from "./tier1";
+import { defaultElfcomBaseUrl, pickElfcomBaseUrl, webEnvironment } from "../web-environment";
 import {
   deleteEsfsAsset,
   loadAllEsfsAssets,
@@ -13,12 +14,14 @@ import {
 
 let vaultSingleton: SovereignVault | null = null;
 
+/** Emergency ElfCom bridge: only with an environment-safe ElfCom URL (never another environment's node). */
 function elfcomBridge(): HttpElfComEmergencyBridge | undefined {
-  const baseUrl =
-    (import.meta.env.VITE_ELFCOM_BASE_URL as string | undefined) ||
-    "https://elfcomnode-production.up.railway.app";
+  const baseUrl = pickElfcomBaseUrl(
+    { build: import.meta.env.VITE_ELFCOM_BASE_URL as string | undefined, fallback: defaultElfcomBaseUrl() },
+    webEnvironment(),
+  );
   const nodeSecret = import.meta.env.VITE_ELFCOM_NODE_SECRET as string | undefined;
-  if (!nodeSecret) return undefined;
+  if (!baseUrl || !nodeSecret) return undefined;
   return new HttpElfComEmergencyBridge({ baseUrl, nodeSecret });
 }
 

@@ -1,15 +1,15 @@
 import { useEffect, useState } from "react";
+import { approvedApkDownloadUrl, updateDownloadTarget, webEnvironment } from "../lib/web-environment";
 
 /**
  * One-time bridge for Android shells built before the native OTA channel existed.
  * Those shells load this live site but lack the TrustIdAppUpdate plugin, so they
  * cannot update themselves yet. Shells that have the plugin never see this banner.
  *
- * The APK link uses the Netlify branch host on purpose: Capacitor opens other hosts
- * in the system browser, which hands the download to Android's package installer.
+ * The download comes only from approvedApkDownloadUrl() (production builds; see web-environment.ts)
+ * and only for a manifest describing this environment's app. Elsewhere the banner never appears.
  */
 const MANIFEST_PATH = "/releases/trustid-android.json";
-const EXTERNAL_APK_URL = "https://main--trustedid.netlify.app/releases/TrustID.apk";
 const DISMISS_KEY = "trustid.nativeShellUpdate.dismissedAt";
 const DISMISS_MS = 3 * 24 * 60 * 60 * 1000;
 
@@ -41,19 +41,18 @@ function recentlyDismissed(): boolean {
 }
 
 export function NativeShellUpdateBanner() {
-  const [versionName, setVersionName] = useState<string | null>(null);
+  const [target, setTarget] = useState<{ url: string; versionName: string } | null>(null);
 
   useEffect(() => {
-    if (!isLegacyAndroidShell() || recentlyDismissed()) return;
+    const approvedUrl = approvedApkDownloadUrl();
+    if (!approvedUrl || !isLegacyAndroidShell() || recentlyDismissed()) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), 8000);
     fetch(MANIFEST_PATH, { cache: "no-store", signal: controller.signal })
       .then(async (res) => {
         if (!res.ok || !res.headers.get("content-type")?.includes("json")) return;
         const manifest = (await res.json()) as { applicationId?: string; versionName?: string };
-        if (manifest.applicationId === "com.trustid.device" && manifest.versionName) {
-          setVersionName(manifest.versionName);
-        }
+        setTarget(updateDownloadTarget(manifest, webEnvironment(), approvedUrl));
       })
       .catch(() => undefined)
       .finally(() => window.clearTimeout(timer));
@@ -63,7 +62,7 @@ export function NativeShellUpdateBanner() {
     };
   }, []);
 
-  if (!versionName) return null;
+  if (!target) return null;
 
   const dismiss = () => {
     try {
@@ -71,7 +70,7 @@ export function NativeShellUpdateBanner() {
     } catch {
       /* storage unavailable */
     }
-    setVersionName(null);
+    setTarget(null);
   };
 
   return (
@@ -92,7 +91,7 @@ export function NativeShellUpdateBanner() {
         lineHeight: 1.4,
       }}
     >
-      <div style={{ fontWeight: 600, marginBottom: 4 }}>TrustID {versionName} is available</div>
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>TrustID {target.versionName} is available</div>
       <div style={{ opacity: 0.85, marginBottom: 10 }}>
         One-time install: after this version, TrustID downloads and verifies its own updates.
       </div>
@@ -111,7 +110,7 @@ export function NativeShellUpdateBanner() {
           Later
         </button>
         <a
-          href={EXTERNAL_APK_URL}
+          href={target.url}
           style={{
             background: "#F4FBFA",
             color: "#0B3D3A",
