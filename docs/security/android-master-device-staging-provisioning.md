@@ -271,3 +271,37 @@ deploy first.
 - `GET https://trustid-api-staging-staging.up.railway.app/health` reports `pgvector: true`, the
   staging RP ID and the staging issuer;
 - the JWKS `kid` differs from production's `263c1076162e8c26`.
+
+## Phase 3B: first staging API deployment (2026-10-15)
+
+- Source: `okoro0704-del/TRUSTID` at `a3c74398c208211f2add9ce40f8befbca256c726` (branch head, verified
+  immediately before). Only `trustid-api-staging` was connected.
+- The auto-deploy trigger `27408c14-d329-4a7c-a522-e0aa7d3029bf` was deleted, so later pushes do not
+  redeploy staging.
+- Deployment `9bd622a7-78f3-4da4-946d-29f2b99ee89a`: **SUCCESS** (one deployment, Railpack, `railway.toml` build and start).
+- Start-up log:
+  - `vector extension present`;
+  - Prisma connected to `pgvector.railway.internal:5432` (private) and synced the schema;
+  - seed: "staging deployment, no applications seeded";
+  - `[pgvector] ready: vector@0.8.7, HNSW(m=16, ef_c=64)`;
+  - listening on 8080.
+
+  No credential-bearing connection strings or token-like strings appear in the log.
+- Direct endpoint `https://trustid-api-staging-staging.up.railway.app`:
+  - `/health`: ok; RP ID `trustid-staging.netlify.app` (only passkey origin); issuer
+    `https://trustid-staging.netlify.app/api`; `pgvector: true`; all connected services unbound
+    (FinProv: embedded local shim). Biometric readiness: threshold **UNCALIBRATED** (0.35), PAD
+    **INCOMPLETE**. API health is not biometric security readiness.
+  - `/.well-known/openid-configuration`: issuer, `jwks_uri` and endpoints all under
+    `https://trustid-staging.netlify.app/api/…`. These proxied paths go live only when the Netlify
+    staging site is deployed.
+  - `/.well-known/jwks.json`: kid `c455b211ea605666` (Ed25519), stable across requests, different
+    from production `263c1076162e8c26`. The key persists in the staging database (volume), sealed
+    with `SEAL_KEY`.
+  - Master Device status, enrollment and removal routes: 401 without a session. Enrollment is off by
+    configuration (`MASTER_DEVICE_ENROLLMENT` unset). The `403 master_device_enrollment_disabled`
+    path needs a signed-in test session, and none was created.
+  - CORS: the production origin is refused (403); the staging origin is allowed.
+- Production is unchanged: API healthy, enrollment 404, JWKS kid `263c1076162e8c26`, all Railway
+  deployments older than today, `lucid-integrity` still triggered only by `main`, Netlify published
+  deploy from 2026-10-13.
