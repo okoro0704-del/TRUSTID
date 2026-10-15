@@ -7,6 +7,24 @@ def trustidRelease = new groovy.json.JsonSlurper().parse(file('../../release.jso
 def trustidVersionCode = (project.findProperty('trustidVersionCode') ?: trustidRelease.versionCode) as Integer
 def trustidVersionName = (project.findProperty('trustidVersionName') ?: trustidRelease.versionName) as String
 
+// Environment: production (default) or staging. A staging build is a separate app
+// (com.trustid.device.staging) that loads, and takes OTA updates from, the staging origin only:
+//   CAP_SERVER_URL=https://<staging host> npx cap sync android
+//   ./gradlew assembleRelease -PtrustidEnv=staging -PtrustidStagingOrigin=https://<staging host>
+// Missing or production-pointing staging configuration fails the build (no production fallback).
+def trustidProductionOrigin = 'https://trustedid.netlify.app'
+def trustidEnv = (project.findProperty('trustidEnv') ?: 'production') as String
+if (!(trustidEnv in ['production', 'staging'])) {
+    throw new GradleException("trustidEnv must be 'production' or 'staging', not '${trustidEnv}'")
+}
+def trustidStagingOrigin = (project.findProperty('trustidStagingOrigin') ?: '') as String
+if (trustidEnv == 'staging' && (!(trustidStagingOrigin ==~ /^https:\/\/[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/) || trustidStagingOrigin == trustidProductionOrigin)) {
+    throw new GradleException("Staging builds need -PtrustidStagingOrigin=https://<staging host> (an https origin that is not production)")
+}
+def trustidWebOrigin = trustidEnv == 'staging' ? trustidStagingOrigin : trustidProductionOrigin
+def trustidApplicationId = trustidEnv == 'staging' ? "${trustidRelease.applicationId}.staging" : trustidRelease.applicationId
+def trustidOtaManifestUrl = trustidEnv == 'staging' ? "${trustidStagingOrigin}/releases/trustid-android.json" : trustidRelease.otaManifestUrl
+
 android {
     namespace "com.trustid.device"
     compileSdk rootProject.ext.compileSdkVersion
@@ -14,12 +32,14 @@ android {
         buildConfig true
     }
     defaultConfig {
-        applicationId trustidRelease.applicationId
+        applicationId trustidApplicationId
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode trustidVersionCode
         versionName trustidVersionName
-        buildConfigField "String", "TRUSTID_OTA_MANIFEST_URL", "\"${trustidRelease.otaManifestUrl}\""
+        buildConfigField "String", "TRUSTID_OTA_MANIFEST_URL", "\"${trustidOtaManifestUrl}\""
+        buildConfigField "String", "TRUSTID_ENVIRONMENT", "\"${trustidEnv}\""
+        buildConfigField "String", "TRUSTID_WEB_ORIGIN", "\"${trustidWebOrigin}\""
         buildConfigField "String", "TRUSTID_RELEASE_CHANNEL", "\"${trustidRelease.channel}\""
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
@@ -103,4 +123,27 @@ try {
     }
 } catch(Exception e) {
     logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}
+
+// The web shell must point at this build's environment. Staging: every build. Production: release
+// builds (debug builds may load a preview with CAP_SERVER_URL for development).
+def verifyTrustIdWebOrigin = tasks.register('verifyTrustIdWebOrigin') {
+    def capConfig = file('src/main/assets/capacitor.config.json')
+    doLast {
+        if (!capConfig.exists()) {
+            throw new GradleException("${capConfig} is missing: run 'npx cap sync android' first")
+        }
+        def url = new groovy.json.JsonSlurper().parse(capConfig)?.server?.url
+        if (trustidEnv == 'staging' && url != trustidStagingOrigin) {
+            throw new GradleException("Staging build must load ${trustidStagingOrigin}, but capacitor.config.json has '${url}'. Run: CAP_SERVER_URL=${trustidStagingOrigin} npx cap sync android")
+        }
+        if (trustidEnv == 'production' && url != null && url != trustidProductionOrigin) {
+            throw new GradleException("Production release must load ${trustidProductionOrigin}, but capacitor.config.json has '${url}'")
+        }
+    }
+}
+tasks.configureEach { task ->
+    if (task.name == 'preReleaseBuild' || (trustidEnv == 'staging' && task.name == 'preDebugBuild')) {
+        task.dependsOn verifyTrustIdWebOrigin
+    }
 }

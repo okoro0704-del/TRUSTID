@@ -260,7 +260,7 @@ object MasterDevicePrompt {
   private val FORMATS = mapOf(
     "trustid-step-up/v1" to listOf("challenge", "sub", "client", "action", "operation", "session", "device", "exp"),
     "trustid-master-device-enroll/v1" to listOf("enrollment", "sub", "key", "exp"),
-    "trustid-master-device-revoke/v1" to listOf("sub", "device"),
+    "trustid-master-device-revoke/v2" to listOf("sub", "device", "nonce", "exp"),
   )
 
   fun describe(payload: String): Prompt? {

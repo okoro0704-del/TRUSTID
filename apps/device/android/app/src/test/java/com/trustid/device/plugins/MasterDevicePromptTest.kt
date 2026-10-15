@@ -29,8 +29,10 @@ class MasterDevicePromptTest {
   fun enrollmentAndRevocationPayloadsAreDescribed() {
     val enroll = listOf("trustid-master-device-enroll/v1", "enrollment=abc_DEF-123", "sub=TID-1", "key=KEYHASH", "exp=2026-10-15T10:00:00.000Z").joinToString("\n")
     assertEquals("Make this phone your Master Device", MasterDevicePrompt.describe(enroll)!!.title)
-    val revoke = listOf("trustid-master-device-revoke/v1", "sub=TID-1", "device=cm1device").joinToString("\n")
+    val revoke = listOf("trustid-master-device-revoke/v2", "sub=TID-1", "device=cm1device", "nonce=abc_DEF-123", "exp=2026-10-15T10:00:00.000Z").joinToString("\n")
     assertEquals("Remove this Master Device", MasterDevicePrompt.describe(revoke)!!.title)
+    // the static, non-expiring removal payload is no longer signed
+    assertNull(MasterDevicePrompt.describe(listOf("trustid-master-device-revoke/v1", "sub=TID-1", "device=cm1device").joinToString("\n")))
   }
 
   @Test
