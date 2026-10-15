@@ -67,6 +67,15 @@ export function injectCapacitorSecurityBridges(): boolean {
     };
   }
 
+  const masterDevice = plugin("TrustIdMasterDevice");
+  if (masterDevice && !window.TrustIdMasterDevice) {
+    window.TrustIdMasterDevice = masterDevice as unknown as NonNullable<Window["TrustIdMasterDevice"]>;
+  }
+  const passkey = plugin("TrustIdPasskey");
+  if (passkey && !window.TrustIdPasskey) {
+    window.TrustIdPasskey = passkey as unknown as NonNullable<Window["TrustIdPasskey"]>;
+  }
+
   const media = plugin("TrustIdMediaVault");
   if (media && !window.TrustIdMediaVault) {
     window.TrustIdMediaVault = media as unknown as NonNullable<

@@ -13,6 +13,7 @@ import {
   DEVICE_TRUST_LEVELS,
   WEBAUTHN_PURPOSES,
   isDeviceCredentialActive,
+  type WebAuthnPurpose,
 } from "@trustid/shared";
 import { prisma } from "../../db/client.js";
 import { config } from "../../lib/config.js";
@@ -62,12 +63,27 @@ function allowCredentialDescriptor(credentialId: string, transportsRaw: string) 
  * reject platform authenticators that report 0 / flat counters; TrustID applies
  * evaluateSignatureCounter afterward (see counter.ts).
  */
+/**
+ * Native Android passkey assertions (Credential Manager) carry the app's origin,
+ * "android:apk-key-hash:<base64url SHA-256 of the signing certificate>", instead of a web origin.
+ * Only the hashes configured in WEBAUTHN_ANDROID_ORIGINS are accepted, and only for assertions;
+ * the app must also be associated with the RP ID through Digital Asset Links.
+ */
+export function androidAssertionOrigins(raw = process.env.WEBAUTHN_ANDROID_ORIGINS ?? ""): string[] {
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => /^android:apk-key-hash:[A-Za-z0-9_-]{43}$/.test(s));
+}
+
 async function verifyAssertion(input: {
   response: AuthenticationResponseJSON;
   expectedChallenge: string;
   credentialId: string;
   publicKey: Uint8Array;
   transports?: AuthenticatorTransportFuture[];
+  /** Require the authenticator's user-verification flag (biometric/PIN), not just presence. */
+  requireUserVerification?: boolean;
 }) {
   // Copy into a fresh ArrayBuffer-backed view (TS 5.7+ Uint8Array generic vs SimpleWebAuthn).
   const publicKey = new Uint8Array(
@@ -77,10 +93,11 @@ async function verifyAssertion(input: {
   return verifyAuthenticationResponse({
     response: input.response,
     expectedChallenge: input.expectedChallenge,
-    expectedOrigin: config.webauthn.origins,
+    expectedOrigin: [...config.webauthn.origins, ...androidAssertionOrigins()],
     expectedRPID: config.webauthn.rpID,
-    // Match login options (preferred) — Android may omit UV bit intermittently.
-    requireUserVerification: false,
+    // Sign-in matches login options (preferred) — Android may omit UV intermittently. Sensitive
+    // ceremonies (Master Device enrollment / revocation) require it.
+    requireUserVerification: input.requireUserVerification ?? false,
     credential: {
       id: input.credentialId,
       publicKey,
@@ -709,7 +726,13 @@ export async function verifyLogin(input: {
 }
 
 /** Options for local UV before sensitive Trust Center actions. */
-export async function reauthenticationOptions(userId: string, deviceId?: string | null) {
+export async function reauthenticationOptions(
+  userId: string,
+  deviceId?: string | null,
+  userVerification: "preferred" | "required" = "preferred",
+  /** Operation-bound ceremonies supply their own challenge and a purpose only they accept. */
+  binding?: { purpose: string; challenge: string },
+) {
   const creds = await prisma.credential.findMany({
     where: {
       userId,
@@ -729,7 +752,8 @@ export async function reauthenticationOptions(userId: string, deviceId?: string 
 
   const options = await generateAuthenticationOptions({
     rpID: config.webauthn.rpID,
-    userVerification: "preferred",
+    userVerification,
+    ...(binding ? { challenge: new Uint8Array(Buffer.from(binding.challenge, "base64url")) } : {}),
     timeout: 120_000,
     allowCredentials: creds.map((c) =>
       allowCredentialDescriptor(c.credentialId, c.transports),
@@ -737,7 +761,7 @@ export async function reauthenticationOptions(userId: string, deviceId?: string 
   });
 
   await storeWebAuthnChallenge({
-    purpose: WEBAUTHN_PURPOSES.REAUTHENTICATION,
+    purpose: (binding?.purpose ?? WEBAUTHN_PURPOSES.REAUTHENTICATION) as WebAuthnPurpose,
     challenge: options.challenge,
     userId,
   });
@@ -755,6 +779,13 @@ export async function verifyReauthentication(input: {
   response: AuthenticationResponseJSON;
   ip?: string;
   userAgent?: string;
+  /** Fail unless the assertion proves user verification (UV), not merely presence (UP). */
+  requireUserVerification?: boolean;
+  /**
+   * Operation-bound ceremony: the challenge must have been issued under `purpose` and must match the
+   * operation (`matches`). Without a binding only generic re-authentication challenges are accepted.
+   */
+  binding?: { purpose: string; matches: (challenge: string) => boolean };
 }) {
   const cred = await prisma.credential.findUnique({
     where: { credentialId: input.response.id },
@@ -782,9 +813,13 @@ export async function verifyReauthentication(input: {
   if (!clientChallenge) {
     throw Object.assign(new Error("Invalid credential response"), { statusCode: 400 });
   }
+  if (input.binding && !input.binding.matches(clientChallenge)) {
+    await failAuthentication(input.userId, "reauth_wrong_operation", input);
+    throw Object.assign(new Error("This passkey confirmation was made for another action"), { statusCode: 401 });
+  }
   const consumed = await consumeWebAuthnChallenge({
     challenge: clientChallenge,
-    purpose: [WEBAUTHN_PURPOSES.REAUTHENTICATION],
+    purpose: [(input.binding?.purpose ?? WEBAUTHN_PURPOSES.REAUTHENTICATION) as WebAuthnPurpose],
     userId: input.userId,
   });
   if (!consumed.ok) {
@@ -799,11 +834,12 @@ export async function verifyReauthentication(input: {
       credentialId: cred.credentialId,
       publicKey: new Uint8Array(cred.publicKey),
       transports: parseTransports(cred.transports),
+      requireUserVerification: input.requireUserVerification,
     });
   } catch {
     throw Object.assign(new Error("Re-authentication failed"), { statusCode: 401 });
   }
-  if (!verification.verified) {
+  if (!verification.verified || (input.requireUserVerification && !verification.authenticationInfo.userVerified)) {
     throw Object.assign(new Error("Re-authentication failed"), { statusCode: 401 });
   }
 

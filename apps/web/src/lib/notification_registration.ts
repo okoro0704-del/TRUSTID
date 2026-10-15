@@ -1,8 +1,9 @@
 /**
  * Registers the physical device FCM/APNs token with ElfCom Universal Push Primitive.
- * Capacitor / web ù not React Native Firebase (TrustID ships as Capacitor APK).
+ * Capacitor / web ÔøΩ not React Native Firebase (TrustID ships as Capacitor APK).
  */
 import { createTrustIdSdk } from "@trustid/sdk";
+import { defaultElfcomBaseUrl, pickElfcomBaseUrl, webEnvironment } from "./web-environment";
 
 const APP_ID = "trust_id_app";
 
@@ -40,12 +41,19 @@ function platformForApi(): "ANDROID" | "IOS" | "WEB" {
   return "WEB";
 }
 
-function elfcomBaseFallback(): string {
-  return (
-    (import.meta.env.VITE_ELFCOM_BASE_URL as string | undefined)?.replace(
-      /\/+$/,
-      "",
-    ) || "https://elfcomnode-production.up.railway.app"
+/**
+ * ElfCom node for device registration: the server-advertised URL, else VITE_ELFCOM_BASE_URL, else
+ * (production builds only) the production node. Every candidate is validated for this build's
+ * environment; null means push registration is disabled (never a fallback to another environment).
+ */
+function elfcomBaseUrl(serverAdvertised?: string): string | null {
+  return pickElfcomBaseUrl(
+    {
+      server: serverAdvertised,
+      build: import.meta.env.VITE_ELFCOM_BASE_URL as string | undefined,
+      fallback: defaultElfcomBaseUrl(),
+    },
+    webEnvironment(),
   );
 }
 
@@ -180,7 +188,12 @@ export async function registerDeviceWithElfCom(
     };
     if (!cap.token) return true;
 
-    const base = (cap.elfcomBaseUrl || elfcomBaseFallback()).replace(/\/+$/, "");
+    const base = elfcomBaseUrl(cap.elfcomBaseUrl);
+    if (!base) {
+      // No ElfCom node for this environment: never fall back to another environment's node.
+      console.warn("[Notification] ElfCom is not configured for this environment; direct registration skipped.");
+      return false;
+    }
     const response = await fetch(`${base}/v1/devices/register`, {
       method: "POST",
       headers: {

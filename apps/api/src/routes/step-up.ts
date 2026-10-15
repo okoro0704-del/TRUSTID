@@ -25,6 +25,16 @@ import {
   type ClientAccess,
 } from "../modules/step-up/service.js";
 import { biometricPayloadSchema } from "../modules/trust-id/schemas.js";
+import {
+  beginEnrollment,
+  beginRevocation,
+  bindEnrollmentKey,
+  completeEnrollment,
+  enrollmentReauthOptions,
+  revokeStepUpDevice,
+  stepUpDeviceActivity,
+  stepUpDeviceStatus,
+} from "../modules/step-up/master-device-enrollment.js";
 
 const challengeParams = z.object({ challengeId: z.string().regex(/^[A-Za-z0-9_-]{43}$/) });
 
@@ -34,6 +44,11 @@ function sendError(reply: FastifyReply, err: unknown) {
   }
   if (err instanceof z.ZodError) {
     return reply.code(400).send({ error: "invalid_request", message: "Request body or parameters are invalid." });
+  }
+  // Passkey re-authentication failures (verifyReauthentication) carry a 4xx statusCode.
+  const status = (err as { statusCode?: number }).statusCode;
+  if (typeof status === "number" && status >= 400 && status < 500) {
+    return reply.code(status).send({ error: "reauthentication_failed", message: (err as Error).message });
   }
   throw err;
 }
@@ -176,6 +191,99 @@ export async function stepUpRoutes(app: FastifyInstance) {
       }
     },
   );
+
+  // ---- Subject: step-up Master Device enrollment and management ------------
+
+  app.get("/v1/step-up/master-device", { preHandler: requireSession }, async (req) => stepUpDeviceStatus(req.auth!));
+
+  app.get("/v1/step-up/master-device/activity", { preHandler: requireSession }, async (req) => stepUpDeviceActivity(req.auth!));
+
+  const publicKey = z.string().min(64).max(400);
+  const enrollmentToken = z.string().min(16).max(2048);
+
+  app.post("/v1/step-up/master-device/enrollment", { preHandler: requireSession }, async (req, reply) => {
+    try {
+      const body = z.object({ public_key: publicKey.optional() }).strict().parse(req.body ?? {});
+      return await beginEnrollment(req.auth!, { publicKey: body.public_key });
+    } catch (err) {
+      return sendError(reply, err);
+    }
+  });
+
+  app.post("/v1/step-up/master-device/enrollment/key", { preHandler: requireSession }, async (req, reply) => {
+    try {
+      const body = z.object({ enrollment: enrollmentToken, public_key: publicKey }).strict().parse(req.body ?? {});
+      return await bindEnrollmentKey(req.auth!, { enrollment: body.enrollment, publicKey: body.public_key });
+    } catch (err) {
+      return sendError(reply, err);
+    }
+  });
+
+  // Passkey options bound to this enrollment (nonce + key): an assertion for anything else is refused.
+  app.post("/v1/step-up/master-device/enrollment/reauth", { preHandler: requireSession }, async (req, reply) => {
+    try {
+      const body = z.object({ enrollment: enrollmentToken }).strict().parse(req.body ?? {});
+      return await enrollmentReauthOptions(req.auth!, { enrollment: body.enrollment });
+    } catch (err) {
+      return sendError(reply, err);
+    }
+  });
+
+  app.post("/v1/step-up/master-device/enrollment/complete", { preHandler: requireSession }, async (req, reply) => {
+    try {
+      const body = z
+        .object({
+          enrollment: enrollmentToken,
+          public_key: publicKey,
+          device_fingerprint: z.string().min(16).max(256),
+          signature: z.string().min(8).max(512),
+          reauth: z.record(z.unknown()),
+          attestation: z.array(z.string().min(16).max(8192)).min(1).max(10).optional(),
+        })
+        .strict()
+        .parse(req.body ?? {});
+      return await completeEnrollment(
+        req.auth!,
+        {
+          enrollment: body.enrollment,
+          publicKey: body.public_key,
+          deviceFingerprint: body.device_fingerprint,
+          signature: body.signature,
+          reauth: body.reauth,
+          attestation: body.attestation,
+        },
+        clientMeta(req),
+      );
+    } catch (err) {
+      return sendError(reply, err);
+    }
+  });
+
+  // Removal: begin returns a single-use, expiring token + device signing bytes + bound passkey options.
+  app.post("/v1/step-up/master-device/revoke/begin", { preHandler: requireSession }, async (req, reply) => {
+    try {
+      z.object({}).strict().parse(req.body ?? {});
+      return await beginRevocation(req.auth!);
+    } catch (err) {
+      return sendError(reply, err);
+    }
+  });
+
+  app.post("/v1/step-up/master-device/revoke", { preHandler: requireSession }, async (req, reply) => {
+    try {
+      const body = z
+        .object({ revocation: enrollmentToken, reauth: z.record(z.unknown()), device_signature: z.string().min(8).max(512).optional() })
+        .strict()
+        .parse(req.body ?? {});
+      return await revokeStepUpDevice(
+        req.auth!,
+        { revocation: body.revocation, reauth: body.reauth, deviceSignature: body.device_signature },
+        clientMeta(req),
+      );
+    } catch (err) {
+      return sendError(reply, err);
+    }
+  });
 
   app.post("/v1/step-up/challenges/:challengeId/deny", { preHandler: requireSession }, async (req, reply) => {
     const challengeId = parseChallengeId(req, reply);

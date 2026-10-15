@@ -24,6 +24,17 @@ export function legacyChallengeSigningPayload(row: { challengeId: string; action
   ].join("\n");
 }
 
+/** Failed legacy approvals are audited (challenge id hashed, never the signature). */
+export async function auditLegacyFailure(userId: string, challengeId: string, reason: string) {
+  await recordAudit({
+    type: "master_auth.approval_failed",
+    userId,
+    actorType: "user",
+    actorId: userId,
+    metadata: { challengeRef: hashSecret(challengeId).slice(0, 16), reason },
+  });
+}
+
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 /** Open (pending, unexpired) legacy challenges a subject may have at once. */
 export const LEGACY_MAX_PENDING_CHALLENGES = 5;
@@ -73,7 +84,9 @@ export async function issueMasterChallenge(input: {
   await recordAudit({
     type: AUDIT_EVENTS.MASTER_AUTH_CHALLENGE_ISSUED,
     userId: input.userId,
-    actorType: "system",
+    // Issuance requires the subject's own TrustID session: the issuer is that user.
+    actorType: "user",
+    actorId: input.userId,
     metadata: {
       challengeId: row.challengeId,
       action: input.action,
@@ -144,9 +157,11 @@ export async function approveMasterChallenge(input: {
     /* rejected below */
   }
   if (!master || master.deviceFingerprint !== fingerprint) {
+    await auditLegacyFailure(input.userId, row.challengeId, "wrong_master_device");
     throw Object.assign(new Error("This device is not your enrolled Master Device"), { statusCode: 403 });
   }
   if (!verifyMasterDeviceSignature(master.publicKey, legacyChallengeSigningPayload(row), input.signature)) {
+    await auditLegacyFailure(input.userId, row.challengeId, "invalid_signature");
     throw Object.assign(new Error("Master Device signature is invalid"), { statusCode: 401 });
   }
 

@@ -2,7 +2,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { config } from "./config.js";
 import { resolveSession } from "../modules/sessions/service.js";
 import { resolveAccessToken } from "../modules/authorization/service.js";
-import { PORTAL_ORIGINS } from "./portal-oauth-clients.js";
+import { portalOrigins } from "./portal-oauth-clients.js";
 
 export type AuthUser = {
   userId: string;
@@ -34,7 +34,7 @@ export function clientMeta(req: FastifyRequest) {
  */
 function cookieSessionAllowed(req: FastifyRequest): boolean {
   const origin = req.headers.origin;
-  return !(typeof origin === "string" && PORTAL_ORIGINS.includes(origin));
+  return !(typeof origin === "string" && portalOrigins().includes(origin));
 }
 
 function readSessionToken(req: FastifyRequest): {

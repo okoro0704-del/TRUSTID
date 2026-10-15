@@ -1,6 +1,7 @@
 import { DEFAULT_APP_SCOPES, SCOPES } from "@trustid/shared";
 import { prisma } from "../db/client.js";
-import { PORTAL_CLIENT_SCOPES, PORTAL_OAUTH_CLIENTS } from "./portal-oauth-clients.js";
+import { deploymentEnvironment, isProductionOrigin } from "./deployment.js";
+import { PORTAL_CLIENT_SCOPES, portalOAuthClients } from "./portal-oauth-clients.js";
 
 const ELFCOM_CLIENT_ID = "elfcom_web";
 const MYBRANDOS_CLIENT_ID = "mybrandos_public";
@@ -30,13 +31,14 @@ function configuredRedirects(defaults: string[], envName: string): string[] {
 }
 
 /**
- * Create the LifeOS Portal public clients if they do not exist. Create-only:
- * an existing client (e.g. registered by hand) is never modified here; a
- * registration that differs from the code is reported, not overwritten.
+ * Create this deployment's LifeOS Portal public clients if they do not exist (production: the
+ * production clients; staging: only the staging clients from TRUSTID_STAGING_*_ORIGIN). Create-only:
+ * an existing client (e.g. registered by hand) is never modified here; a registration that differs
+ * from the code is reported, not overwritten.
  */
 export async function bootstrapPortalClients(log: (msg: string) => void = console.warn) {
   const results: Array<{ clientId: string; action: "created" | "unchanged" | "differs" }> = [];
-  for (const client of PORTAL_OAUTH_CLIENTS) {
+  for (const client of portalOAuthClients()) {
     const existing = await prisma.application.findUnique({ where: { clientId: client.clientId } });
     if (!existing) {
       await prisma.application.create({
@@ -70,6 +72,12 @@ export async function bootstrapPortalClients(log: (msg: string) => void = consol
  * Runs on API boot so Railway deploys pick up new relying parties without a manual seed.
  */
 export async function bootstrapOAuthApplications() {
+  if (deploymentEnvironment() === "staging") {
+    // Staging registers only its own Portal clients: no production or development relying parties.
+    await assertNoForeignClients();
+    await bootstrapPortalClients();
+    return;
+  }
   const redirects = configuredRedirects(DEFAULT_ELFCOM_REDIRECTS, "ELFCOM_OAUTH_REDIRECT_URIS");
   const single = process.env.ELFCOM_OAUTH_REDIRECT_URI?.trim();
   if (single && !redirects.includes(single)) redirects.push(single);
@@ -117,4 +125,34 @@ export async function bootstrapOAuthApplications() {
   });
 
   await bootstrapPortalClients();
+}
+
+/**
+ * Staging: refuse to start if the database already holds an active client that redirects to a
+ * production or local host (e.g. a staging database seeded from elsewhere). Nothing is modified;
+ * the operator disables those clients, then restarts.
+ */
+async function assertNoForeignClients() {
+  const active = await prisma.application.findMany({ where: { status: "active" }, select: { clientId: true, redirectUris: true } });
+  const foreign = active.filter((app) => {
+    let uris: string[] = [];
+    try {
+      uris = JSON.parse(app.redirectUris) as string[];
+    } catch {
+      return true;
+    }
+    return uris.some((uri) => {
+      try {
+        const url = new URL(uri);
+        return url.protocol !== "https:" || ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) || isProductionOrigin(url.origin);
+      } catch {
+        return true;
+      }
+    });
+  });
+  if (foreign.length) {
+    throw new Error(
+      `Deployment configuration: staging database has active clients redirecting to production or local hosts: ${foreign.map((a) => a.clientId).join(", ")}`,
+    );
+  }
 }

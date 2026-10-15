@@ -50,6 +50,22 @@ jobs:
         run: npm run build:api
       - name: Web production build (UI packages, typecheck, bundle)
         run: npm run build:web
+      # The default (non-production) web build must carry no production artifacts or endpoints.
+      - name: Web artifact scan (development build)
+        run: node scripts/scan-web-artifacts.mjs apps/web/dist --env development
+      # The staging site build, with the staging site's settings, scanned as Netlify would publish it.
+      - name: Web artifact scan (staging build)
+        env:
+          SITE_NAME: trustid-staging
+          CONTEXT: production
+          TRUSTID_DEPLOY_ENV: staging
+          TRUSTID_API_PROXY_ORIGIN: https://trustid-api-staging-staging.up.railway.app
+          TRUSTID_ANDROID_SIGNING_SHA256: 5a57fdf74f2aba1d6a7767915da6a823cfdad06d00fef84593a3bd7979898a52
+        run: |
+          npm run build -w @trustid/web
+          node scripts/netlify-api-routing.mjs apps/web/dist
+          node scripts/netlify-asset-links.mjs apps/web/dist
+          node scripts/scan-web-artifacts.mjs apps/web/dist --env staging --package com.trustid.device.staging --signer "$TRUSTID_ANDROID_SIGNING_SHA256"
       - name: Repository test suite (security packages, API, SDK, Digi, vault, UI)
         run: npm test
 
@@ -90,4 +106,61 @@ jobs:
           npm run test -w @trustid/api -- --run
           tests/portal-oidc.test.ts tests/portal-cors.test.ts tests/step-up.test.ts
           tests/master-device-containment.test.ts tests/mybrandos-step-up.test.ts tests/trust-id-biometric.test.ts
+          tests/android-master-device.test.ts tests/staging-deployment.test.ts
           tests/ambient-no-enroll-on-failure.test.ts tests/foundation-config.test.ts
+
+  android:
+    name: Android unit tests + staging release identity
+    runs-on: ubuntu-latest
+    env:
+      # Placeholder until the staging site exists; the build only has to target a non-production origin.
+      TRUSTID_STAGING_ORIGIN: ${{ vars.TRUSTID_STAGING_ORIGIN || 'https://trustid-staging.example.invalid' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - run: npm ci
+      - name: Native Master Device plugins match their sources
+        run: |
+          for f in MasterDevicePlugin.kt PasskeyPlugin.kt; do
+            diff -u "apps/device/native/android/$f" "apps/device/android/app/src/main/java/com/trustid/device/plugins/$f"
+          done
+      # The shell loads the hosted site, so a placeholder web directory is enough for cap sync.
+      - name: Capacitor sync (production web origin)
+        run: |
+          mkdir -p apps/web/dist && [ -f apps/web/dist/index.html ] || echo '<!doctype html><title>TrustID</title>' > apps/web/dist/index.html
+          cd apps/device && npx cap sync android
+      - name: Android unit tests (Master Device prompt, OTA, biometric assets)
+        working-directory: apps/device/android
+        run: chmod +x gradlew && ./gradlew --no-daemon :app:testDebugUnitTest
+      - name: Staging release build (com.trustid.device.staging, staging origin, not debuggable)
+        env:
+          TRUSTID_RELEASE_KEYSTORE_B64: ${{ secrets.TRUSTID_STAGING_KEYSTORE_B64 }}
+          TRUSTID_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.TRUSTID_STAGING_KEYSTORE_PASSWORD }}
+          TRUSTID_RELEASE_KEY_ALIAS: ${{ secrets.TRUSTID_STAGING_KEY_ALIAS }}
+          TRUSTID_RELEASE_KEY_PASSWORD: ${{ secrets.TRUSTID_STAGING_KEY_PASSWORD }}
+        run: |
+          (cd apps/device && CAP_SERVER_URL="$TRUSTID_STAGING_ORIGIN" npx cap sync android)
+          if [ -n "$TRUSTID_RELEASE_KEYSTORE_B64" ]; then
+            echo "$TRUSTID_RELEASE_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/staging.keystore"
+            export TRUSTID_RELEASE_KEYSTORE="$RUNNER_TEMP/staging.keystore"
+          else
+            unset TRUSTID_RELEASE_KEYSTORE_PASSWORD TRUSTID_RELEASE_KEY_ALIAS TRUSTID_RELEASE_KEY_PASSWORD
+            echo "Staging signing credentials are not configured: the APK stays unsigned (expected until approved)."
+          fi
+          cd apps/device/android
+          ./gradlew --no-daemon :app:assembleRelease -PtrustidEnv=staging -PtrustidStagingOrigin="$TRUSTID_STAGING_ORIGIN"
+          rm -f "$RUNNER_TEMP/staging.keystore"
+      - name: Verify staging APK identity (package, debuggable, backup, web origin, signer when configured)
+        env:
+          TRUSTID_STAGING_SIGNER_SHA256: ${{ vars.TRUSTID_STAGING_SIGNER_SHA256 }}
+        run: |
+          APK=$(ls apps/device/android/app/build/outputs/apk/release/*.apk | head -1)
+          node scripts/verify-android-apk.mjs "$APK" --package com.trustid.device.staging --origin "$TRUSTID_STAGING_ORIGIN" \
+            ${TRUSTID_STAGING_SIGNER_SHA256:+--signer "$TRUSTID_STAGING_SIGNER_SHA256"}

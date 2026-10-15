@@ -5,7 +5,7 @@ import { recordAudit } from "../audit/service.js";
 import { isStepUpSigningKey } from "../step-up/master-device-keys.js";
 import { verifyMasterDeviceSignature } from "../step-up/service.js";
 import { activeStepUpDevice } from "../step-up/master-device-keys.js";
-import { legacyChallengeSigningPayload } from "./challenges.js";
+import { auditLegacyFailure, legacyChallengeSigningPayload } from "./challenges.js";
 import { MASTER_AUTH_CHALLENGE_STATUS } from "@trustid/shared";
 
 export async function registerMasterDevice(input: {
@@ -106,11 +106,13 @@ export async function verifyMasterDeviceBinding(input: {
   }
   const master = await activeStepUpDevice(input.userId);
   if (!master || master.deviceFingerprint !== fingerprintHash) {
+    await auditLegacyFailure(input.userId, challenge.challengeId, "wrong_master_device");
     throw Object.assign(new Error("Device is not a registered Master Device"), {
       statusCode: 403,
     });
   }
   if (!isStepUpSigningKey(master.publicKey) || !verifyMasterDeviceSignature(master.publicKey, legacyChallengeSigningPayload(challenge), input.signature)) {
+    await auditLegacyFailure(input.userId, challenge.challengeId, "invalid_signature");
     throw Object.assign(new Error("Master Device signature is invalid"), { statusCode: 401 });
   }
   const won = await prisma.masterAuthChallenge.updateMany({

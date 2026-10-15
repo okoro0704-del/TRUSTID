@@ -1,7 +1,7 @@
 # TrustID PWA on Netlify — API proxied to Railway (same-origin cookies)
 
 [build]
-  command = "node scripts/fetch-biometric-models.mjs && node scripts/copy-ort-wasm.mjs && node scripts/copy-mediapipe-wasm.mjs && npm run build -w @trustid/shared && npm run build -w @trustid/sdk && npm run build -w @trustid/device-security && npm run build -w @trustid/vault-sdk && npm run build -w @trustid/ui-react && npm run build -w @trustid/sovereign-crypto && npm run build -w @trustid/web"
+  command = "node scripts/fetch-biometric-models.mjs && node scripts/copy-ort-wasm.mjs && node scripts/copy-mediapipe-wasm.mjs && npm run build -w @trustid/shared && npm run build -w @trustid/sdk && npm run build -w @trustid/device-security && npm run build -w @trustid/vault-sdk && npm run build -w @trustid/ui-react && npm run build -w @trustid/sovereign-crypto && npm run build -w @trustid/web && node scripts/netlify-api-routing.mjs apps/web/dist && node scripts/netlify-asset-links.mjs apps/web/dist"
   publish = "apps/web/dist"
 
 [build.environment]
@@ -17,6 +17,17 @@
 # version bump changes the URL and they can be cached immutably.
 # The SDK keeps verified copies of every biometric asset in Cache Storage and
 # fetches with cache: "no-store", so a cached error page is never replayed.
+# Digital Asset Links: generated per environment by scripts/netlify-asset-links.mjs (production app
+# on the production site, staging app on the staging site, none on previews). Served as JSON, never
+# cached long, so a change of app signing certificate takes effect promptly. When no file is
+# generated the path answers 404 (rule below), never the SPA HTML.
+[[headers]]
+  for = "/.well-known/assetlinks.json"
+  [headers.values]
+    Content-Type = "application/json"
+    Cache-Control = "public, max-age=300"
+    Access-Control-Allow-Origin = "*"
+
 [[headers]]
   for = "/mediapipe/*"
   [headers.values]
@@ -97,17 +108,21 @@
   status = 301
   force = true
 
-# Proxy API to Railway — browser sees trustedid.netlify.app (first-party cookies)
+# API proxy (same-origin /api, first-party cookies): generated per environment into the publish
+# directory's _redirects by scripts/netlify-api-routing.mjs, which Netlify applies before these
+# rules. Production site → production API; staging → its own API (TRUSTID_API_PROXY_ORIGIN);
+# deploy previews → no API unless TRUSTID_PREVIEW_API_ORIGIN (never production). If that step did
+# not run, /api answers 404 here: there is no default target and no production fallback.
 [[redirects]]
   from = "/api/*"
-  to = "https://lucid-integrity-production.up.railway.app/:splat"
-  status = 200
+  to = "/404.html"
+  status = 404
   force = true
 
 [[redirects]]
   from = "/api"
-  to = "https://lucid-integrity-production.up.railway.app/"
-  status = 200
+  to = "/404.html"
+  status = 404
   force = true
 
 # Missing biometric assets must fail as 404. Without these the SPA fallback
@@ -146,6 +161,21 @@
 # A missing hashed chunk must fail loudly instead of evaluating index.html as JS.
 [[redirects]]
   from = "/assets/*"
+  to = "/404.html"
+  status = 404
+
+# Digital Asset Links not generated for this deployment: 404, not the SPA page (not forced, so a
+# generated file is always served as-is).
+[[redirects]]
+  from = "/.well-known/assetlinks.json"
+  to = "/404.html"
+  status = 404
+
+# Android release artifacts (APK, OTA manifest) exist only in production builds. Anywhere they are
+# absent (staging, previews) the path must fail as 404, never answer with the SPA page under the
+# release headers above. Not forced: a published production release file is always served as-is.
+[[redirects]]
+  from = "/releases/*"
   to = "/404.html"
   status = 404
 

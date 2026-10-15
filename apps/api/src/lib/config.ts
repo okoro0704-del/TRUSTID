@@ -1,4 +1,4 @@
-import { PORTAL_ORIGINS } from "./portal-oauth-clients.js";
+import { portalOrigins } from "./portal-oauth-clients.js";
 
 /**
  * A production CORS origin must be an exact https origin: no wildcard, no
@@ -57,10 +57,11 @@ function derivedRpId(): string {
 }
 
 /**
- * All origins allowed for WebAuthn verification.
- * PWA is on Netlify; API is on Railway — RP ID/origin must match the browser host,
- * not the Railway hostname. Accept WEBAUTHN_ORIGIN, WEBAUTHN_ORIGINS, CORS_ORIGINS,
- * and https://{rpID} so a wrong single WEBAUTHN_ORIGIN cannot break login.
+ * All origins trusted for WebAuthn (passkey) verification: WEBAUTHN_ORIGIN, WEBAUTHN_ORIGINS and
+ * https://{rpID}. PWA is on Netlify; API is on Railway — RP ID/origin must match the browser host,
+ * not the Railway hostname.
+ * CORS_ORIGINS is deliberately NOT included: an origin allowed to call the API over CORS is not
+ * thereby trusted to present passkey assertions (passkey trust and HTTP CORS are configured apart).
  */
 function derivedOrigins(): string[] {
   const origins = new Set<string>();
@@ -72,7 +73,6 @@ function derivedOrigins(): string[] {
   add(process.env.WEBAUTHN_ORIGIN);
   add(siteUrl());
   for (const part of (process.env.WEBAUTHN_ORIGINS ?? "").split(",")) add(part);
-  for (const part of (process.env.CORS_ORIGINS ?? "").split(",")) add(part);
 
   const rp = derivedRpId();
   if (rp === "localhost") {
@@ -323,12 +323,12 @@ export const config = {
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean)
-      .filter((o) => !PORTAL_ORIGINS.includes(o));
+      .filter((o) => !portalOrigins().includes(o));
     return this.isDev ? listed : listed.filter(isProductionSafeOrigin);
   },
   /** Every allowed browser origin: credentialed origins plus the Portal relying parties. */
   get corsOrigins() {
-    return [...new Set([...this.credentialedCorsOrigins, ...PORTAL_ORIGINS])];
+    return [...new Set([...this.credentialedCorsOrigins, ...portalOrigins()])];
   },
   get lifeosRedirectUri() {
     return required(

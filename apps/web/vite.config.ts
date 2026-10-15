@@ -3,12 +3,16 @@ import { join, resolve } from "node:path";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
+// Plain ESM helper shared with the Netlify build scripts and their tests (types: .d.mts).
+import { resolveWebEnvironment } from "../../scripts/trustid-web-environment.mjs";
 
 /**
- * public/releases holds the published Android OTA APK + manifest for Netlify.
- * The device (Capacitor) bundle must never embed the previous APK inside itself.
+ * public/releases holds the published production Android OTA APK + manifest for Netlify.
+ * Only the production web build publishes them: staging, preview and development builds must never
+ * serve (or link to) the production APK, and the device (Capacitor) bundle must never embed the
+ * previous APK inside itself. sw-retire.js only serves the retired production alias host.
  */
-function dropOtaReleasesFromDeviceBundle(mode: string): Plugin {
+function dropOtaReleasesFromDeviceBundle(mode: string, webEnv: string): Plugin {
   let outDir = "dist";
   return {
     name: "trustid-drop-ota-releases",
@@ -17,9 +21,11 @@ function dropOtaReleasesFromDeviceBundle(mode: string): Plugin {
       outDir = resolve(config.root, config.build.outDir);
     },
     closeBundle() {
-      if (mode !== "device") return;
-      rmSync(resolve(outDir, "releases"), { recursive: true, force: true });
-      dropDuplicateBiometricBinaries(outDir);
+      if (mode === "device" || webEnv !== "production") {
+        rmSync(resolve(outDir, "releases"), { recursive: true, force: true });
+      }
+      if (webEnv !== "production") rmSync(resolve(outDir, "sw-retire.js"), { force: true });
+      if (mode === "device") dropDuplicateBiometricBinaries(outDir);
     },
   };
 }
@@ -64,10 +70,16 @@ function ortPublicWasm(): Plugin {
   };
 }
 
-export default defineConfig(({ mode }) => ({
+export default defineConfig(({ mode }) => {
+  const webEnv: string = resolveWebEnvironment(process.env, mode);
+  return {
+  define: {
+    // Compile-time constant: production-only endpoints are dropped from other builds.
+    __TRUSTID_WEB_ENV__: JSON.stringify(webEnv),
+  },
   plugins: [
     ortPublicWasm(),
-    dropOtaReleasesFromDeviceBundle(mode),
+    dropOtaReleasesFromDeviceBundle(mode, webEnv),
     react(),
     VitePWA({
       registerType: "autoUpdate",
@@ -143,4 +155,5 @@ export default defineConfig(({ mode }) => ({
       },
     },
   },
-}));
+  };
+});

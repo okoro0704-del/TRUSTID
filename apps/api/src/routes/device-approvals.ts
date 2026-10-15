@@ -307,7 +307,9 @@ export async function deviceApprovalRoutes(app: FastifyInstance) {
 export async function reauthRoutes(app: FastifyInstance) {
   app.post("/auth/webauthn/reauth/options", { preHandler: requireSession }, async (req, reply) => {
     try {
-      return await reauthenticationOptions(req.auth!.userId, req.auth!.deviceId);
+      // Master Device enrollment / revocation ask for "required": the server also enforces UV there.
+      const uv = (req.body as { userVerification?: string } | undefined)?.userVerification === "required" ? "required" : "preferred";
+      return await reauthenticationOptions(req.auth!.userId, req.auth!.deviceId, uv);
     } catch (err) {
       return httpError(err, reply);
     }

@@ -9,7 +9,7 @@ import { prisma } from "../../db/client.js";
 import { config } from "../../lib/config.js";
 import { hashSecret, randomToken, sha256Base64Url } from "../../lib/crypto.js";
 import { recordAudit } from "../audit/service.js";
-import { PORTAL_CLIENT_IDS } from "../../lib/portal-oauth-clients.js";
+import { portalClientIds } from "../../lib/portal-oauth-clients.js";
 import { issueIdToken } from "./id-token.js";
 
 function parseJsonArray(raw: string): string[] {
@@ -24,7 +24,7 @@ function isAllowedRedirectUri(appRedirectUrisJson: string, redirectUri: string, 
   const redirects = parseJsonArray(appRedirectUrisJson);
   if (redirects.includes(redirectUri)) return true;
   // Portal relying parties: exact registered URIs only.
-  if (clientId && PORTAL_CLIENT_IDS.has(clientId)) return false;
+  if (clientId && portalClientIds().has(clientId)) return false;
   try {
     const target = new URL(redirectUri);
     const origin = new URL(config.webauthn.origin);

@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../lib/api";
+import { useAuth } from "../lib/auth";
+import { reauthenticateWithUserVerification } from "../lib/reauth";
+import { enrollAndroidMasterDevice, revokeFromThisPhone } from "../lib/masterDeviceNative";
 
 /**
- * Step-up requests from apps (e.g. mybrandOS Digi Twin, AI likeness consent): each one asks the
- * person to approve ONE operation. Approval is signed on this phone — the Master Device — with a
- * hardware key that only works right after a strong biometric (fingerprint / Class 3 face).
+ * Step-up requests from apps (mybrandOS Digi Twin, AI likeness consent, sensitive account changes):
+ * each one asks the person to approve ONE operation. Approval is a signature by this phone's
+ * Master Device key (Android Keystore, hardware-backed, attested) after a fresh strong biometric.
+ * A login session never stands in for it.
  */
 type StepUpRequest = {
   challenge_id: string;
@@ -17,20 +21,35 @@ type StepUpRequest = {
   signing_payload?: string;
 };
 
+type DeviceStatus = {
+  enrollment_enabled: boolean;
+  registered: boolean;
+  device: { id: string; enrolled_at: string; last_used_at: string | null; platform: string; security_level: string | null } | null;
+  recovery_required: boolean;
+  enrollment_available_at: string | null;
+};
+
+type Activity = { type: string; at: string; client: string | null; action: string | null; reason: string | null };
+
 const ACTION_LABELS: Record<string, string> = {
   "mybrandos.digitwin.brief": "Show your Digi Twin briefing",
   "mybrandos.digitwin.ask": "Answer a question with your Digi Twin",
   "mybrandos.likeness.approve": "Allow an AI video or photo of you",
 };
 
+const ACTIVITY_LABELS: Record<string, string> = {
+  "master_device.registered": "Master Device enrolled",
+  "step_up.master_device_revoked": "Master Device revoked",
+  "step_up.master_device_enrollment_failed": "Enrollment attempt failed",
+  "step_up.challenge_created": "Request received",
+  "step_up.challenge_approved": "Request approved",
+  "step_up.challenge_consumed": "Approval used",
+  "step_up.challenge_denied": "Request declined",
+  "step_up.challenge_expired": "Request expired",
+  "step_up.approval_failed": "Approval attempt failed",
+};
+
 const FINGERPRINT_KEY = "trustid.master_device.fingerprint";
-const REGISTERED_KEY = "trustid.master_device.registered";
-
-function signer() {
-  return typeof window !== "undefined" ? window.TrustIdBiometricGate?.signPayload : undefined;
-}
-
-const toBase64Url = (b64: string) => b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
 /** A stable, random id for this installation (kept in encrypted storage). */
 async function deviceFingerprint(): Promise<string> {
@@ -42,18 +61,34 @@ async function deviceFingerprint(): Promise<string> {
   return fresh;
 }
 
+function describe(err: unknown, fallback: string) {
+  if (err && typeof err === "object" && "code" in err && (err as { code?: string }).code === "cancelled") return "Cancelled.";
+  return err instanceof Error ? err.message : fallback;
+}
+
 export function StepUpRequests() {
+  const { identity } = useAuth();
+  const trustId = identity?.trustId ?? "";
   const [requests, setRequests] = useState<StepUpRequest[]>([]);
-  const [registered, setRegistered] = useState(() => localStorage.getItem(REGISTERED_KEY) === "true");
+  const [status, setStatus] = useState<DeviceStatus | null>(null);
+  const [activity, setActivity] = useState<Activity[]>([]);
+  const [thisPhoneHoldsKey, setThisPhoneHoldsKey] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const canSign = Boolean(signer());
+  const native = typeof window !== "undefined" ? window.TrustIdMasterDevice : undefined;
 
   const load = useCallback(async () => {
-    const res = await api<{ challenges: StepUpRequest[] }>("/v1/step-up/pending");
-    setRequests(res.challenges);
-  }, []);
+    const [pending, st, act] = await Promise.all([
+      api<{ challenges: StepUpRequest[] }>("/v1/step-up/pending"),
+      api<DeviceStatus>("/v1/step-up/master-device"),
+      api<{ events: Activity[] }>("/v1/step-up/master-device/activity"),
+    ]);
+    setRequests(pending.challenges);
+    setStatus(st);
+    setActivity(act.events.slice(0, 10));
+    if (native) setThisPhoneHoldsKey(Boolean((await native.getSupport().catch(() => null))?.activeAlias) && st.registered);
+  }, [native]);
 
   useEffect(() => {
     load().catch(() => undefined);
@@ -61,51 +96,63 @@ export function StepUpRequests() {
     return () => clearInterval(t);
   }, [load]);
 
-  async function registerThisPhone() {
-    const sign = signer();
-    if (!sign) return;
-    setBusy("register");
+  async function enrollThisPhone() {
+    if (!native) return;
+    setBusy("enroll");
     setError(null);
     try {
-      const fingerprint = await deviceFingerprint();
-      const proof = await sign({
-        payload: `trustid-master-device-registration:${fingerprint}`,
-        reason: "Use this phone to approve Trust ID requests",
+      const done = await enrollAndroidMasterDevice({
+        api,
+        native,
+        passkey: reauthenticateWithUserVerification,
+        trustId,
+        deviceFingerprint: await deviceFingerprint(),
       });
-      await api("/v1/trust-id/master-device/register", {
-        method: "POST",
-        body: JSON.stringify({ deviceFingerprint: fingerprint, publicKey: toBase64Url(proof.publicKeyBase64) }),
-      });
-      localStorage.setItem(REGISTERED_KEY, "true");
-      setRegistered(true);
-      setNotice("This phone now approves your Trust ID requests.");
+      setNotice(`This phone is now your Master Device (${done.securityLevel === "strongbox" ? "StrongBox" : "secure hardware"}).`);
+      await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "This phone could not be registered.");
+      setError(describe(err, "This phone could not be enrolled."));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function revokeThisPhone() {
+    if (!native || !status?.device) return;
+    if (!window.confirm("Remove this phone as your Master Device? Apps will not be able to get approvals until you enroll a device again.")) return;
+    setBusy("revoke");
+    setError(null);
+    try {
+      await revokeFromThisPhone({ api, native, passkey: reauthenticateWithUserVerification, trustId, masterDeviceId: status.device.id });
+      setNotice("This phone is no longer your Master Device.");
+      await load();
+    } catch (err) {
+      setError(describe(err, "Could not remove this phone."));
     } finally {
       setBusy(null);
     }
   }
 
   async function approve(request: StepUpRequest) {
-    const sign = signer();
-    if (!sign || !request.signing_payload) return;
+    if (!native || !request.signing_payload) return;
     setBusy(request.challenge_id);
     setError(null);
     try {
-      const fingerprint = await deviceFingerprint();
       const label = ACTION_LABELS[request.action] ?? request.action;
-      const signed = await sign({
+      // The biometric prompt names the app and the action; the key signs exactly the server's bytes.
+      const { signature } = await native.sign({
         payload: request.signing_payload,
-        reason: `${request.client_name ?? "An app"}: ${label}`,
+        title: label,
+        subtitle: `Requested by ${request.client_name ?? "an app"}`,
       });
       await api(`/v1/step-up/challenges/${encodeURIComponent(request.challenge_id)}/master-device/approve`, {
         method: "POST",
-        body: JSON.stringify({ device_fingerprint: fingerprint, signature: signed.signatureBase64 }),
+        body: JSON.stringify({ device_fingerprint: await deviceFingerprint(), signature }),
       });
       setNotice(`Approved: ${label}`);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Approval failed.");
+      setError(describe(err, "Approval failed."));
     } finally {
       setBusy(null);
     }
@@ -118,7 +165,7 @@ export function StepUpRequests() {
       await api(`/v1/step-up/challenges/${encodeURIComponent(request.challenge_id)}/deny`, { method: "POST", body: "{}" });
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not decline.");
+      setError(describe(err, "Could not decline."));
     } finally {
       setBusy(null);
     }
@@ -126,25 +173,43 @@ export function StepUpRequests() {
 
   return (
     <section className="section" data-step-up-requests="true">
-      <h2>Requests from apps</h2>
-      <p className="sub">
-        Each request allows one thing, once. You approve it on this phone with your fingerprint or face.
-      </p>
-
-      {!canSign ? (
-        <p className="muted">Open the Trust ID app on your phone to approve these requests.</p>
-      ) : !registered ? (
+      <h2>Master Device</h2>
+      {!status ? null : status.registered && status.device ? (
+        <div className="row">
+          <div className="row-main">
+            <strong>{thisPhoneHoldsKey ? "This phone is your Master Device" : "Your Master Device is another phone"}</strong>
+            <span className="muted">
+              Enrolled {new Date(status.device.enrolled_at).toLocaleDateString()}
+              {status.device.last_used_at ? ` · last used ${new Date(status.device.last_used_at).toLocaleString()}` : ""}
+              {status.device.security_level ? ` · ${status.device.security_level === "strongbox" ? "StrongBox" : "secure hardware"}` : ""}
+            </span>
+          </div>
+          {thisPhoneHoldsKey ? (
+            <button className="btn" type="button" disabled={busy !== null} onClick={() => void revokeThisPhone()}>
+              {busy === "revoke" ? "Removing…" : "Remove"}
+            </button>
+          ) : null}
+        </div>
+      ) : status.recovery_required ? (
+        <p className="muted">Your previous Master Device was removed without the phone. Adding a new one needs account recovery.</p>
+      ) : !status.enrollment_enabled ? (
+        <p className="muted">Adding a Master Device is not available yet.</p>
+      ) : !native ? (
+        <p className="muted">Open the TrustID app on your phone to make it your Master Device.</p>
+      ) : (
         <div className="row">
           <div className="row-main">
             <strong>Use this phone to approve requests</strong>
-            <span className="muted">Registers this phone as your Master Device. Needs your fingerprint or face.</span>
+            <span className="muted">Needs your fingerprint or face, then your passkey.</span>
           </div>
-          <button className="btn btn-primary" type="button" disabled={busy === "register"} onClick={() => void registerThisPhone()}>
-            {busy === "register" ? "Registering…" : "Use this phone"}
+          <button className="btn btn-primary" type="button" disabled={busy !== null} onClick={() => void enrollThisPhone()}>
+            {busy === "enroll" ? "Setting up…" : "Use this phone"}
           </button>
         </div>
-      ) : null}
+      )}
 
+      <h2>Requests from apps</h2>
+      <p className="sub">Each request allows one thing, once. You approve it on your Master Device with your fingerprint or face.</p>
       {requests.length === 0 ? (
         <p className="muted">No requests waiting.</p>
       ) : (
@@ -166,12 +231,12 @@ export function StepUpRequests() {
                   <button
                     className="btn btn-primary"
                     type="button"
-                    disabled={!canSign || !registered || phoneOnly || busy === request.challenge_id}
+                    disabled={!thisPhoneHoldsKey || phoneOnly || seconds === 0 || busy !== null}
                     onClick={() => void approve(request)}
                   >
                     {busy === request.challenge_id ? "Approving…" : "Approve"}
                   </button>
-                  <button className="btn" type="button" disabled={busy === request.challenge_id} onClick={() => void deny(request)}>
+                  <button className="btn" type="button" disabled={busy !== null} onClick={() => void deny(request)}>
                     Decline
                   </button>
                 </div>
@@ -180,6 +245,27 @@ export function StepUpRequests() {
           })}
         </ul>
       )}
+
+      {activity.length ? (
+        <>
+          <h2>Recent security activity</h2>
+          <ul className="list">
+            {activity.map((a, i) => (
+              <li key={`${a.at}-${i}`} className="row">
+                <div className="row-main">
+                  <strong>{ACTIVITY_LABELS[a.type] ?? a.type}</strong>
+                  <span className="muted">
+                    {new Date(a.at).toLocaleString()}
+                    {a.action ? ` · ${ACTION_LABELS[a.action] ?? a.action}` : ""}
+                    {a.client ? ` · ${a.client}` : ""}
+                    {a.reason ? ` · ${a.reason}` : ""}
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
       {notice ? <p className="muted">{notice}</p> : null}
       {error ? <p className="error">{error}</p> : null}
     </section>
