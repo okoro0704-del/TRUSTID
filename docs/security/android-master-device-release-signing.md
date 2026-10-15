@@ -62,14 +62,15 @@ Derive all three values from the same release certificate SHA-256 (`<HEX>` = 64 
 
 | Where | Format | Example of form |
 |---|---|---|
-| `apps/web/public/.well-known/assetlinks.json` `sha256_cert_fingerprints` | uppercase hex, colon-separated | `AB:CD:…` |
+| Netlify production site variable `TRUSTID_ANDROID_SIGNING_SHA256` (Digital Asset Links are generated at build) | hex, colons optional | `AB:CD:…` or `abcd…` |
 | API `ANDROID_APP_SIGNING_SHA256` | lowercase hex, no colons | `abcd…` |
 | API `WEBAUTHN_ANDROID_ORIGINS` | `android:apk-key-hash:` + base64url (no padding) of the raw 32 bytes | `android:apk-key-hash:q80…` |
 
 Checklist (in order):
 
 1. Build the release APK; record `apksigner --print-certs` output.
-2. Update `assetlinks.json` to the release fingerprint **only**. Remove the debug fingerprint; any
+2. Set `TRUSTID_ANDROID_SIGNING_SHA256` on the production Netlify site to the release fingerprint **only**
+   (the generator refuses the debug certificate; the static debug statements were removed). Any
    holder of the debug key could otherwise obtain passkey assertions.
 3. Deploy the web and verify `https://trustedid.netlify.app/.well-known/assetlinks.json` returns
    `200 application/json` (production currently serves the SPA `text/html` there). Check it with

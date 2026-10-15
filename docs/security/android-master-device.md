@@ -63,15 +63,26 @@ Never logged: private keys, passkey material, biometric data, full tokens, sessi
 
 ## Digital Asset Links
 
-`apps/web/public/.well-known/assetlinks.json` associates `com.trustid.device` with the certificate
-that signs the **currently distributed** APK (`8E:5E:B2:94:…:36:AA`, read from the published
-`TrustID.apk` with apksigner). Served as JSON (Netlify headers; the SPA fallback is not forced).
+Generated per environment at build by `scripts/netlify-asset-links.mjs` and served as JSON at
+`/.well-known/assetlinks.json`. When none is generated, the path answers 404, never the SPA page.
 
-**Release gate:** that certificate is the Android *debug* key from a developer machine. Before
-enabling passkeys for production, sign the app with a protected release key (Play App Signing or
-an offline keystore), update `assetlinks.json`, `ANDROID_APP_SIGNING_SHA256` and
-`WEBAUTHN_ANDROID_ORIGINS` together, and plan the app re-install (a new signing key cannot update
-an app signed with the old one).
+| Site | Statement |
+|---|---|
+| production (`trustedid`) | `com.trustid.device` + `TRUSTID_ANDROID_SIGNING_SHA256` (release certificate); none until it is configured |
+| staging | `com.trustid.device.staging` + the staging certificate; the build fails without it |
+| deploy previews | none |
+
+Only `delegate_permission/common.get_login_creds` is stated. Known debug certificates are refused,
+and so is the other environment's package. The former static file, which named the Android *debug*
+certificate (`8E:5E:B2:94:…:36:AA`), has been removed.
+
+**Release gate:** the distributed APK is still signed with that debug key. Before enabling passkeys
+for production:
+
+- sign the app with a protected release key;
+- set `TRUSTID_ANDROID_SIGNING_SHA256` (Netlify), `ANDROID_APP_SIGNING_SHA256` and
+  `WEBAUTHN_ANDROID_ORIGINS` (API) together;
+- plan the app re-install: a new signing key cannot update an app signed with the old one.
 
 ## Release gates (all required before production)
 

@@ -11,8 +11,8 @@ below needs the owner's explicit approval. Baseline:
 
 | # | Finding | Impact | Needed before provisioning |
 |---|---|---|---|
-| P1 | **Blocker.** With `NODE_ENV=production` the API refuses to boot unless `CORS_ORIGINS` includes the production LifeOS origin `https://lifeosapp.getlifeos.app` (`apps/api/src/lib/config.ts` `assertCanonicalLifeOsCors`, called from `app.ts:46`). WebAuthn origins also include every CORS origin. | Staging would have to trust a production web origin. Running `NODE_ENV≠production` is not acceptable either: it re-enables development fallbacks (default secrets, attestation `off`). | A small, reviewed code change: e.g. `TRUSTID_DEPLOY_ENV=staging` replaces the canonical-origin requirement with "no production origins allowed", with tests. **Owner approval to implement.** |
-| P2 | On every boot the API creates the LifeOS Portal public clients (`lifeos_portal_public`, `lifeos_platform_admin_public`, business) **with production redirect URIs**. The seed also upserts `lifeos` / `digiconomy` / `lidios` clients. | No path to production: codes and keys are staging's own, and production verifies its own issuer and keys. But staging would hold clients that redirect to production domains. | After the first boot, disable those clients **in the staging database** and register a staging Portal client with staging redirect URIs. Or make the bootstrap environment-aware (code change). |
+| P1 | ~~Blocker~~ **Resolved on this branch.** With `NODE_ENV=production` the API required the production LifeOS origin in `CORS_ORIGINS`, and every CORS origin was also a passkey origin. | — | `TRUSTID_DEPLOY_ENV=staging` + startup guard (`apps/api/src/lib/deployment-guard.ts`): staging requires explicit staging RP ID / passkey origin / CORS / issuer and refuses every production origin; passkey origins no longer include `CORS_ORIGINS` (all environments). Tests: `tests/staging-deployment.test.ts`. |
+| P2 | **Resolved on this branch.** Boot created the production Portal clients and the seed upserted development/production clients. | — | Staging registers only `lifeos_*_staging_public` clients from `TRUSTID_STAGING_*_ORIGIN`; the seed creates nothing in staging; staging refuses to start if its database holds an active client redirecting to production or local hosts (nothing is modified). |
 | P3 | Connected services (Elfcom, DataZone, Lidios, Digiconomy, platform-job, master-distribution) default to `unbound`; FinProv defaults to an embedded local shim. | Safe by default. | Leave every `*_MODE` unset on staging; the isolation check confirms `/health` shows them unbound. |
 | P4 | OIDC / assertion signing keys are generated on first boot into the database and sealed with `SEAL_KEY`. | A fresh staging database gets its own keys automatically. | Check that the staging JWKS `kid` ≠ `263c1076162e8c26`. |
 | P5 | Schema: `npm start` runs `prisma db push` (no versioned migrations) plus the seed on every boot, after `ensure-pg-extensions`. The database must be the **pgvector** template; standard Railway Postgres lacks the extension. | Staging exercises the same path as production. | Sequencing below. |
@@ -26,7 +26,7 @@ below needs the owner's explicit approval. Baseline:
 | New site in the existing team, e.g. `trustid-staging` → `https://trustid-staging.netlify.app` (the name fixes the passkey RP ID; choose once) | Repo `okoro0704-del/TRUSTID`, production branch of this site = `feat/android-master-device` (later the reviewed branch), same `netlify.toml` |
 | Site environment variables (staging site only) | `TRUSTID_DEPLOY_ENV=staging`; `TRUSTID_API_PROXY_ORIGIN=https://<staging-api>.up.railway.app` |
 | Deploy previews / branch deploys on the staging site | Off. They would also route to the staging API, but they aren't needed. |
-| Digital Asset Links | The repo's `assetlinks.json` names the production package and debug certificate. The staging site must serve **staging** statements (`com.trustid.device.staging` + staging cert). That needs an environment-aware assetlinks file, generated at build like `_redirects`. Small code change; included in the P1 change request. |
+| Digital Asset Links | Generated per environment at build (`scripts/netlify-asset-links.mjs`): staging → `com.trustid.device.staging` + `TRUSTID_ANDROID_SIGNING_SHA256` (required); production → `com.trustid.device` + release cert, or no file (404) until one is configured; previews → none; debug certificates refused. Set `TRUSTID_ANDROID_SIGNING_SHA256` on the staging site. |
 | Production site `trustedid` | **unchanged** (still builds from `main`) |
 
 ## 2. Railway resources
@@ -47,7 +47,7 @@ production.
 2. Set the API variables (no deploy yet).
 3. First deploy: `ensure-pg-extensions` → `prisma db push` → seed → server.
 4. `/health` shows `pgvector: true` and the staging issuer.
-5. Staging data fixes (P2).
+5. Confirm only the staging Portal clients exist (P2 is handled at boot).
 6. Create the test accounts.
 
 Later schema changes ship the same way, by redeploying.
@@ -156,14 +156,12 @@ and new Digital Asset Links.
 
 ## 10. Actions requiring owner approval (in order)
 
-1. Implement and push the staging-readiness code changes:
-   - P1 (staging CORS without production origins);
-   - environment-aware Digital Asset Links;
-   - optionally, environment-aware OAuth client bootstrap (P2).
+1. Push the staging-readiness changes (implemented locally: staging trust boundary, CORS / passkey
+   separation, environment-aware Digital Asset Links and OAuth bootstrap) and let CI pass.
 2. Create the Railway project `TrustID-staging` with `pgvector` and `trustid-api-staging`.
 3. Generate and set the staging secrets (method a or b, §5).
 4. Create the Netlify site `trustid-staging` and set its two variables; first deploy.
-5. First API deploy (schema push and seed), then the staging data fixes (P2) and test accounts.
+5. First API deploy (schema push; the seed creates nothing in staging), then test accounts.
 6. Generate the staging Android signing key (§6) and add the GitHub secrets and variables.
 7. Enable `MASTER_DEVICE_ENROLLMENT` on **staging**.
 8. Physical-device acceptance with authorized test phones (separate approval; not the OPPO phone).

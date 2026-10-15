@@ -73,6 +73,13 @@ item **Pass / Fail / N/A** with evidence (file:line, test name, or command outpu
 - [ ] `WEBAUTHN_ANDROID_ORIGINS` and `ANDROID_APP_SIGNING_SHA256` hold only the release certificate in production and only the staging certificate in staging.
 - [ ] No secrets in Git: keystore patterns are ignored, and GitGuardian is clean.
 
+## 7b. Staging trust boundary (`apps/api/src/lib/deployment*.ts`, `portal-oauth-clients.ts`, `bootstrap-oauth-apps.ts`, `prisma/seed.ts`)
+- [ ] Unknown `TRUSTID_DEPLOY_ENV` fails. Staging requires `NODE_ENV=production`. Unset in production keeps the production rules.
+- [ ] Staging refuses every production origin (TrustID, LifeOS, `*-production.up.railway.app`) in RP ID, passkey origins, CORS, issuer, Portal redirects and connected services. Production refuses staging origins.
+- [ ] Passkey origins never include `CORS_ORIGINS`.
+- [ ] Staging registers only its own Portal clients, seeds nothing, and refuses a database holding production or local relying parties.
+- [ ] Android identity per environment (package, certificate). Debug certificates are refused by the API guard and the Digital Asset Links generator.
+
 ## 8. Audit and privacy
 - [ ] Every enrollment failure, approval failure, denial, expiry, revocation and legacy issuance is audited with a reason.
 - [ ] Sessions appear as hashes. The activity view exposes no IPs, user agents, keys, signatures or tokens.
