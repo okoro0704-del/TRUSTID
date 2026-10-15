@@ -305,3 +305,31 @@ deploy first.
 - Production is unchanged: API healthy, enrollment 404, JWKS kid `263c1076162e8c26`, all Railway
   deployments older than today, `lucid-integrity` still triggered only by `main`, Netlify published
   deploy from 2026-10-13.
+
+## Phase 4A: staging signing identity done; website deploy stopped at preflight (2026-10-15)
+
+**Signing identity:**
+
+- Package `com.trustid.device.staging` (Gradle `-PtrustidEnv=staging`; installs alongside production).
+- New PKCS12 key: RSA 3072, SHA256withRSA, valid 2026-10-15 → 2029-10-14. Subject
+  `CN=TrustID Staging Android (com.trustid.device.staging), OU=Staging, O=TrustID`.
+- SHA-256 `5A:57:FD:F7:4F:2A:BA:1D:6A:77:67:91:5D:A6:A8:23:CF:DA:D0:6D:00:FE:F8:45:93:A3:BD:79:79:89:8A:52`,
+  verified by keytool, the Node X.509 parser and OpenSSL. Not the debug or production certificate.
+- Stored only in the never-deployed Railway service `staging-signing-vault` (project `TrustID-staging`):
+  keystore, passphrase, alias, signer and package.
+- A recovery round trip from Railway succeeded (the private key entry opens; the fingerprint matches).
+  The local key files were overwritten and deleted. The passphrase never reached argv, output or disk.
+- Netlify staging site: `TRUSTID_ANDROID_SIGNING_SHA256` set (build scope).
+
+**Website deploy NOT performed:** the build from `a3c7439` fails the preflight.
+
+| # | Finding |
+|---|---|
+| F1 | `notification_registration.ts:48` and `security/vault.ts:19` fall back to `https://elfcomnode-production.up.railway.app` when `VITE_ELFCOM_BASE_URL` is unset. The staging web and app would call **production ElfCom**. |
+| F2 | `apps/web/public/releases` (`TrustID.apk`, the debug-signed production app, and its OTA manifest) is copied into every build, so it would be distributed from the staging site. |
+| F3 | `NativeShellUpdateBanner.tsx:12` hard-codes `https://main--trustedid.netlify.app/releases/TrustID.apk`. |
+| F4 | Cosmetic: UI text mentions `trustedid.netlify.app`; `sw-retire.js` names the retired alias. |
+
+Passed: `_redirects` routes only to the staging API; `assetlinks.json` names only
+`com.trustid.device.staging` + the staging fingerprint (valid JSON); no secrets, database URLs or
+private keys in the build.
