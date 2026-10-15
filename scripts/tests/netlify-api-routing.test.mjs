@@ -68,6 +68,6 @@ test("the CLI writes _redirects, and refuses to build when routing is missing", 
 test("netlify.toml has no production API target and runs the routing step", () => {
   const toml = readFileSync(new URL("../../netlify.toml", import.meta.url), "utf8");
   assert.doesNotMatch(toml, /to = "https:\/\/lucid-integrity-production/);
-  assert.match(toml, /node scripts\/netlify-api-routing\.mjs apps\/web\/dist"/);
+  assert.match(toml, /node scripts\/netlify-api-routing\.mjs apps\/web\/dist( |")/);
   assert.match(toml, /from = "\/api\/\*"\s+to = "\/404\.html"\s+status = 404/);
 });

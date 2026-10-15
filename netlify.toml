@@ -1,7 +1,7 @@
 # TrustID PWA on Netlify — API proxied to Railway (same-origin cookies)
 
 [build]
-  command = "node scripts/fetch-biometric-models.mjs && node scripts/copy-ort-wasm.mjs && node scripts/copy-mediapipe-wasm.mjs && npm run build -w @trustid/shared && npm run build -w @trustid/sdk && npm run build -w @trustid/device-security && npm run build -w @trustid/vault-sdk && npm run build -w @trustid/ui-react && npm run build -w @trustid/sovereign-crypto && npm run build -w @trustid/web && node scripts/netlify-api-routing.mjs apps/web/dist"
+  command = "node scripts/fetch-biometric-models.mjs && node scripts/copy-ort-wasm.mjs && node scripts/copy-mediapipe-wasm.mjs && npm run build -w @trustid/shared && npm run build -w @trustid/sdk && npm run build -w @trustid/device-security && npm run build -w @trustid/vault-sdk && npm run build -w @trustid/ui-react && npm run build -w @trustid/sovereign-crypto && npm run build -w @trustid/web && node scripts/netlify-api-routing.mjs apps/web/dist && node scripts/netlify-asset-links.mjs apps/web/dist"
   publish = "apps/web/dist"
 
 [build.environment]
@@ -17,8 +17,10 @@
 # version bump changes the URL and they can be cached immutably.
 # The SDK keeps verified copies of every biometric asset in Cache Storage and
 # fetches with cache: "no-store", so a cached error page is never replayed.
-# Digital Asset Links: served as the static JSON file (the SPA fallback is not forced), never cached long,
-# so a change of app signing certificate takes effect promptly.
+# Digital Asset Links: generated per environment by scripts/netlify-asset-links.mjs (production app
+# on the production site, staging app on the staging site, none on previews). Served as JSON, never
+# cached long, so a change of app signing certificate takes effect promptly. When no file is
+# generated the path answers 404 (rule below), never the SPA HTML.
 [[headers]]
   for = "/.well-known/assetlinks.json"
   [headers.values]
@@ -159,6 +161,13 @@
 # A missing hashed chunk must fail loudly instead of evaluating index.html as JS.
 [[redirects]]
   from = "/assets/*"
+  to = "/404.html"
+  status = 404
+
+# Digital Asset Links not generated for this deployment: 404, not the SPA page (not forced, so a
+# generated file is always served as-is).
+[[redirects]]
+  from = "/.well-known/assetlinks.json"
   to = "/404.html"
   status = 404
 
