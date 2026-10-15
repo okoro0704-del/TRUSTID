@@ -50,6 +50,22 @@ jobs:
         run: npm run build:api
       - name: Web production build (UI packages, typecheck, bundle)
         run: npm run build:web
+      # The default (non-production) web build must carry no production artifacts or endpoints.
+      - name: Web artifact scan (development build)
+        run: node scripts/scan-web-artifacts.mjs apps/web/dist --env development
+      # The staging site build, with the staging site's settings, scanned as Netlify would publish it.
+      - name: Web artifact scan (staging build)
+        env:
+          SITE_NAME: trustid-staging
+          CONTEXT: production
+          TRUSTID_DEPLOY_ENV: staging
+          TRUSTID_API_PROXY_ORIGIN: https://trustid-api-staging-staging.up.railway.app
+          TRUSTID_ANDROID_SIGNING_SHA256: 5a57fdf74f2aba1d6a7767915da6a823cfdad06d00fef84593a3bd7979898a52
+        run: |
+          npm run build -w @trustid/web
+          node scripts/netlify-api-routing.mjs apps/web/dist
+          node scripts/netlify-asset-links.mjs apps/web/dist
+          node scripts/scan-web-artifacts.mjs apps/web/dist --env staging --package com.trustid.device.staging --signer "$TRUSTID_ANDROID_SIGNING_SHA256"
       - name: Repository test suite (security packages, API, SDK, Digi, vault, UI)
         run: npm test
 
