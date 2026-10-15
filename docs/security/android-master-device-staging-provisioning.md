@@ -217,3 +217,57 @@ deployed and production is unchanged.
 - Not yet set (they need the staging web host): `NODE_ENV`, `TRUSTID_DEPLOY_ENV`, `OIDC_ISSUER`,
   `ASSERTION_ISSUER`, `WEBAUTHN_*`, `CORS_ORIGINS`, the staging Portal origins, the Android identity
   variables and `MASTER_DEVICE_ENROLLMENT`. Enrollment stays off.
+
+## Phase 3A: staging identity foundation (2026-10-15)
+
+No application is deployed, enrollment stays off, and production is unchanged.
+
+| Resource | Value |
+|---|---|
+| Netlify site | `trustid-staging`, ID `58c5bc3d-6b56-4829-8054-1073013f5498`, account `isreal-zhbgxew`; no repo, no deploy |
+| Staging web origin / passkey RP ID | `https://trustid-staging.netlify.app` / `trustid-staging.netlify.app`. Verified `*.netlify.app` certificate, TLS 1.3. `netlify.app` is on the Public Suffix List, so the RP ID is the full host. |
+| Netlify build variables (staging site only) | `TRUSTID_DEPLOY_ENV=staging`, `TRUSTID_API_PROXY_ORIGIN=https://trustid-api-staging-staging.up.railway.app` |
+| Railway API domain | `trustid-api-staging-staging.up.railway.app` → port 8080 (domain ID `64c62b00-050e-4f8d-a4b0-0d857ab417e5`) |
+
+**Architecture:** same as production. The browser and the Android app talk only to
+`trustid-staging.netlify.app`. Netlify proxies `/api/*` to the Railway API, keeping cookies
+first-party. The API reaches `pgvector.railway.internal` over the private network.
+
+- Issuer: `https://trustid-staging.netlify.app/api`.
+- Discovery: `/api/.well-known/openid-configuration`.
+- `jwks_uri`: `/api/.well-known/jwks.json`.
+
+**Railway variables on `trustid-api-staging`:**
+
+- Set (non-secret): `NODE_ENV=production`, `TRUSTID_DEPLOY_ENV=staging`, `PRISMA_PROVIDER=postgresql`,
+  `PORT=8080`, `OIDC_ISSUER`, `ASSERTION_ISSUER`, `WEBAUTHN_RP_ID`, `WEBAUTHN_RP_NAME`,
+  `WEBAUTHN_ORIGIN`, `CORS_ORIGINS` (staging host only).
+- Set in Phase 2: the six secrets and `DATABASE_URL=${{pgvector.DATABASE_URL_PRIVATE}}`.
+- Unset by design: `MASTER_DEVICE_ENROLLMENT`, `ANDROID_APP_PACKAGE`, `ANDROID_APP_SIGNING_SHA256`,
+  `WEBAUTHN_ANDROID_ORIGINS`, `TRUSTID_STAGING_*_ORIGIN`, every `*_MODE`.
+
+The full configuration passes the real start-up guard: environment staging, the only passkey origin
+is the staging host, no Portal clients, enrollment off, attestation required, every connected service
+unbound.
+
+**Website blocker (by design):** the staging Netlify build fails without
+`TRUSTID_ANDROID_SIGNING_SHA256`, because Digital Asset Links require the staging signing
+certificate. The staging website cannot deploy until the staging signing key exists. The API can
+deploy first.
+
+**PostgreSQL 18:** production already runs this API on the identical image
+(`pgvector/pgvector:pg18`) with Prisma 6.19.3. The start-up chain is:
+
+1. `sync-prisma-provider` (postgresql);
+2. `ensure-pg-extensions` (`CREATE EXTENSION vector`);
+3. `prisma db push`;
+4. the seed (nothing in staging);
+5. `bootstrapPgVector` (`vector(512)` and an HNSW index; needs pgvector ≥ 0.5, the pg18 image ships 0.8.x).
+
+**First-deploy verification of private database connectivity:**
+
+- the deploy log shows `[ensure-pg-extensions] vector extension present` and the `prisma db push`
+  success (both connect via `pgvector.railway.internal`);
+- `GET https://trustid-api-staging-staging.up.railway.app/health` reports `pgvector: true`, the
+  staging RP ID and the staging issuer;
+- the JWKS `kid` differs from production's `263c1076162e8c26`.
