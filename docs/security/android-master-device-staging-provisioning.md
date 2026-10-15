@@ -202,3 +202,18 @@ that project (other projects, local tools, backup scripts) cannot be seen from h
 **Recommendation (owner decision):** remove the production pgvector TCP proxy after confirming that
 no external consumer depends on it. Run any direct administrative access through `railway ssh` or a
 TLS-terminating tunnel. Alternatively, configure TLS in the pgvector image.
+
+## Phase 2: staging credentials (2026-10-15)
+
+Set on `trustid-api-staging` (project `TrustID-staging`, environment `staging`). Nothing was
+deployed and production is unchanged.
+
+- `COOKIE_SECRET`, `SESSION_SECRET`, `PII_PEPPER`, `SEAL_KEY`, `MEDIA_SIGNING_SECRET`,
+  `WIPE_SECRET`: each 48 random bytes (64 base64url characters), generated in memory.
+- Values were passed to `railway variable set --stdin --skip-deploys`. They never appeared on a
+  command line, in output, in logs or on disk. Read-back matched by SHA-256 fingerprint only.
+- `DATABASE_URL=${{pgvector.DATABASE_URL_PRIVATE}}` resolves to `pgvector.railway.internal:5432`.
+- Custody: the values exist only in Railway. Recovery is rotation; staging data is disposable.
+- Not yet set (they need the staging web host): `NODE_ENV`, `TRUSTID_DEPLOY_ENV`, `OIDC_ISSUER`,
+  `ASSERTION_ISSUER`, `WEBAUTHN_*`, `CORS_ORIGINS`, the staging Portal origins, the Android identity
+  variables and `MASTER_DEVICE_ENROLLMENT`. Enrollment stays off.
