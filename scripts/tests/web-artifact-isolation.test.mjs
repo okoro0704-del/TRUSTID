@@ -76,7 +76,10 @@ test("asset links: wrong package, wrong or debug certificate, or missing file ar
 
 test("private keys and credential-bearing URLs are refused in every environment, production included", () => {
   for (const env of ["production", "staging", "development"]) {
-    const f = scan({ "a.js": "-----BEGIN PRIVATE KEY-----\nx", "b.json": '{"u":"postgres://u:p@db:5432/x"}' }, { env });
+    // Built at runtime so no key-shaped or credential-shaped literal is committed (fixtures only).
+    const fakeKey = ["-----BEGIN", "PRIVATE", "KEY-----"].join(" ") + "\nnot-a-key";
+    const fakeUrl = ["postgres", "://", "fixture", ":", "fixture", "@", "db:5432/x"].join("");
+    const f = scan({ "a.js": fakeKey, "b.json": JSON.stringify({ u: fakeUrl }) }, { env });
     assert.ok(f.some((x) => /private key/.test(x)), env);
     assert.ok(f.some((x) => /credential-bearing database URL/.test(x)), env);
   }
