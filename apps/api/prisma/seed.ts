@@ -1,6 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 import { createHash, randomBytes } from "node:crypto";
 import { DEFAULT_APP_SCOPES } from "@trustid/shared";
+import { deploymentEnvironment } from "../src/lib/deployment.js";
 
 const prisma = new PrismaClient();
 
@@ -9,6 +10,13 @@ function hash(value: string) {
 }
 
 async function main() {
+  // Staging gets no seeded relying parties: every client below redirects to development or
+  // production hosts. Staging Portal clients are created on API boot from staging configuration.
+  // An unknown TRUSTID_DEPLOY_ENV throws here, so the start command fails closed.
+  if (deploymentEnvironment() === "staging") {
+    console.log("Seed: staging deployment, no applications seeded.");
+    return;
+  }
   const lifeosClientId = "lifeos_mock_public";
   const digiconomyClientId = "digiconomy_placeholder";
 

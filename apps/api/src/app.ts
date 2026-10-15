@@ -2,7 +2,8 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import websocket from "@fastify/websocket";
-import { assertCanonicalLifeOsCors, config } from "./lib/config.js";
+import { config } from "./lib/config.js";
+import { assertDeploymentSecurity } from "./lib/deployment-guard.js";
 import { bootstrapElfComDispatcher } from "./lib/bootstrap-elfcom.js";
 import { bootstrapOAuthApplications } from "./lib/bootstrap-oauth-apps.js";
 import { authRoutes } from "./routes/auth.js";
@@ -42,12 +43,14 @@ import {
 
 export async function buildApp() {
   const cookieSecret = config.cookieSecret;
-  const allowedOrigins = config.corsOrigins;
-  assertCanonicalLifeOsCors(allowedOrigins, config.isDev);
   if (!config.isDev) {
     void config.piiPepper;
     void config.sealKey;
   }
+  // Production / staging trust boundaries (origins, passkeys, OAuth clients, Android identity),
+  // checked before any client is bootstrapped or request served. Unknown environments fail here.
+  assertDeploymentSecurity();
+  const allowedOrigins = config.corsOrigins;
   bootstrapElfComDispatcher();
   await bootstrapOAuthApplications();
 
