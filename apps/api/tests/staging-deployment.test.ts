@@ -162,6 +162,86 @@ describe("staging start-up under NODE_ENV=production", () => {
   });
 });
 
+describe("staging connected-service credentials (every http-mode service)", () => {
+  /** Service credential variables, removed (not emptied) so only what a test sets is configured. */
+  const SERVICE_VARS = [
+    "ELFCOM_BASE_URL", "ELFCOM_API_URL", "ELFCOM_NODE_SECRET", "LIFEOS_JWT_SECRET", "ELFCOM_CAPABILITY_JWT_SECRET", "LIFEOS_JWT_ISS",
+    "DATAZONE_BASE_URL", "DATAZONE_JWT_SECRET", "TRUST_ID_JWT_SECRET", "DATAZONE_JWT_ISSUER", "ASSERTION_ISSUER",
+    "PLATFORM_JOB_BASE_URL", "PLATFORM_JOB_JWT_SECRET", "PLATFORM_JOB_JWT_ISSUER",
+    "MASTER_DISTRIBUTION_BASE_URL", "MASTER_DISTRIBUTION_JWT_SECRET", "MASTER_DISTRIBUTION_JWT_ISSUER",
+    "FINPROV_BASE_URL", "FINPROV_API_KEY", "LIDIOS_BASE_URL", "LIDIOS_API_PUBLIC_URL", "DIGICONOMY_BASE_URL",
+  ];
+  const strong = () => randomBytes(36).toString("base64url");
+  async function attempt(vars: Record<string, string>) {
+    stub(vars);
+    for (const name of SERVICE_VARS) if (!(name in vars)) vi.stubEnv(name, undefined);
+    try {
+      apps.push(await buildApp());
+      return null;
+    } catch (err) {
+      return err as Error;
+    }
+  }
+  const DZ = { DATAZONE_MODE: "http", DATAZONE_BASE_URL: "https://datazone-staging.example.app" };
+  const EC = { ELFCOM_MODE: "http", ELFCOM_BASE_URL: "https://elfcom-staging.example.app" };
+
+  it("unbound connected services stay valid in staging (no credentials needed)", async () => {
+    expect(await attempt(stagingEnv())).toBeNull();
+  });
+
+  it("DataZone: missing, default or placeholder secret, missing or production issuer all fail; explicit staging credentials start", async () => {
+    expect((await attempt(stagingEnv({ ...DZ, DATAZONE_JWT_ISSUER: STAGING })))!.message).toMatch(/DATAZONE_MODE=http needs its JWT secret/);
+    expect((await attempt(stagingEnv({ ...DZ, DATAZONE_JWT_SECRET: "dev-datazone-jwt-secret", DATAZONE_JWT_ISSUER: STAGING })))!.message).toMatch(/development default, placeholder/);
+    expect((await attempt(stagingEnv({ ...DZ, DATAZONE_JWT_SECRET: "x".repeat(20), DATAZONE_JWT_ISSUER: STAGING })))!.message).toMatch(/shorter than 32/);
+    expect((await attempt(stagingEnv({ ...DZ, DATAZONE_JWT_SECRET: `placeholder-${"x".repeat(40)}`, DATAZONE_JWT_ISSUER: STAGING })))!.message).toMatch(/placeholder/);
+    expect((await attempt(stagingEnv({ ...DZ, DATAZONE_JWT_SECRET: strong() })))!.message).toMatch(/DATAZONE_MODE=http needs an explicit token issuer/);
+    expect((await attempt(stagingEnv({ ...DZ, DATAZONE_JWT_SECRET: strong(), DATAZONE_JWT_ISSUER: "https://trustedid.netlify.app" })))!.message).toMatch(/production issuer/);
+    expect((await attempt(stagingEnv({ ...DZ, DATAZONE_JWT_SECRET: strong(), DATAZONE_JWT_ISSUER: "https://admin.getlifeos.app" })))!.message).toMatch(/production issuer/);
+    // a production URL can also never be the base URL
+    expect((await attempt(stagingEnv({ ...DZ, DATAZONE_BASE_URL: "https://sovereign-drive-engine-production.up.railway.app", DATAZONE_JWT_SECRET: strong(), DATAZONE_JWT_ISSUER: STAGING })))!.message).toMatch(/points at/);
+    expect(await attempt(stagingEnv({ ...DZ, DATAZONE_JWT_SECRET: strong(), DATAZONE_JWT_ISSUER: STAGING }))).toBeNull();
+    // the shared ASSERTION_ISSUER fallback counts when it is an explicit staging issuer
+    expect(await attempt(stagingEnv({ ...DZ, TRUST_ID_JWT_SECRET: strong(), ASSERTION_ISSUER: STAGING }))).toBeNull();
+  });
+
+  it("ElfCom: missing or default secrets and a missing or production issuer fail; an empty variable cannot hide behind a fallback", async () => {
+    expect((await attempt(stagingEnv({ ...EC, LIFEOS_JWT_ISS: "lifeos-staging" })))!.message).toMatch(/ELFCOM_MODE=http needs its node secret/);
+    expect((await attempt(stagingEnv({ ...EC, ELFCOM_NODE_SECRET: "elfcom-dev-node-secret-change-me", LIFEOS_JWT_ISS: "lifeos-staging" })))!.message).toMatch(/development default, placeholder/);
+    expect((await attempt(stagingEnv({ ...EC, ELFCOM_NODE_SECRET: strong() })))!.message).toMatch(/needs an explicit token issuer \(LIFEOS_JWT_ISS\)/);
+    expect((await attempt(stagingEnv({ ...EC, ELFCOM_NODE_SECRET: strong(), LIFEOS_JWT_ISS: "lifeos" })))!.message).toMatch(/production issuer/);
+    // config.ts uses `??`: an empty ELFCOM_NODE_SECRET would be used as "" even with LIFEOS_JWT_SECRET set
+    expect((await attempt(stagingEnv({ ...EC, ELFCOM_NODE_SECRET: "", LIFEOS_JWT_SECRET: strong(), LIFEOS_JWT_ISS: "lifeos-staging" })))!.message).toMatch(/needs its node secret/);
+    expect(await attempt(stagingEnv({ ...EC, ELFCOM_NODE_SECRET: strong(), LIFEOS_JWT_ISS: "lifeos-staging" }))).toBeNull();
+    expect(await attempt(stagingEnv({ ...EC, LIFEOS_JWT_SECRET: strong(), LIFEOS_JWT_ISS: "lifeos-staging" }))).toBeNull();
+  });
+
+  it("Platform Jobs, Master Distribution and FinProv follow the same rules; LIDIOS and Digiconomy need only a staging URL", async () => {
+    for (const [mode, base, secretVar, issuerVar] of [
+      ["PLATFORM_JOB_MODE", "PLATFORM_JOB_BASE_URL", "PLATFORM_JOB_JWT_SECRET", "PLATFORM_JOB_JWT_ISSUER"],
+      ["MASTER_DISTRIBUTION_MODE", "MASTER_DISTRIBUTION_BASE_URL", "MASTER_DISTRIBUTION_JWT_SECRET", "MASTER_DISTRIBUTION_JWT_ISSUER"],
+    ] as const) {
+      const svc = { [mode]: "http", [base]: "https://svc-staging.example.app" };
+      expect((await attempt(stagingEnv({ ...svc, [issuerVar]: "trustid-staging" })))!.message, mode).toMatch(new RegExp(`${mode}=http needs its JWT secret`));
+      expect((await attempt(stagingEnv({ ...svc, [secretVar]: "dev-trust-id-secret-change-me", [issuerVar]: "trustid-staging" })))!.message, mode).toMatch(/development default/);
+      expect((await attempt(stagingEnv({ ...svc, [secretVar]: strong() })))!.message, mode).toMatch(/needs an explicit token issuer/);
+      expect((await attempt(stagingEnv({ ...svc, [secretVar]: strong(), [issuerVar]: "lifeos-trust-id" })))!.message, mode).toMatch(/production issuer/);
+      expect(await attempt(stagingEnv({ ...svc, [secretVar]: strong(), [issuerVar]: "trustid-staging" })), mode).toBeNull();
+    }
+    const fin = { FINPROV_MODE: "http", FINPROV_BASE_URL: "https://finprov-staging.example.app" };
+    expect((await attempt(stagingEnv(fin)))!.message).toMatch(/FINPROV_MODE=http needs its API key/);
+    expect(await attempt(stagingEnv({ ...fin, FINPROV_API_KEY: strong() }))).toBeNull();
+    expect(await attempt(stagingEnv({ LIDIOS_MODE: "http", LIDIOS_BASE_URL: "https://lidios-staging.example.app" }))).toBeNull();
+    expect((await attempt(stagingEnv({ LIDIOS_MODE: "http", LIDIOS_BASE_URL: "https://token-network-production.up.railway.app" })))!.message).toMatch(/points at/);
+    expect(await attempt(stagingEnv({ DIGICONOMY_MODE: "http", DIGICONOMY_BASE_URL: "https://digiconomy-staging.example.app" }))).toBeNull();
+  });
+
+  it("production behaviour is unchanged: the staging credential rules do not apply there", async () => {
+    // Production with an http-mode service and code-default credentials starts exactly as before.
+    expect(await attempt(productionEnv({ DATAZONE_MODE: "http" }))).toBeNull();
+    expect(await attempt(productionEnv({ ELFCOM_MODE: "http", ELFCOM_BASE_URL: "https://elfcomnode-production.up.railway.app" }))).toBeNull();
+  });
+});
+
 describe("CORS permission does not imply passkey trust (real WebAuthn verification)", () => {
   it("4. an assertion from a CORS-only origin is refused; the same assertion from a passkey origin is accepted", async () => {
     stub({ CORS_ORIGINS: "https://cors-only.example.org" });
